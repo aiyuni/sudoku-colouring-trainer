@@ -1,0 +1,385 @@
+.page {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+.header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 2rem;
+  letter-spacing: -0.04em;
+}
+
+.header p {
+  margin: 0 0 1rem;
+  color: #5b6578;
+  max-width: 40rem;
+}
+
+.mode-toggle {
+  margin: 0 0 1.5rem;
+  font-weight: 600;
+}
+
+.mode-toggle.solution {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.mode-toggle.candidate {
+  border-color: #cbd5e1;
+  color: #334155;
+  background: #f8fafc;
+}
+
+.board-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.75rem;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+/* Nine 3x3 boxes arranged in a 3x3 grid. The box grid's own gap/background
+   draws the thick divider between boxes; each box is itself a 3x3 grid of
+   cells whose thinner gap/background draws the divider between cells. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 3px;
+  width: min(100%, 32rem);
+  aspect-ratio: 1;
+  flex: 0 1 32rem;
+  background: #1f2937;
+  border: 3px solid #1f2937;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 12px 30px -14px rgb(15 23 42 / 0.45);
+}
+
+.grid:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.box {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 1px;
+  background: #c5ccd6;
+}
+
+.cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+  font: 700 1.5rem/1 'Segoe UI', system-ui, sans-serif;
+  background: #fffef8;
+  color: #111827;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.cell.given {
+  color: #111827;
+  font-weight: 800;
+  cursor: default;
+}
+
+.cell.filled:not(.given) {
+  color: #1d4ed8;
+}
+
+.cell.selected {
+  background: #dbeafe;
+  outline: 3px solid #2563eb;
+  outline-offset: -3px;
+  z-index: 1;
+}
+
+/* Comes after .selected so a cell that is both selected and spotlighted
+   still shows the spotlight tint, with the selection ring on top of it. */
+.cell.digit-highlighted {
+  background: #fde68a;
+}
+
+.cell:hover:not(.given) {
+  background: #eef2ff;
+}
+
+/* Pencil marks: a 3x3 grid inside the cell, 1-3 top row, 4-6 middle,
+   7-9 bottom - the same layout the candidate button pad uses. */
+.candidates {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+}
+
+.candidate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 0.68rem/1 'Segoe UI', system-ui, sans-serif;
+  color: #6b7280;
+}
+
+.candidate.highlighted {
+  color: #78350f;
+  background: #fcd34d;
+  border-radius: 999px;
+  margin: 1px;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(100%, 15rem);
+  flex: 1 1 13rem;
+}
+
+.control-group {
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.control-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: #475569;
+}
+
+.control-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.pad-button {
+  padding: 0.5rem 0;
+  font: 700 1.05rem/1 inherit;
+}
+
+.candidate-bulk-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.candidate-bulk-actions .pad-button {
+  flex: 1;
+  font: 600 0.75rem/1.1 inherit;
+  padding: 0.5rem 0.25rem;
+}
+
+.solution-group {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.solution-button {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.candidate-group {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.candidate-button {
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.highlight-group {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.highlight-button {
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.highlight-button.active {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #1f2937;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  margin: 1.25rem 0 0.75rem;
+}
+
+button {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font: 600 0.95rem/1.1 inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+.status {
+  margin: 0;
+  color: #334155;
+}
+
+.muted {
+  color: #64748b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .header p,
+  .status {
+    color: #cbd5e1;
+  }
+
+  .muted {
+    color: #94a3b8;
+  }
+
+  .grid {
+    background: #64748b;
+    border-color: #64748b;
+    box-shadow: 0 12px 30px -14px rgb(0 0 0 / 0.6);
+  }
+
+  .grid:focus-visible {
+    outline-color: #60a5fa;
+  }
+
+  .box {
+    background: #334155;
+  }
+
+  .cell {
+    background: #0f172a;
+    color: #e2e8f0;
+  }
+
+  .cell.given {
+    color: #f1f5f9;
+  }
+
+  .cell.selected {
+    background: #1e3a5f;
+    outline-color: #60a5fa;
+  }
+
+  .cell.digit-highlighted {
+    background: #4a2f0a;
+  }
+
+  .cell.filled:not(.given) {
+    color: #93c5fd;
+  }
+
+  .cell:hover:not(.given) {
+    background: #1e293b;
+  }
+
+  .candidate {
+    color: #94a3b8;
+  }
+
+  .candidate.highlighted {
+    color: #1f2937;
+    background: #f59e0b;
+  }
+
+  .control-group {
+    background: #1e293b;
+    border-color: #334155;
+  }
+
+  .control-label {
+    color: #94a3b8;
+  }
+
+  .mode-toggle.solution {
+    border-color: #1e3a5f;
+    color: #93c5fd;
+    background: #16233a;
+  }
+
+  .mode-toggle.candidate {
+    border-color: #334155;
+    color: #cbd5e1;
+    background: #1a2434;
+  }
+
+  .solution-group {
+    border-color: #1e3a5f;
+    background: #16233a;
+  }
+
+  .solution-button {
+    border-color: #1e3a5f;
+    color: #93c5fd;
+  }
+
+  .candidate-group {
+    border-color: #334155;
+    background: #1a2434;
+  }
+
+  .candidate-button {
+    color: #cbd5e1;
+  }
+
+  .highlight-group {
+    border-color: #78350f;
+    background: #2a1c05;
+  }
+
+  .highlight-button {
+    border-color: #78350f;
+    color: #fcd34d;
+  }
+
+  .highlight-button.active {
+    background: #f59e0b;
+    border-color: #f59e0b;
+    color: #1f2937;
+  }
+
+  button {
+    background: #1e293b;
+    border-color: #334155;
+    color: #e2e8f0;
+  }
+}
