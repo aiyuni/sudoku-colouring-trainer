@@ -24,3 +24,14 @@ export function createEmptyCandidates(): CandidateGrid {
 export function cloneCandidates(candidates: CandidateGrid): CandidateGrid {
   return candidates.map((row) => row.map((cell) => [...cell]))
 }
+
+/** Which digits (1-9) are marked as candidates in a single cell. */
+export function markedCandidateDigits(cellCandidates: readonly boolean[]): number[] {
+  const digits: number[] = []
+  for (let i = 0; i < cellCandidates.length; i++) {
+    if (cellCandidates[i]) {
+      digits.push(i + 1)
+    }
+  }
+  return digits
+}
