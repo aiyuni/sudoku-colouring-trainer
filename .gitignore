@@ -1,0 +1,20 @@
+## Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+frontend/node_modules/
+frontend/dist/
+
+## OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+## Keep VS Code debug config
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
