@@ -1,4 +1,4 @@
-# Sudoku Trainer/Solver
+# WIP Sudoku Trainer/Solver
 
 A sudoku web app to learn how to solve sudoku using logical, human-friendly Colouring techniques, instead of raw brute force, backtracking, or trial and error.   Provides functionality to generate specifically-designed puzzles to practice applying these techniques.  
 
@@ -9,3 +9,5 @@ Whereas the well-known Colouring techniques get stuck at "Hell" puzzles, Dragon 
 User can upload puzzle strings generated from [Sudoku.Coach](https://sudoku.coach/en/home) and [SudokuWiki](https://www.sudokuwiki.org/Main_Page) to this solver to practice Colouring. 
 
 Claude code was used to implement this app. 
+
+https://aiyuni.github.io/sudoku-colouring-trainer/ 
