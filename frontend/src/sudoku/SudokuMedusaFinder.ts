@@ -14,6 +14,13 @@ export interface ColoredCandidate {
 
 export interface MedusaChain {
   candidates: ColoredCandidate[]
+  /** Whether this chain's strong-link graph includes at least one bivalue
+   * cell edge (two candidates sharing a cell), as opposed to being built
+   * entirely from bilocal edges (a digit conjugate pair within a unit).
+   * A chain spanning more than one cell always needs a bilocal edge to
+   * cross cells, so a chain with none is a pure conjugate-pair network -
+   * this flags the ones that actually use a bivalue cell as a link. */
+  hasBivalueCellLink: boolean
 }
 
 export type MassConflict =
@@ -96,18 +103,23 @@ export class SudokuMedusaFinder {
     const adjacency = new Map<string, string[]>()
     const nodeByKey = new Map<string, { row: number; col: number; digit: number }>()
     const edgeKeys = new Set<string>()
+    const bivalueEdgeKeys = new Set<string>()
 
     const addEdge = (
       aKey: string,
       a: { row: number; col: number; digit: number },
       bKey: string,
       b: { row: number; col: number; digit: number },
+      kind: 'bilocal' | 'bivalue',
     ) => {
       const edgeKey = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`
       if (edgeKeys.has(edgeKey)) {
         return
       }
       edgeKeys.add(edgeKey)
+      if (kind === 'bivalue') {
+        bivalueEdgeKeys.add(edgeKey)
+      }
 
       nodeByKey.set(aKey, a)
       nodeByKey.set(bKey, b)
@@ -131,6 +143,7 @@ export class SudokuMedusaFinder {
             { row: r1, col: c1, digit },
             candidateKey(r2, c2, digit),
             { row: r2, col: c2, digit },
+            'bilocal',
           )
         }
       }
@@ -149,6 +162,7 @@ export class SudokuMedusaFinder {
             { row, col, digit: d1 },
             candidateKey(row, col, d2),
             { row, col, digit: d2 },
+            'bivalue',
           )
         }
       }
@@ -168,6 +182,7 @@ export class SudokuMedusaFinder {
       colorMap.set(startKey, 'blue')
       visited.add(startKey)
       let consistent = true
+      let hasBivalueCellLink = false
 
       while (queue.length > 0) {
         const currentKey = queue.shift()!
@@ -175,6 +190,10 @@ export class SudokuMedusaFinder {
         const nextColor = opposite(currentColor)
 
         for (const neighborKey of adjacency.get(currentKey) ?? []) {
+          const edgeKey = currentKey < neighborKey ? `${currentKey}|${neighborKey}` : `${neighborKey}|${currentKey}`
+          if (bivalueEdgeKeys.has(edgeKey)) {
+            hasBivalueCellLink = true
+          }
           if (!colorMap.has(neighborKey)) {
             colorMap.set(neighborKey, nextColor)
             visited.add(neighborKey)
@@ -196,7 +215,7 @@ export class SudokuMedusaFinder {
         return { ...node, color: colorMap.get(key)! }
       })
 
-      chains.push({ candidates: candidatesList })
+      chains.push({ candidates: candidatesList, hasBivalueCellLink })
     }
 
     return chains

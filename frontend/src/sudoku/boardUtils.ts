@@ -1,4 +1,4 @@
-import type { Board, CandidateGrid } from './types'
+import type { Board, CandidateColorGrid, CandidateGrid } from './types'
 
 const SIZE = 9
 
@@ -34,4 +34,27 @@ export function markedCandidateDigits(cellCandidates: readonly boolean[]): numbe
     }
   }
   return digits
+}
+
+export function createEmptyCandidateColors(): CandidateColorGrid {
+  return Array.from({ length: SIZE }, () =>
+    Array.from({ length: SIZE }, () => Array<null>(SIZE).fill(null)),
+  )
+}
+
+export function cloneCandidateColors(colors: CandidateColorGrid): CandidateColorGrid {
+  return colors.map((row) => row.map((cell) => [...cell]))
+}
+
+/** Drops any colour left over on a candidate that no longer exists (solved
+ * away or eliminated), so painted colours never point at a stale candidate
+ * as the board changes underneath them. */
+export function sanitizeCandidateColors(
+  colors: CandidateColorGrid,
+  board: Board,
+  candidates: CandidateGrid,
+): CandidateColorGrid {
+  return colors.map((row, r) =>
+    row.map((cell, c) => cell.map((color, i) => (board[r][c] === 0 && candidates[r][c][i] ? color : null))),
+  )
 }
