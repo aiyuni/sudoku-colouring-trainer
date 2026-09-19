@@ -18,11 +18,14 @@ import { SudokuDragonFinder, type DragonMove } from './sudoku/SudokuDragonFinder
 import { SudokuDragonPuzzleGenerator } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
+import { SudokuLockedCandidateFinder } from './sudoku/SudokuLockedCandidateFinder'
 import { SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
+import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
 import { SudokuRules } from './sudoku/SudokuRules'
 import { SudokuSingleFinder, type SingleAssignment } from './sudoku/SudokuSingleFinder'
 import { SudokuSolver } from './sudoku/SudokuSolver'
+import { SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
 import { SAMPLE_PUZZLE, type Board, type CandidateColor, type CandidateColorGrid, type CandidateGrid } from './sudoku/types'
 import './App.css'
 
@@ -31,7 +34,10 @@ const generator = new SudokuGenerator()
 const dragonPuzzleGenerator = new SudokuDragonPuzzleGenerator()
 const importer = new PuzzleImporter()
 const singleFinder = new SudokuSingleFinder()
+const lockedCandidateFinder = new SudokuLockedCandidateFinder()
 const pairFinder = new SudokuPairFinder()
+const nakedSubsetFinder = new SudokuNakedSubsetFinder()
+const uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
 const colorFinder = new SudokuColorFinder()
 const medusaFinder = new SudokuMedusaFinder()
 const dragonFinder = new SudokuDragonFinder()
@@ -40,6 +46,7 @@ const dragonFinder = new SudokuDragonFinder()
 // index within a box, since both range over the same nine values.
 const NINE = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+const APP_VERSION = 'v0.1.0-alpha'
 
 /** The board, its locked clues, and pencil marks - the part of the app's
  * state that Undo/Redo travels through. Everything else (selection, the
@@ -262,6 +269,43 @@ function computeStuckDragonExtensions(board: Board, candidates: CandidateGrid, f
   return results
 }
 
+/** Dynamic Dragon Colouring: the same stuck-chain search as plain Dragon
+ * Colouring, but only surfacing chains where the *dynamic* extension
+ * (Extension Rule 3 - naked pairs and Unique Rectangle Type 1 propagated
+ * through a side's assumption) was actually necessary. A chain plain
+ * Dragon Colouring can already resolve is left to that technique instead,
+ * so the two never both claim the same chain. */
+function computeStuckDynamicDragonExtensions(board: Board, candidates: CandidateGrid, filter: DragonChainFilter = 'any') {
+  const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
+  for (const chain of medusaFinder.findChains(board, candidates)) {
+    if (filter === 'bivalue-seeded' && !chain.hasBivalueCellLink) {
+      continue
+    }
+    const stuck =
+      medusaFinder.findMassElimination(chain, board, candidates) === null &&
+      medusaFinder.findRule3Eliminations(chain, board, candidates).length === 0 &&
+      medusaFinder.findRule4Eliminations(chain, candidates).length === 0 &&
+      medusaFinder.findRule5Eliminations(chain, candidates).length === 0
+    if (!stuck) {
+      continue
+    }
+    if (dragonFinder.extend(chain, board, candidates)) {
+      // Plain Dragon Colouring already handles this chain.
+      continue
+    }
+    const result = dragonFinder.extend(chain, board, candidates, { dynamic: true })
+    if (!result) {
+      continue
+    }
+    const chainKey = chain.candidates
+      .map((c) => `${c.row}.${c.col}.${c.digit}.${c.color[0]}`)
+      .sort()
+      .join('-')
+    results.push({ chainKey, moves: result.moves, hasBivalueCellLink: chain.hasBivalueCellLink })
+  }
+  return results
+}
+
 /** Builds the live list of technique instances the current board/candidates
  * support - recomputed from scratch whenever either changes, so it always
  * reflects exactly what's happening on the grid right now.
@@ -297,6 +341,24 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
       usedCandidates: [],
       eliminatedCandidates: [],
       solvedCandidates: [{ row, col, digit }],
+    })
+  }
+
+  for (const locked of lockedCandidateFinder.findInstances(board, candidates)) {
+    const typeLabel = locked.type === 'pointing' ? 'Pointing' : 'Claiming'
+    const cellsLabel = [...locked.eliminations]
+      .sort((a, b) => a.row - b.row || a.col - b.col)
+      .map((e) => cellRef(e.row, e.col))
+      .join(', ')
+
+    instances.push({
+      id: `locked-candidate-${locked.type}-${locked.digit}-${locked.basisCells.map(([row, col]) => `${row}.${col}`).join('-')}`,
+      name: `Locked Candidate (${typeLabel})`,
+      notation: `Locked Candidate (${typeLabel}) - ${cellsLabel} cannot be a ${locked.digit}.`,
+      usedCells: locked.basisCells,
+      usedCandidates: locked.basisCells.map(([row, col]) => ({ row, col, digit: locked.digit })),
+      eliminatedCandidates: locked.eliminations,
+      solvedCandidates: [],
     })
   }
 
@@ -338,6 +400,62 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
       ],
       eliminatedCandidates: pair.eliminations,
       solvedCandidates: [],
+    })
+  }
+
+  for (const size of [3, 4] as const) {
+    const label = size === 3 ? 'Naked Triple' : 'Naked Quad'
+    const idPrefix = size === 3 ? 'naked-triple' : 'naked-quad'
+    const finderResults = size === 3 ? nakedSubsetFinder.findNakedTriples(board, candidates) : nakedSubsetFinder.findNakedQuads(board, candidates)
+
+    for (const subset of finderResults) {
+      const byCell = new Map<string, { row: number; col: number; digits: number[] }>()
+      for (const elimination of subset.eliminations) {
+        const key = `${elimination.row},${elimination.col}`
+        const entry = byCell.get(key) ?? { row: elimination.row, col: elimination.col, digits: [] }
+        entry.digits.push(elimination.digit)
+        byCell.set(key, entry)
+      }
+      const results = Array.from(byCell.values())
+        .sort((a, b) => a.row - b.row || a.col - b.col)
+        .map(({ row, col, digits }) => {
+          const sorted = [...digits].sort((a, b) => a - b)
+          const value = sorted.length === 1 ? `${sorted[0]}` : `[${sorted.join(',')}]`
+          return `${cellRef(row, col)} is not ${value}`
+        })
+      const cellsLabel = subset.cells.map(([row, col]) => cellRef(row, col)).join(', ')
+
+      instances.push({
+        id: `${idPrefix}-${subset.cells.map(([row, col]) => `${row}.${col}`).join('-')}`,
+        name: label,
+        notation: `${cellsLabel} => ${results.join(', ')}`,
+        usedCells: subset.cells,
+        usedCandidates: subset.cells.flatMap(([row, col]) =>
+          subset.digits.filter((digit) => candidates[row][col][digit - 1]).map((digit) => ({ row, col, digit })),
+        ),
+        eliminatedCandidates: subset.eliminations,
+        solvedCandidates: [],
+      })
+    }
+  }
+
+  for (const ur of uniqueRectangleFinder.findType1Instances(board, candidates)) {
+    const [extraRow, extraCol] = ur.extraCell
+    const urDigitsLabel = ur.urDigits.join(',')
+    const cellsLabel = ur.cells.map(([row, col]) => cellRef(row, col)).join(', ')
+    const conclusion =
+      ur.solvedDigit !== null
+        ? `${cellRef(extraRow, extraCol)} is ${ur.solvedDigit}`
+        : `${cellRef(extraRow, extraCol)} is not ${ur.eliminatedDigits.join(',')}`
+
+    instances.push({
+      id: `ur-type1-${ur.cells.map(([row, col]) => `${row}.${col}`).join('-')}-${urDigitsLabel}`,
+      name: 'Unique Rectangle Type 1',
+      notation: `${cellsLabel} (${urDigitsLabel}) => ${conclusion}`,
+      usedCells: [...ur.cells],
+      usedCandidates: ur.cells.flatMap(([row, col]) => ur.urDigits.map((digit) => ({ row, col, digit }))),
+      eliminatedCandidates: ur.eliminatedDigits.map((digit) => ({ row: extraRow, col: extraCol, digit })),
+      solvedCandidates: ur.solvedDigit !== null ? [{ row: extraRow, col: extraCol, digit: ur.solvedDigit }] : [],
     })
   }
 
@@ -425,13 +543,13 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
       let notation: string
       if (mass.conflict.kind === 'cell') {
         name = '3D Medusa Rule 1'
-        notation = `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both light ${mass.conflict.color}, so light ${mass.conflict.color} is false and light ${mass.trueColor} is true.`
+        notation = `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
       } else if (mass.conflict.kind === 'unit') {
         name = '3D Medusa Rule 1'
-        notation = `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both light ${mass.conflict.color}, so light ${mass.conflict.color} is false and light ${mass.trueColor} is true.`
+        notation = `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
       } else {
         name = '3D Medusa Rule 2'
-        notation = `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see light ${mass.conflict.color}, so light ${mass.conflict.color} is false and light ${mass.trueColor} is true.`
+        notation = `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
       }
       massInstances.push({
         id: `medusa-mass-${chainKey}`,
@@ -450,7 +568,7 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
       medusaRule3Instances.push({
         id: `medusa-rule3-${chainKey}-${r3.row}-${r3.col}-${r3.digit}`,
         name: '3D Medusa Rule 3',
-        notation: `${cellRef(r3.row, r3.col)} cannot be ${r3.digit} (sees it coloured both ways: ${cellRef(...r3.blueSeen)}, ${cellRef(...r3.yellowSeen)}).`,
+        notation: `${cellRef(r3.row, r3.col)} cannot be ${r3.digit} (it sees both colours: ${cellRef(...r3.blueSeen)}, ${cellRef(...r3.yellowSeen)}).`,
         usedCells: [],
         usedCandidates: [],
         eliminatedCandidates: [{ row: r3.row, col: r3.col, digit: r3.digit }],
@@ -481,7 +599,7 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
       medusaRule5Instances.push({
         id: `medusa-rule5-${chainKey}-${r5.row}-${r5.col}-${r5.eliminatedDigit}`,
         name: '3D Medusa Rule 5',
-        notation: `${cellRef(r5.row, r5.col)} is not ${r5.eliminatedDigit} (sees it light ${opponentColor} at ${cellRef(...r5.opponent)}).`,
+        notation: `${cellRef(r5.row, r5.col)} is not ${r5.eliminatedDigit} (it sees opposite colour ${opponentColor} at ${cellRef(...r5.opponent)}).`,
         usedCells: [],
         usedCandidates: [{ row: r5.row, col: r5.col, digit: r5.coloredDigit }],
         eliminatedCandidates: [{ row: r5.row, col: r5.col, digit: r5.eliminatedDigit }],
@@ -494,10 +612,12 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
 
   instances.push(...massInstances, ...medusaRule3Instances, ...medusaRule4Instances, ...medusaRule5Instances)
 
-  // Dragon Colouring: one instance per stuck Medusa chain that the
-  // extension turned into something actionable, each carrying its own move
-  // log for the Techniques panel's step-by-step player.
-  for (const { chainKey, moves } of computeStuckDragonExtensions(board, candidates)) {
+  // Dragon Colouring and Dynamic Dragon Colouring: one instance per stuck
+  // Medusa chain the extension turned into something actionable, each
+  // carrying its own move log for the Techniques panel's step-by-step
+  // player. A chain plain Dragon Colouring can already resolve is never
+  // also listed under Dynamic - see computeStuckDynamicDragonExtensions.
+  const buildDragonInstance = (idPrefix: string, name: string, chainKey: string, moves: DragonMove[]): TechniqueInstance => {
     const lastMove = moves[moves.length - 1]
     // A mass elimination's solves/eliminates are both just consequences of
     // one fact - a side proved false, so the other side is proved true -
@@ -505,29 +625,54 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
     // from it.
     const summaryText =
       lastMove.kind === 'mass-elimination' && lastMove.provenTrueColor
-        ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'light yellow'} is true`
+        ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} is true`
         : (() => {
-            const eliminatedCount = moves.reduce((n, m) => n + m.eliminated.length, 0)
+            const eliminated = moves.flatMap((m) => m.eliminated)
             const solvedCount = moves.reduce((n, m) => n + m.solved.length, 0)
             const summary: string[] = []
             if (solvedCount > 0) {
               summary.push(`solves ${solvedCount} cell${solvedCount === 1 ? '' : 's'}`)
             }
-            if (eliminatedCount > 0) {
-              summary.push(`eliminates ${eliminatedCount} candidate${eliminatedCount === 1 ? '' : 's'}`)
+            if (eliminated.length === 1) {
+              summary.push(`eliminates ${eliminated[0].digit}${cellRef(eliminated[0].row, eliminated[0].col)}`)
+            } else if (eliminated.length > 1) {
+              summary.push(`eliminates ${eliminated.length} candidates`)
             }
             return summary.join(', ')
           })()
-    instances.push({
-      id: `dragon-${chainKey}`,
-      name: 'Dragon Colouring',
+    return {
+      id: `${idPrefix}-${chainKey}`,
+      name,
       notation: `${moves.length} steps - ${summaryText}.`,
       usedCells: [],
       usedCandidates: [],
       eliminatedCandidates: moves.flatMap((m) => m.eliminated),
       solvedCandidates: moves.flatMap((m) => m.solved),
       moves,
-    })
+    }
+  }
+
+  const dragonExtensions = computeStuckDragonExtensions(board, candidates)
+  dragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
+  for (const { chainKey, moves } of dragonExtensions) {
+    instances.push(buildDragonInstance('dragon', 'Dragon Colouring', chainKey, moves))
+  }
+  const dynamicDragonExtensions = computeStuckDynamicDragonExtensions(board, candidates)
+  dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
+  for (const { chainKey, moves } of dynamicDragonExtensions) {
+    // Name the instance after whichever non-colouring technique(s) its
+    // Extension Rule 3 steps actually leaned on, so "Dynamic Dragon
+    // Colouring" alone never has to be taken on faith. Fixed order
+    // (naked pair, then UR) regardless of which happened to fire first.
+    const techniquesUsed = new Set(moves.flatMap((m) => m.dynamicTechniques ?? []))
+    const orderedTechniques = (['locked candidate', 'naked pair', 'naked triple', 'naked quad', 'UR'] as const).filter((t) =>
+      techniquesUsed.has(t),
+    )
+    const label =
+      orderedTechniques.length > 0
+        ? `Dynamic Dragon Colouring (${orderedTechniques.join(', ')})`
+        : 'Dynamic Dragon Colouring'
+    instances.push(buildDragonInstance('dynamic-dragon', label, chainKey, moves))
   }
 
   return instances
@@ -539,20 +684,28 @@ interface TechniquePanelProps {
   onSelect: (id: string) => void
   dragonStepIndex: number
   onDragonStep: (delta: number) => void
+  onApply: () => void
 }
 
 /** The panel to the left of the grid listing every technique instance the
  * current candidates support, in Sudoku notation. Clicking a row highlights
  * what it uses/eliminates/solves on the grid; it doesn't change the board.
  * A Dragon Colouring row expands in place into a forward/rewind stepper
- * instead, since its reasoning only makes sense played out move by move. */
-function TechniquePanel({ instances, activeId, onSelect, dragonStepIndex, onDragonStep }: TechniquePanelProps) {
+ * instead, since its reasoning only makes sense played out move by move.
+ * The "Apply" button next to the heading commits whichever row is
+ * currently selected - the only way this panel ever changes the board. */
+function TechniquePanel({ instances, activeId, onSelect, dragonStepIndex, onDragonStep, onApply }: TechniquePanelProps) {
   return (
     <div className="technique-panel">
-      <h2 className="control-label">Techniques</h2>
+      <div className="technique-panel-header">
+        <h2 className="control-label">Techniques</h2>
+        <button type="button" className="technique-apply-button" disabled={!activeId} onClick={onApply}>
+          Apply
+        </button>
+      </div>
       {instances.length === 0 ? (
         <p className="technique-empty">
-          None currently apply. Try Autofill all, then Naked/Hidden singles or Naked pairs.
+          None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (Please click "Autofill all candidates")
         </p>
       ) : (
         <ul className="technique-list">
@@ -653,12 +806,13 @@ export default function App() {
   const [showStrongLinks, setShowStrongLinks] = useState(false)
   const [showBivalueCells, setShowBivalueCells] = useState(false)
   const [importText, setImportText] = useState('')
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [solving, setSolving] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [ocrBusy, setOcrBusy] = useState(false)
   const [ocrDragActive, setOcrDragActive] = useState(false)
   const busy = solving || generating || ocrBusy
-  const [status, setStatus] = useState('Enter digits, then click Solve.')
+  const [status, setStatus] = useState('Sudoku Colouring Trainer')
 
   const filled = useMemo(
     () => board.flat().filter((value) => value !== 0).length,
@@ -705,6 +859,17 @@ export default function App() {
     () => (activeTechnique?.moves ? foldDragonMoves(activeTechnique.moves, dragonStepIndex) : null),
     [activeTechnique, dragonStepIndex],
   )
+  // Dynamic Dragon Colouring's non-colouring technique (a naked pair, a
+  // Unique Rectangle) only applies at its own single step - unlike the
+  // colours/eliminations above, this isn't cumulative, so it comes from
+  // just the one move currently on screen, not the fold.
+  const dragonTechniqueCellKeys = useMemo(() => {
+    const move = activeTechnique?.moves?.[Math.min(dragonStepIndex, activeTechnique.moves.length - 1)]
+    if (!move?.dynamicTechniqueCells) {
+      return null
+    }
+    return new Set(move.dynamicTechniqueCells.map(([r, c]) => `${r},${c}`))
+  }, [activeTechnique, dragonStepIndex])
 
   const selectedIsLocked = selected !== null && givens[selected.row][selected.col]
   const selectedIsSolved = selected !== null && board[selected.row][selected.col] !== 0
@@ -853,6 +1018,31 @@ export default function App() {
     setStatus(`Filled ${assignments.length} ${assignments.length === 1 ? singularLabel : pluralLabel}.`)
   }
 
+  function onLockedCandidates() {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus(
+        'Locked candidates needs every empty cell to have its candidates marked first — try Autofill all.',
+      )
+      return
+    }
+
+    const eliminations = lockedCandidateFinder.findEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      setStatus('No locked candidates to eliminate.')
+      return
+    }
+
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of eliminations) {
+      nextCandidates[row][col][digit - 1] = false
+    }
+
+    commitGrid({ board, givens, candidates: nextCandidates })
+    setStatus(
+      `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via locked candidates.`,
+    )
+  }
+
   function onNakedPairs() {
     if (!pairFinder.hasFullCandidates(board, candidates)) {
       setStatus(
@@ -876,6 +1066,113 @@ export default function App() {
     setStatus(
       `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via naked pairs.`,
     )
+  }
+
+  function onNakedTriples() {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus(
+        'Naked triples needs every empty cell to have its candidates marked first — try Autofill all.',
+      )
+      return
+    }
+
+    const eliminations = nakedSubsetFinder.findNakedTripleEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      setStatus('No naked triples to eliminate.')
+      return
+    }
+
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of eliminations) {
+      nextCandidates[row][col][digit - 1] = false
+    }
+
+    commitGrid({ board, givens, candidates: nextCandidates })
+    setStatus(
+      `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via naked triples.`,
+    )
+  }
+
+  function onNakedQuads() {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus(
+        'Naked quads needs every empty cell to have its candidates marked first — try Autofill all.',
+      )
+      return
+    }
+
+    const eliminations = nakedSubsetFinder.findNakedQuadEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      setStatus('No naked quads to eliminate.')
+      return
+    }
+
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of eliminations) {
+      nextCandidates[row][col][digit - 1] = false
+    }
+
+    commitGrid({ board, givens, candidates: nextCandidates })
+    setStatus(
+      `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via naked quads.`,
+    )
+  }
+
+  function onUniqueRectangleType1() {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus(
+        'Unique Rectangle Type 1 needs every empty cell to have its candidates marked first — try Autofill all.',
+      )
+      return
+    }
+
+    const instances = uniqueRectangleFinder.findType1Instances(board, candidates)
+    if (instances.length === 0) {
+      setStatus('No Unique Rectangle Type 1 deductions to apply.')
+      return
+    }
+
+    const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    for (const ur of instances) {
+      const [extraRow, extraCol] = ur.extraCell
+      if (ur.solvedDigit !== null) {
+        solvedByCell.set(`${extraRow},${extraCol}`, { row: extraRow, col: extraCol, digit: ur.solvedDigit })
+      }
+      for (const digit of ur.eliminatedDigits) {
+        eliminatedByCell.set(`${extraRow},${extraCol},${digit}`, { row: extraRow, col: extraCol, digit })
+      }
+    }
+
+    const solvedAssignments = Array.from(solvedByCell.values())
+    const eliminations = Array.from(eliminatedByCell.values())
+
+    const nextBoard = cloneBoard(board)
+    for (const { row, col, digit } of solvedAssignments) {
+      nextBoard[row][col] = digit
+    }
+
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of solvedAssignments) {
+      nextCandidates[row][col] = Array(9).fill(false)
+      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
+    }
+    for (const { row, col, digit } of eliminations) {
+      if (nextBoard[row][col] === 0) {
+        nextCandidates[row][col][digit - 1] = false
+      }
+    }
+
+    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+
+    const parts: string[] = []
+    if (solvedAssignments.length > 0) {
+      parts.push(`solved ${solvedAssignments.length} cell${solvedAssignments.length === 1 ? '' : 's'}`)
+    }
+    if (eliminations.length > 0) {
+      parts.push(`eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'}`)
+    }
+    setStatus(`Unique Rectangle Type 1 ${parts.join(' and ')}.`)
   }
 
   function onSimpleColoring() {
@@ -1001,11 +1298,15 @@ export default function App() {
     setStatus(`3D Medusa ${parts.join(' and ')}.`)
   }
 
-  function runDragonColouring(filter: DragonChainFilter, label: string) {
+  function runDragonColouring(
+    compute: (board: Board, candidates: CandidateGrid, filter: DragonChainFilter) => Array<{ moves: DragonMove[] }>,
+    filter: DragonChainFilter,
+    label: string,
+  ) {
     const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
     const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
 
-    for (const { moves } of computeStuckDragonExtensions(board, candidates, filter)) {
+    for (const { moves } of compute(board, candidates, filter)) {
       for (const move of moves) {
         for (const { row, col, digit } of move.solved) {
           solvedByCell.set(`${row},${col}`, { row, col, digit })
@@ -1052,11 +1353,15 @@ export default function App() {
   }
 
   function onDragonColouringBivalueSeeded() {
-    runDragonColouring('bivalue-seeded', 'Dragon Colouring (bivalue-seeded)')
+    runDragonColouring(computeStuckDragonExtensions, 'bivalue-seeded', 'Dragon Colouring (bivalue-seeded)')
   }
 
   function onDragonColouringAny() {
-    runDragonColouring('any', 'Dragon Colouring (any Medusa)')
+    runDragonColouring(computeStuckDragonExtensions, 'any', 'Dragon Colouring (any Medusa)')
+  }
+
+  function onDynamicDragonColouring() {
+    runDragonColouring(computeStuckDynamicDragonExtensions, 'any', 'Dynamic Dragon Colouring')
   }
 
   function onAutoNakedSingles() {
@@ -1093,7 +1398,44 @@ export default function App() {
     setDragonStepIndex((current) => Math.min(maxIndex, Math.max(0, current + delta)))
   }
 
+  /** Commits whatever the selected technique row is currently highlighting
+   * on the grid - for a plain technique that's its own eliminated/solved
+   * candidates; for a Dragon Colouring row (whose colours are conditional,
+   * not real board changes) it's the fold of its moves up through the
+   * step the player is currently showing, exactly matching what's drawn on
+   * the board right now. */
+  function onApplySelectedTechnique() {
+    if (!activeTechnique) {
+      return
+    }
+    const eliminatedCandidates = dragonHighlight?.eliminatedCandidates ?? activeTechnique.eliminatedCandidates
+    const solvedCandidates = dragonHighlight?.solvedCandidates ?? activeTechnique.solvedCandidates
+    if (eliminatedCandidates.length === 0 && solvedCandidates.length === 0) {
+      setStatus('Nothing to apply yet - step further to reach an actual conclusion.')
+      return
+    }
+
+    const nextBoard = cloneBoard(board)
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of solvedCandidates) {
+      nextBoard[row][col] = digit
+      nextCandidates[row][col] = Array(9).fill(false)
+      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
+    }
+    for (const { row, col, digit } of eliminatedCandidates) {
+      nextCandidates[row][col][digit - 1] = false
+    }
+
+    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    setStatus(`Applied ${activeTechnique.name}.`)
+  }
+
   function onCellClick(row: number, col: number) {
+    if (selected?.row === row && selected?.col === col) {
+      setSelected(null)
+      setHighlightedDigit(null)
+      return
+    }
     setSelected({ row, col })
     const value = board[row][col]
     if (value !== 0) {
@@ -1145,6 +1487,28 @@ export default function App() {
     setHighlightedDigit(null)
     setImportText('')
     setStatus('Puzzle imported. Click Solve to check it.')
+  }
+
+  function showToast(message: string) {
+    setToastMessage(message)
+    window.setTimeout(() => setToastMessage((current) => (current === message ? null : current)), 2200)
+  }
+
+  async function onExportToSudokuCoach() {
+    let exported: string
+    try {
+      exported = await importer.exportToSudokuCoachState(board, givens, candidates)
+    } catch {
+      setStatus('Could not export this puzzle.')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(exported)
+      showToast('Copied to clipboard!')
+    } catch {
+      setStatus("Couldn't access the clipboard - here's the puzzle string to copy manually:")
+      setImportText(exported)
+    }
   }
 
   /** Reads a screenshot of a Sudoku grid (dropped or pasted) and rebuilds
@@ -1316,12 +1680,32 @@ export default function App() {
     }, 0)
   }
 
+  function onNewDynamicDragonPuzzle() {
+    setGenerating(true)
+    setStatus('Generating a puzzle that needs Dynamic Dragon Colouring…')
+
+    window.setTimeout(() => {
+      const result = dragonPuzzleGenerator.generate({ requireDynamic: true })
+      if (!result) {
+        setStatus("Couldn't find one this time - try again.")
+        setGenerating(false)
+        return
+      }
+      commitGrid({ board: result.board, givens: result.givens, candidates: result.candidates })
+      setHighlightedDigit(null)
+      setStatus('New puzzle loaded: a stuck chain right at the start needs Dynamic Dragon Colouring to progress.')
+      setGenerating(false)
+    }, 0)
+  }
+
   return (
     <main className="page" onKeyDown={onKeyDown}>
       <header className="header">
-        <h1>Sudoku Slayer</h1>
+        <h1>
+          Sudoku Colouring Trainer <span className="app-version">{APP_VERSION}</span>
+        </h1>
         <p>
-          Next level sudoku solver in the works.  
+          Learn, practice, and solve Sudoku puzzles using Colouring techniques.  
         </p>
         <div className="toggle-row">
           <button
@@ -1330,7 +1714,7 @@ export default function App() {
             aria-pressed={keyboardMode === 'candidate'}
             onClick={toggleKeyboardMode}
           >
-            Keyboard enters: <strong>{keyboardMode === 'solution' ? 'Solution' : 'Candidates'}</strong>
+            Toggle keyboard input <strong>{keyboardMode === 'solution' ? 'Solution' : ' Candidates'}</strong>
           </button>
           <button
             type="button"
@@ -1340,7 +1724,7 @@ export default function App() {
             aria-pressed={showStrongLinks}
             onClick={toggleStrongLinks}
           >
-            Strong links: <strong>{showStrongLinks ? 'On' : 'Off'}</strong>
+            Show Strong links: <strong>{showStrongLinks ? 'On' : 'Off'}</strong>
           </button>
           <button
             type="button"
@@ -1350,10 +1734,41 @@ export default function App() {
             aria-pressed={showBivalueCells}
             onClick={toggleBivalueCells}
           >
-            Bivalue cells: <strong>{showBivalueCells ? 'On' : 'Off'}</strong>
+            Show Bivalue cells: <strong>{showBivalueCells ? 'On' : 'Off'}</strong>
           </button>
         </div>
       </header>
+
+      <div className="actions top-actions">
+        <button type="button" onClick={undo} disabled={busy || !canUndo}>
+          Undo
+        </button>
+        <button type="button" onClick={redo} disabled={busy || !canRedo}>
+          Redo
+        </button>
+        <button type="button" onClick={onNewPuzzle} disabled={busy}>
+          {generating ? 'Generating…' : 'Generate random puzzle'}
+        </button>
+        <button
+          type="button"
+          onClick={onNewDragonPuzzle}
+          disabled={busy}
+          title="Generates a puzzle where every easier technique gets stuck and Dragon Colouring is what's needed to progress"
+        >
+          {generating ? 'Generating…' : 'Generate Dragon Colouring practice puzzle'}
+        </button>
+        <button
+          type="button"
+          onClick={onNewDynamicDragonPuzzle}
+          disabled={busy}
+          title="Generates a puzzle where a stuck chain right at the start needs Dynamic Dragon Colouring - naked pairs and/or Unique Rectangle Type 1 propagated through a side's assumption - to progress"
+        >
+          {generating ? 'Generating…' : 'Generate Dynamic Dragon Colouring puzzle'}
+        </button>
+        <button type="button" onClick={onClear} disabled={busy}>
+          Clear grid
+        </button>
+      </div>
 
       <div className="board-area">
         <TechniquePanel
@@ -1362,6 +1777,7 @@ export default function App() {
           onSelect={onSelectTechnique}
           dragonStepIndex={dragonStepIndex}
           onDragonStep={onDragonStep}
+          onApply={onApplySelectedTechnique}
         />
 
         <div className="grid" role="grid" aria-label="Sudoku board" tabIndex={0}>
@@ -1381,6 +1797,7 @@ export default function App() {
                   const isTechniqueCell =
                     activeTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
                   const isBivalueCell = bivalueCells.has(`${r},${c}`)
+                  const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
                   const classes = [
                     'cell',
                     givens[r][c] ? 'given' : value ? 'filled' : '',
@@ -1388,6 +1805,7 @@ export default function App() {
                     isDigitHighlighted ? 'digit-highlighted' : '',
                     isBivalueCell ? 'bivalue-highlighted' : '',
                     isTechniqueCell ? 'technique-used' : '',
+                    isDragonTechniqueCell ? 'dragon-technique-cell' : '',
                   ]
                     .filter(Boolean)
                     .join(' ')
@@ -1566,7 +1984,7 @@ export default function App() {
               disabled={!selected || selectedIsLocked || selectedIsSolved}
               onClick={() => selected && clearCandidates(selected.row, selected.col)}
             >
-              Clear marks
+              Clear candidates
             </button>
             <div className="candidate-bulk-actions">
               <button
@@ -1606,8 +2024,8 @@ export default function App() {
             </div>
             <p className="paint-hint">
               {paintColor
-                ? 'Click a candidate to paint or unpaint it.'
-                : 'Pick a colour, then click candidates to paint them.'}
+                ? 'Click a candidate to colour or uncolour it.'
+                : 'Pick a colour, then click candidates to colour them.'}
             </p>
           </section>
 
@@ -1633,9 +2051,41 @@ export default function App() {
               type="button"
               className="pad-button autosolve-button"
               disabled={busy || filled === 81}
+              onClick={onLockedCandidates}
+            >
+              Locked candidates
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || filled === 81}
               onClick={onNakedPairs}
             >
               Naked pairs
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onNakedTriples}
+            >
+              Naked triples
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onNakedQuads}
+            >
+              Naked quads
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onUniqueRectangleType1}
+            >
+              Unique Rectangle Type 1
             </button>
             <button
               type="button"
@@ -1671,6 +2121,15 @@ export default function App() {
             >
               Dragon colouring (any Medusa)
             </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || !hasAnyCandidates || filled === 81}
+              onClick={onDynamicDragonColouring}
+              title="Extends Dragon Colouring further by propagating a side's assumption through naked pairs and Unique Rectangle Type 1"
+            >
+              Dynamic Dragon Colouring
+            </button>
           </section>
 
           <section className="control-group highlight-group">
@@ -1686,7 +2145,7 @@ export default function App() {
               disabled={highlightedDigit === null}
               onClick={() => setHighlightedDigit(null)}
             >
-              Clear highlight
+              Clear all highlights
             </button>
           </section>
         </div>
@@ -1695,7 +2154,7 @@ export default function App() {
       <div className="import-row">
         <textarea
           className="import-input"
-          placeholder="Paste a Sudoku.Coach puzzle string, or a SudokuWiki.org text board…"
+          placeholder="Paste a Sudoku.Coach puzzle string or SudokuWiki.org text board..."
           rows={1}
           value={importText}
           disabled={busy}
@@ -1703,6 +2162,9 @@ export default function App() {
         />
         <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
           Import
+        </button>
+        <button type="button" onClick={onExportToSudokuCoach} disabled={busy} title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard">
+          Export to SC
         </button>
       </div>
 
@@ -1722,7 +2184,7 @@ export default function App() {
         <span>
           {ocrBusy
             ? 'Reading screenshot…'
-            : 'Drag & drop a Sudoku screenshot here, paste one (Ctrl+V), or '}
+            : 'Drag & drop or paste a Sudoku grid screenshot, or '}
         </span>
         {!ocrBusy && (
           <label className="image-import-browse">
@@ -1733,34 +2195,20 @@ export default function App() {
       </div>
 
       <div className="actions">
-        <button type="button" onClick={undo} disabled={busy || !canUndo}>
-          Undo
-        </button>
-        <button type="button" onClick={redo} disabled={busy || !canRedo}>
-          Redo
-        </button>
         <button type="button" className="primary" onClick={onSolve} disabled={busy}>
           {solving ? 'Solving…' : 'Solve'}
-        </button>
-        <button type="button" onClick={onNewPuzzle} disabled={busy}>
-          {generating ? 'Generating…' : 'New puzzle'}
-        </button>
-        <button
-          type="button"
-          onClick={onNewDragonPuzzle}
-          disabled={busy}
-          title="Generates a puzzle where every easier technique gets stuck and Dragon Colouring is what's needed to progress"
-        >
-          {generating ? 'Generating…' : 'New Dragon Colouring puzzle'}
-        </button>
-        <button type="button" onClick={onClear} disabled={busy}>
-          Clear
         </button>
       </div>
 
       <p className="status" role="status">
-        {status} <span className="muted">({filled}/81 filled)</span>
+        {status} <span className="muted">(grid has {filled}/81 cells filled)</span>
       </p>
+
+      {toastMessage && (
+        <div className="toast" role="status">
+          {toastMessage}
+        </div>
+      )}
     </main>
   )
 }

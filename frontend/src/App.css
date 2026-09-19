@@ -10,6 +10,14 @@
   letter-spacing: -0.04em;
 }
 
+.app-version {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: normal;
+  white-space: nowrap;
+}
+
 .header p {
   margin: 0 0 1rem;
   color: #5b6578;
@@ -176,6 +184,16 @@
   z-index: 2;
 }
 
+/* Dynamic Dragon Colouring only: the specific cells the non-colouring
+   technique on screen (a naked pair, a Unique Rectangle) drew its basis
+   from - tied to the one step currently shown, not cumulative like the
+   candidate colouring is, so it appears and disappears as the move-by-move
+   player steps through. Inset box-shadow, like .bivalue-highlighted, so it
+   layers independently of .selected's outline. */
+.cell.dragon-technique-cell {
+  box-shadow: inset 0 0 0 3px #16a34a;
+}
+
 .cell:hover:not(.given) {
   background: #eef2ff;
 }
@@ -329,6 +347,24 @@
   background: #fff;
   width: min(100%, 16rem);
   flex: 1 1 14rem;
+}
+
+.technique-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+
+.technique-panel-header .control-label {
+  margin-bottom: 0;
+}
+
+.technique-apply-button {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.4rem;
 }
 
 .technique-empty {
@@ -604,6 +640,33 @@ button.primary {
   color: #334155;
 }
 
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translate(-50%, 0);
+  padding: 0.6rem 1.1rem;
+  border-radius: 999px;
+  background: #1f2937;
+  color: #f8fafc;
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 10px 25px -10px rgb(0 0 0 / 0.5);
+  z-index: 20;
+  animation: toast-in 150ms ease-out;
+}
+
 .muted {
   color: #64748b;
 }
@@ -615,6 +678,10 @@ button.primary {
   }
 
   .muted {
+    color: #94a3b8;
+  }
+
+  .app-version {
     color: #94a3b8;
   }
 
@@ -656,6 +723,10 @@ button.primary {
 
   .cell.technique-used {
     outline-color: #eab308;
+  }
+
+  .cell.dragon-technique-cell {
+    box-shadow: inset 0 0 0 3px #4ade80;
   }
 
   .cell.filled:not(.given) {

@@ -2,8 +2,8 @@ import { SudokuSolver } from './SudokuSolver'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import type { Board } from './types'
 
-const MIN_CLUES = 20
-const MAX_CLUES = 25
+const MIN_CLUES = 17
+const MAX_CLUES = 30
 const MAX_ATTEMPTS = 20
 
 type CellCoordinate = [row: number, col: number]
@@ -11,7 +11,10 @@ type CellCoordinate = [row: number, col: number]
 /**
  * Generates a random, uniquely-solvable Sudoku puzzle: a full solved grid
  * with cells removed one at a time (checking uniqueness after each removal
- * via SudokuSolver) until 20-25 clues remain.
+ * via SudokuSolver) until 17-30 clues remain (17 being the proven minimum
+ * for a uniquely-solvable puzzle - reaching it depends on how far a given
+ * random reduction happens to get before every remaining cell's removal
+ * would break uniqueness).
  */
 export class SudokuGenerator {
   private readonly solver = new SudokuSolver()

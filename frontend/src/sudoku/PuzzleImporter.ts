@@ -1,4 +1,4 @@
-import { createEmptyCandidates } from './boardUtils'
+import { createEmptyCandidates, markedCandidateDigits } from './boardUtils'
 import type { Board, CandidateGrid } from './types'
 
 const BOARD_SIZE = 9
@@ -230,6 +230,84 @@ export class PuzzleImporter {
     }
 
     return candidates
+  }
+
+  /**
+   * Builds a Sudoku.Coach "SCv7_32_<payload>" state string for the current
+   * grid - the exact reverse of importSudokuCoachState: the same
+   * given/user digit strings and bit-per-digit candidate encoding, JSON-
+   * stringified, deflated, and base32-encoded.
+   */
+  async exportToSudokuCoachState(board: Board, givens: boolean[][], candidates: CandidateGrid): Promise<string> {
+    let givenDigits = ''
+    let userDigits = ''
+    for (let row = 0; row < BOARD_SIZE; row++) {
+      for (let col = 0; col < BOARD_SIZE; col++) {
+        const value = board[row][col]
+        givenDigits += givens[row][col] ? String(value) : '0'
+        userDigits += !givens[row][col] && value !== 0 ? String(value) : '0'
+      }
+    }
+
+    const cellValues: number[] = []
+    for (let row = 0; row < BOARD_SIZE; row++) {
+      for (let col = 0; col < BOARD_SIZE; col++) {
+        let value = 0
+        if (board[row][col] === 0) {
+          for (const digit of markedCandidateDigits(candidates[row][col])) {
+            value |= 1 << digit
+          }
+        }
+        cellValues.push(value)
+      }
+    }
+
+    const json = JSON.stringify({
+      gridSize: BOARD_SIZE,
+      givenDigits,
+      userDigits,
+      userCellCandidates: cellValues.join('-'),
+    })
+    const compressed = await this.deflateCompress(json)
+    return `${STATE_PREFIX}${SUPPORTED_ENCODING_TAG}_${this.encodeBase32(compressed)}`
+  }
+
+  private async deflateCompress(text: string): Promise<Uint8Array> {
+    const bytes = new TextEncoder().encode(text)
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'))
+    return new Uint8Array(await new Response(stream).arrayBuffer())
+  }
+
+  /** The exact reverse of decodeBase32 below - same unpadded base32hex
+   * bit-packing (5 bytes -> 8 characters), with the same shortened final
+   * group (4/3/2/1 leftover bytes -> 7/5/4/2 characters, no padding). */
+  private encodeBase32(bytes: Uint8Array): string {
+    let result = ''
+    for (let i = 0; i < bytes.length; i += 5) {
+      const b0 = bytes[i] ?? 0
+      const b1 = bytes[i + 1] ?? 0
+      const b2 = bytes[i + 2] ?? 0
+      const b3 = bytes[i + 3] ?? 0
+      const b4 = bytes[i + 4] ?? 0
+      const remaining = bytes.length - i
+
+      const c = [
+        b0 >> 3,
+        ((b0 & 7) << 2) | (b1 >> 6),
+        (b1 >> 1) & 0x1f,
+        ((b1 & 1) << 4) | (b2 >> 4),
+        ((b2 & 0xf) << 1) | (b3 >> 7),
+        (b3 >> 2) & 0x1f,
+        ((b3 & 3) << 3) | (b4 >> 5),
+        b4 & 0x1f,
+      ]
+
+      const charCount = remaining >= 5 ? 8 : [0, 2, 4, 5, 7][remaining]
+      for (let k = 0; k < charCount; k++) {
+        result += BASE32_ALPHABET[c[k]]
+      }
+    }
+    return result
   }
 
   private decodeBase32(text: string): Uint8Array<ArrayBuffer> {

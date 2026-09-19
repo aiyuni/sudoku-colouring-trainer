@@ -1,15 +1,18 @@
 import { cloneBoard, cloneCandidates, computeGivenMask, createEmptyCandidates } from './boardUtils'
 import { SudokuColorFinder } from './SudokuColorFinder'
 import { SudokuDragonFinder } from './SudokuDragonFinder'
+import { SudokuLockedCandidateFinder } from './SudokuLockedCandidateFinder'
 import { SudokuMedusaFinder } from './SudokuMedusaFinder'
+import { SudokuNakedSubsetFinder } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import { SudokuSingleFinder } from './SudokuSingleFinder'
 import { SudokuSolver } from './SudokuSolver'
+import { SudokuUniqueRectangleFinder } from './SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './types'
 
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-const MAX_GRID_ATTEMPTS = 300
+const MAX_GRID_ATTEMPTS = 600
 
 type CellCoordinate = [row: number, col: number]
 
@@ -19,35 +22,49 @@ export interface GeneratedDragonPuzzle {
   candidates: CandidateGrid
 }
 
+export interface DragonPuzzleGenerateOptions {
+  /** When true, generates a puzzle where plain Dragon Colouring (Rules 1-2
+   * and Promotion alone) is *not* enough - Dynamic Dragon Colouring's
+   * Extension Rule 3 (naked pairs / Unique Rectangle Type 1 propagated
+   * through a side's assumption) is what's actually needed. */
+  requireDynamic?: boolean
+}
+
 /**
  * Generates a puzzle state where, the moment it's loaded and candidates are
  * freshly autofilled, Dragon Colouring is the only technique this app
  * implements that can make progress - naked/hidden singles, naked pairs,
- * Simple Colouring, and 3D Medusa's own rules all come up empty.
+ * Unique Rectangle Type 1, Simple Colouring, and 3D Medusa's own rules all
+ * come up empty.
  *
  * That "the moment candidates are freshly autofilled" part is the subtlety:
- * naked pairs and Medusa's rules 3-5 only ever *eliminate* candidates, they
- * never solve a cell, so their effect isn't recorded anywhere a plain
- * legality-based autofill would preserve - re-autofilling would silently
- * make them look newly available again even though nothing about the board
- * changed. So the board this hands back is built using *only* naked/hidden
- * singles (the one technique that's inherently robust to that reset, since
- * it never depends on anything beyond which digits are already placed),
- * and every other technique is verified to fail against candidates that
- * were themselves just freshly autofilled - exactly the state the app is
- * in right after the puzzle loads and "Autofill all" is clicked.
+ * naked pairs, Unique Rectangle Type 1's eliminations, and Medusa's rules
+ * 3-5 only ever *eliminate* candidates, they never solve a cell, so their
+ * effect isn't recorded anywhere a plain legality-based autofill would
+ * preserve - re-autofilling would silently make them look newly available
+ * again even though nothing about the board changed. So the board this
+ * hands back is built using *only* naked/hidden singles (the one technique
+ * that's inherently robust to that reset, since it never depends on
+ * anything beyond which digits are already placed), and every other
+ * technique is verified to fail against candidates that were themselves
+ * just freshly autofilled - exactly the state the app is in right after
+ * the puzzle loads and "Autofill all" is clicked.
  *
  * Reduction otherwise works like SudokuGenerator: clues are removed one at
  * a time (checking uniqueness via SudokuSolver after each), continuing
  * until a removal produces a board with that property, while confirming
  * end-to-end solvability by alternating Dragon Colouring with a full
- * (singles+pairs+colouring+medusa) grind - a removal that instead demands
- * something harder than Dragon Colouring is rejected and the clue restored.
+ * (singles+pairs+UR1+colouring+medusa) grind - a removal that instead
+ * demands something harder than Dragon Colouring is rejected and the clue
+ * restored.
  */
 export class SudokuDragonPuzzleGenerator {
   private readonly solver = new SudokuSolver()
   private readonly singleFinder = new SudokuSingleFinder()
+  private readonly lockedCandidateFinder = new SudokuLockedCandidateFinder()
   private readonly pairFinder = new SudokuPairFinder()
+  private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
+  private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
   private readonly colorFinder = new SudokuColorFinder()
   private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly dragonFinder = new SudokuDragonFinder()
@@ -55,9 +72,9 @@ export class SudokuDragonPuzzleGenerator {
   /** Returns null if no qualifying puzzle turned up within the attempt
    * budget - rare, but this is a much narrower target than an ordinary
    * generated puzzle. */
-  generate(): GeneratedDragonPuzzle | null {
+  generate(options: DragonPuzzleGenerateOptions = {}): GeneratedDragonPuzzle | null {
     for (let attempt = 0; attempt < MAX_GRID_ATTEMPTS; attempt++) {
-      const result = this.reduceUntilDragonNeeded(this.generateSolvedGrid())
+      const result = this.reduceUntilDragonNeeded(this.generateSolvedGrid(), options)
       if (result) {
         return result
       }
@@ -65,8 +82,9 @@ export class SudokuDragonPuzzleGenerator {
     return null
   }
 
-  private reduceUntilDragonNeeded(solved: Board): GeneratedDragonPuzzle | null {
+  private reduceUntilDragonNeeded(solved: Board, options: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
     const puzzle = cloneBoard(solved)
+    const requireDynamic = options.requireDynamic ?? false
 
     for (const [row, col] of this.shuffled(this.allCoordinates())) {
       const removedValue = puzzle[row][col]
@@ -80,22 +98,22 @@ export class SudokuDragonPuzzleGenerator {
         continue
       }
 
-      const checkpoint = this.buildRobustCheckpoint(puzzle)
+      const checkpoint = this.buildRobustCheckpoint(puzzle, requireDynamic)
       if (!checkpoint) {
-        // Still too easy (something short of Dragon Colouring still works
-        // once candidates are freshly autofilled), or a dead end where
-        // nothing at all applies - either way, keep reducing.
+        // Still too easy (something short of the target technique still
+        // works once candidates are freshly autofilled), or a dead end
+        // where nothing at all applies - either way, keep reducing.
         continue
       }
 
-      if (this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates)) {
-        // The first, sparsest point where Dragon Colouring becomes
+      if (this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, requireDynamic)) {
+        // The first, sparsest point where the target technique becomes
         // necessary - and robustly so, surviving a fresh "Autofill all" -
         // while the puzzle is still solvable start to finish with what
         // this app implements. Exactly the target.
         return { board: checkpoint.board, givens: computeGivenMask(puzzle), candidates: checkpoint.candidates }
       }
-      // This removal demands something harder than Dragon Colouring -
+      // This removal demands something harder than the target technique -
       // too far, put the clue back and try removing a different one.
       puzzle[row][col] = removedValue
     }
@@ -129,13 +147,28 @@ export class SudokuDragonPuzzleGenerator {
    * set doesn't (yet) have the property described on the class - checked
    * entirely against a freshly-autofilled candidate grid, matching what
    * the app itself will show right after the puzzle loads. */
-  private buildRobustCheckpoint(clueBoard: Board): { board: Board; candidates: CandidateGrid } | null {
+  private buildRobustCheckpoint(
+    clueBoard: Board,
+    requireDynamic: boolean,
+  ): { board: Board; candidates: CandidateGrid } | null {
     const { board, candidates } = this.solveWithSinglesOnly(clueBoard)
 
     if (this.isFullySolved(board)) {
       return null
     }
+    if (this.lockedCandidateFinder.findEliminations(board, candidates).length > 0) {
+      return null
+    }
     if (this.pairFinder.findNakedPairEliminations(board, candidates).length > 0) {
+      return null
+    }
+    if (this.nakedSubsetFinder.findNakedTripleEliminations(board, candidates).length > 0) {
+      return null
+    }
+    if (this.nakedSubsetFinder.findNakedQuadEliminations(board, candidates).length > 0) {
+      return null
+    }
+    if (this.uniqueRectangleFinder.findType1Instances(board, candidates).length > 0) {
       return null
     }
     if (this.anySimpleColoringApplies(board, candidates)) {
@@ -154,9 +187,27 @@ export class SudokuDragonPuzzleGenerator {
       }
     }
 
-    const dragonCanProgress = chains.some((chain) => this.dragonFinder.extend(chain, board, candidates) !== null)
-    if (!dragonCanProgress) {
-      return null
+    if (requireDynamic) {
+      // At least one stuck chain must specifically need the dynamic
+      // extension - plain Dragon Colouring fails for that chain, but the
+      // dynamic one (Extension Rule 3) succeeds. Other chains elsewhere on
+      // the same board are free to be resolvable some easier way; only
+      // this one move, right at the start, has to require the dynamic
+      // extension.
+      const someChainNeedsDynamic = chains.some((chain) => {
+        if (this.dragonFinder.extend(chain, board, candidates) !== null) {
+          return false
+        }
+        return this.dragonFinder.extend(chain, board, candidates, { dynamic: true }) !== null
+      })
+      if (!someChainNeedsDynamic) {
+        return null
+      }
+    } else {
+      const dragonCanProgress = chains.some((chain) => this.dragonFinder.extend(chain, board, candidates) !== null)
+      if (!dragonCanProgress) {
+        return null
+      }
     }
 
     return { board, candidates }
@@ -178,7 +229,11 @@ export class SudokuDragonPuzzleGenerator {
    * is settled, using pairs/colouring/medusa for the *rest* of the solve
    * is completely fine, this is purely a check that nothing beyond Dragon
    * Colouring is ever needed on the way to a full solve. */
-  private isSolvableFromCheckpoint(checkpointBoard: Board, checkpointCandidates: CandidateGrid): boolean {
+  private isSolvableFromCheckpoint(
+    checkpointBoard: Board,
+    checkpointCandidates: CandidateGrid,
+    useDynamic: boolean,
+  ): boolean {
     const board = cloneBoard(checkpointBoard)
     const candidates = cloneCandidates(checkpointCandidates)
     for (;;) {
@@ -186,7 +241,7 @@ export class SudokuDragonPuzzleGenerator {
       if (this.isFullySolved(board)) {
         return true
       }
-      if (!this.applyOneDragonRound(board, candidates)) {
+      if (!this.applyOneDragonRound(board, candidates, useDynamic)) {
         return false
       }
     }
@@ -205,7 +260,11 @@ export class SudokuDragonPuzzleGenerator {
   private grindEasyTechniques(board: Board, candidates: CandidateGrid) {
     for (;;) {
       if (this.applySingles(board, candidates)) continue
+      if (this.applyLockedCandidates(board, candidates)) continue
       if (this.applyNakedPairs(board, candidates)) continue
+      if (this.applyNakedTriples(board, candidates)) continue
+      if (this.applyNakedQuads(board, candidates)) continue
+      if (this.applyUniqueRectangleType1(board, candidates)) continue
       if (this.applySimpleColoring(board, candidates)) continue
       if (this.applyMedusa(board, candidates)) continue
       break
@@ -225,6 +284,17 @@ export class SudokuDragonPuzzleGenerator {
     return true
   }
 
+  private applyLockedCandidates(board: Board, candidates: CandidateGrid): boolean {
+    const eliminations = this.lockedCandidateFinder.findEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      return false
+    }
+    for (const { row, col, digit } of eliminations) {
+      candidates[row][col][digit - 1] = false
+    }
+    return true
+  }
+
   private applyNakedPairs(board: Board, candidates: CandidateGrid): boolean {
     const eliminations = this.pairFinder.findNakedPairEliminations(board, candidates)
     if (eliminations.length === 0) {
@@ -234,6 +304,48 @@ export class SudokuDragonPuzzleGenerator {
       candidates[row][col][digit - 1] = false
     }
     return true
+  }
+
+  private applyNakedTriples(board: Board, candidates: CandidateGrid): boolean {
+    const eliminations = this.nakedSubsetFinder.findNakedTripleEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      return false
+    }
+    for (const { row, col, digit } of eliminations) {
+      candidates[row][col][digit - 1] = false
+    }
+    return true
+  }
+
+  private applyNakedQuads(board: Board, candidates: CandidateGrid): boolean {
+    const eliminations = this.nakedSubsetFinder.findNakedQuadEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      return false
+    }
+    for (const { row, col, digit } of eliminations) {
+      candidates[row][col][digit - 1] = false
+    }
+    return true
+  }
+
+  private applyUniqueRectangleType1(board: Board, candidates: CandidateGrid): boolean {
+    let changed = false
+    for (const ur of this.uniqueRectangleFinder.findType1Instances(board, candidates)) {
+      const [row, col] = ur.extraCell
+      if (ur.solvedDigit !== null) {
+        board[row][col] = ur.solvedDigit
+        candidates[row][col] = Array(9).fill(false)
+        SudokuRules.eliminatePeerCandidates(candidates, board, row, col, ur.solvedDigit)
+        changed = true
+      }
+      for (const digit of ur.eliminatedDigits) {
+        if (candidates[row][col][digit - 1]) {
+          candidates[row][col][digit - 1] = false
+          changed = true
+        }
+      }
+    }
+    return changed
   }
 
   private applySimpleColoring(board: Board, candidates: CandidateGrid): boolean {
@@ -311,7 +423,7 @@ export class SudokuDragonPuzzleGenerator {
    * something actionable, all applied at once - mirrors the app's own
    * Dragon Colouring auto-solve button so "needs Dragon Colouring" means
    * the same thing here as it does there. */
-  private applyOneDragonRound(board: Board, candidates: CandidateGrid): boolean {
+  private applyOneDragonRound(board: Board, candidates: CandidateGrid, useDynamic: boolean): boolean {
     const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
     const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
 
@@ -324,7 +436,9 @@ export class SudokuDragonPuzzleGenerator {
       if (!stuck) {
         continue
       }
-      const result = this.dragonFinder.extend(chain, board, candidates)
+      const result =
+        this.dragonFinder.extend(chain, board, candidates) ??
+        (useDynamic ? this.dragonFinder.extend(chain, board, candidates, { dynamic: true }) : null)
       if (!result) {
         continue
       }
