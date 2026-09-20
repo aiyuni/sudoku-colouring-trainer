@@ -13,6 +13,7 @@ import {
 import { CanvasGridImage } from './sudoku/CanvasGridImage'
 import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
+import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
 import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
 import { SudokuDragonFinder, type DragonMove } from './sudoku/SudokuDragonFinder'
 import { SudokuDragonPuzzleGenerator } from './sudoku/SudokuDragonPuzzleGenerator'
@@ -22,7 +23,7 @@ import { SudokuLockedCandidateFinder } from './sudoku/SudokuLockedCandidateFinde
 import { SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
-import { SudokuRules } from './sudoku/SudokuRules'
+import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
 import { SudokuSingleFinder, type SingleAssignment } from './sudoku/SudokuSingleFinder'
 import { SudokuSolver } from './sudoku/SudokuSolver'
 import { SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
@@ -47,6 +48,17 @@ const dragonFinder = new SudokuDragonFinder()
 const NINE = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 const APP_VERSION = 'v0.1.0-alpha'
+/** Threshold for the "Require a bigger base Medusa" toggle - the minimum
+ * number of coloured candidates the *starting*, stuck Medusa chain (before
+ * any Dragon Colouring extension) must have for a Dragon Colouring or
+ * Dynamic Dragon Colouring instance to be shown. */
+const MIN_BASE_MEDUSA_CANDIDATES = 3
+
+/** The proven minimum number of givens a Sudoku needs to have a unique
+ * solution - a board with fewer filled cells than this can never be
+ * uniquely solvable, so the solvability check below skips running the
+ * backtracking solver at all once it sees too few. */
+const MIN_UNIQUE_SOLUTION_CLUES = 17
 
 /** The board, its locked clues, and pencil marks - the part of the app's
  * state that Undo/Redo travels through. Everything else (selection, the
@@ -58,6 +70,15 @@ interface GridState {
   /** Manual highlight colours the user painted onto candidates - a pure
    * annotation, never touched by any solving technique or auto-solve. */
   candidateColors: CandidateColorGrid
+}
+
+/** One undo/redo-able snapshot: the grid *and* whatever the cached Solve
+ * Path looked like at that exact point - so undoing an Apply (which
+ * changes both together) restores both together, rather than rewinding
+ * the grid while leaving the already-reduced step list behind. */
+interface HistoryEntry {
+  grid: GridState
+  solvePath: SolvePathResult | null
 }
 
 function createInitialGrid(): GridState {
@@ -185,6 +206,10 @@ interface TechniqueInstance {
    * the click-to-highlight view. */
   blueCandidates?: TechniqueCandidateRef[]
   yellowCandidates?: TechniqueCandidateRef[]
+  /** 3D Medusa only: the cell(s) holding the elimination or the same-cell/
+   * same-unit colour contradiction that this instance rests on - drawn with
+   * a yellow border distinct from the eliminated-candidate pip highlight. */
+  medusaHighlightCells?: Array<readonly [number, number]>
   /** Dragon Colouring only: the ordered move log driving the move-by-move
    * player. When present, the panel row opens a stepper instead of
    * highlighting statically - the colors/eliminations/solves shown come
@@ -242,10 +267,18 @@ export type DragonChainFilter = 'any' | 'bivalue-seeded'
  * such stuck chain and extends each one, skipping chains where nothing
  * actionable comes out of the extension. Shared by the Techniques panel and
  * the Dragon colouring auto-solve buttons so the two can't drift apart. */
-function computeStuckDragonExtensions(board: Board, candidates: CandidateGrid, filter: DragonChainFilter = 'any') {
+function computeStuckDragonExtensions(
+  board: Board,
+  candidates: CandidateGrid,
+  filter: DragonChainFilter = 'any',
+  minBaseCandidates = 0,
+) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
     if (filter === 'bivalue-seeded' && !chain.hasBivalueCellLink) {
+      continue
+    }
+    if (chain.candidates.length < minBaseCandidates) {
       continue
     }
     const stuck =
@@ -275,10 +308,18 @@ function computeStuckDragonExtensions(board: Board, candidates: CandidateGrid, f
  * through a side's assumption) was actually necessary. A chain plain
  * Dragon Colouring can already resolve is left to that technique instead,
  * so the two never both claim the same chain. */
-function computeStuckDynamicDragonExtensions(board: Board, candidates: CandidateGrid, filter: DragonChainFilter = 'any') {
+function computeStuckDynamicDragonExtensions(
+  board: Board,
+  candidates: CandidateGrid,
+  filter: DragonChainFilter = 'any',
+  minBaseCandidates = 0,
+) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
     if (filter === 'bivalue-seeded' && !chain.hasBivalueCellLink) {
+      continue
+    }
+    if (chain.candidates.length < minBaseCandidates) {
       continue
     }
     const stuck =
@@ -311,7 +352,11 @@ function computeStuckDynamicDragonExtensions(board: Board, candidates: Candidate
  * reflects exactly what's happening on the grid right now.
  * When a new technique is added to the app, add its instances here too, so
  * the Techniques panel stays a complete list of everything implemented. */
-function buildTechniqueInstances(board: Board, candidates: CandidateGrid): TechniqueInstance[] {
+function buildTechniqueInstances(
+  board: Board,
+  candidates: CandidateGrid,
+  minBaseMedusaCandidates = 0,
+): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
   for (const { row, col, digit } of singleFinder.findNakedSingles(board, candidates)) {
@@ -541,15 +586,19 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
     if (mass) {
       let name: string
       let notation: string
+      let medusaHighlightCells: Array<readonly [number, number]>
       if (mass.conflict.kind === 'cell') {
         name = '3D Medusa Rule 1'
         notation = `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
+        medusaHighlightCells = [[mass.conflict.row, mass.conflict.col]]
       } else if (mass.conflict.kind === 'unit') {
         name = '3D Medusa Rule 1'
         notation = `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
+        medusaHighlightCells = [mass.conflict.a, mass.conflict.b]
       } else {
         name = '3D Medusa Rule 2'
         notation = `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
+        medusaHighlightCells = [[mass.conflict.row, mass.conflict.col]]
       }
       massInstances.push({
         id: `medusa-mass-${chainKey}`,
@@ -561,6 +610,7 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
         solvedCandidates: mass.solvedCells.map((c) => ({ row: c.row, col: c.col, digit: c.digit })),
         blueCandidates,
         yellowCandidates,
+        medusaHighlightCells,
       })
     }
 
@@ -575,6 +625,7 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
         solvedCandidates: [],
         blueCandidates,
         yellowCandidates,
+        medusaHighlightCells: [[r3.row, r3.col]],
       })
     }
 
@@ -591,6 +642,7 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
         solvedCandidates: [],
         blueCandidates,
         yellowCandidates,
+        medusaHighlightCells: [[r4.row, r4.col]],
       })
     }
 
@@ -606,6 +658,7 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
         solvedCandidates: [],
         blueCandidates,
         yellowCandidates,
+        medusaHighlightCells: [[r5.row, r5.col]],
       })
     }
   }
@@ -652,12 +705,12 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
     }
   }
 
-  const dragonExtensions = computeStuckDragonExtensions(board, candidates)
+  const dragonExtensions = computeStuckDragonExtensions(board, candidates, 'any', minBaseMedusaCandidates)
   dragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dragonExtensions) {
     instances.push(buildDragonInstance('dragon', 'Dragon Colouring', chainKey, moves))
   }
-  const dynamicDragonExtensions = computeStuckDynamicDragonExtensions(board, candidates)
+  const dynamicDragonExtensions = computeStuckDynamicDragonExtensions(board, candidates, 'any', minBaseMedusaCandidates)
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
     // Name the instance after whichever non-colouring technique(s) its
@@ -678,82 +731,503 @@ function buildTechniqueInstances(board: Board, candidates: CandidateGrid): Techn
   return instances
 }
 
+/** The full effect of a technique instance, including - for a Dragon
+ * Colouring or Dynamic Dragon Colouring instance - its entire move chain
+ * folded to the end, not just whichever step a user happens to be
+ * viewing. Used by the Solve Path search and by jumping straight to a
+ * solve-path step, where a Dragon instance always counts as one complete
+ * step regardless of how many internal moves it took. */
+function fullTechniqueEffect(
+  instance: TechniqueInstance,
+): { eliminatedCandidates: TechniqueCandidateRef[]; solvedCandidates: TechniqueCandidateRef[] } {
+  if (instance.moves && instance.moves.length > 0) {
+    const fold = foldDragonMoves(instance.moves, instance.moves.length - 1)
+    return { eliminatedCandidates: fold.eliminatedCandidates, solvedCandidates: fold.solvedCandidates }
+  }
+  return { eliminatedCandidates: instance.eliminatedCandidates, solvedCandidates: instance.solvedCandidates }
+}
+
+function applyTechniqueEffect(
+  board: Board,
+  candidates: CandidateGrid,
+  effect: { eliminatedCandidates: TechniqueCandidateRef[]; solvedCandidates: TechniqueCandidateRef[] },
+): { board: Board; candidates: CandidateGrid } {
+  const nextBoard = cloneBoard(board)
+  const nextCandidates = cloneCandidates(candidates)
+  for (const { row, col, digit } of effect.solvedCandidates) {
+    nextBoard[row][col] = digit
+    nextCandidates[row][col] = Array(9).fill(false)
+    SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
+  }
+  for (const { row, col, digit } of effect.eliminatedCandidates) {
+    nextCandidates[row][col][digit - 1] = false
+  }
+  return { board: nextBoard, candidates: nextCandidates }
+}
+
+/** Picks whichever currently-applicable technique instance makes the most
+ * progress right now: most cells solved, tie-broken by most candidates
+ * eliminated, tie-broken by whichever technique buildTechniqueInstances
+ * already lists first (its own simplest-first order). This directly
+ * targets the fewest-steps goal, since solving more cells now leaves
+ * fewer future steps to take - see buildSolvePath for why this is a
+ * heuristic, not a guaranteed-minimum search. */
+function pickGreedyInstance(instances: TechniqueInstance[]): TechniqueInstance | null {
+  let best: TechniqueInstance | null = null
+  let bestSolved = -1
+  let bestEliminated = -1
+  for (const instance of instances) {
+    const effect = fullTechniqueEffect(instance)
+    const solved = effect.solvedCandidates.length
+    const eliminated = effect.eliminatedCandidates.length
+    if (solved > bestSolved || (solved === bestSolved && eliminated > bestEliminated)) {
+      best = instance
+      bestSolved = solved
+      bestEliminated = eliminated
+    }
+  }
+  return best
+}
+
+export interface SolvePathStep {
+  /** The full instance chosen for this step, captured once at search
+   * time - not just its id/name, but everything the Techniques tab's own
+   * highlight rendering needs (usedCells, usedCandidates, moves, etc.),
+   * so selecting this step can drive that exact same highlight/explain
+   * path instead of a separate one. Its own eliminated/solved candidates
+   * (via fullTechniqueEffect) are what applying it replays, rather than
+   * needing to re-derive them (which would require the live board to
+   * still match boardBefore exactly). */
+  instance: TechniqueInstance
+  boardBefore: Board
+  candidatesBefore: CandidateGrid
+}
+
+export interface SolvePathResult {
+  steps: SolvePathStep[]
+  solvedFully: boolean
+  stoppedReason: 'solved' | 'stuck' | 'step-cap' | 'time-budget'
+  /** One line per step (plus a final summary), for the "how was this
+   * calculated" log window - the console gets the same lines. */
+  log: string[]
+}
+
+const SOLVE_PATH_TIME_BUDGET_MS = 4000
+const SOLVE_PATH_MAX_STEPS = 200
+
+/**
+ * Finds a sequence of technique applications - a full Dragon Colouring or
+ * Dynamic Dragon Colouring chain counts as a single step, regardless of
+ * how many moves it took internally - that solves the puzzle from the
+ * given board/candidates through to completion.
+ *
+ * Truly minimizing the step count would mean searching every combination
+ * of technique choices at every step - combinatorially intractable for a
+ * full puzzle. Instead this uses a greedy heuristic (see
+ * pickGreedyInstance): always take whichever currently-applicable
+ * technique solves the most cells right now - there's no branching or
+ * backtracking, so there's exactly one candidate chosen per step, not
+ * several branches compared against each other. That keeps the path short
+ * without an exponential search, at the cost of not being provably
+ * minimal - a different, harder-to-justify choice at some step could
+ * occasionally shave off a step later on. A wall-clock budget bounds the
+ * total search time regardless of puzzle difficulty; if it's hit, the
+ * path found so far is returned. Every call logs how the path was found,
+ * how long each step's own evaluation took, and why it stopped, so that
+ * tradeoff is never silent - see the log field and the Solve Path tab's
+ * "View search log" option.
+ */
+function boardsEqual(a: Board, b: Board): boolean {
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (a[r][c] !== b[r][c]) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+function candidatesEqual(a: CandidateGrid, b: CandidateGrid): boolean {
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      for (let d = 0; d < 9; d++) {
+        if (a[r][c][d] !== b[r][c][d]) {
+          return false
+        }
+      }
+    }
+  }
+  return true
+}
+function buildSolvePath(board: Board, candidates: CandidateGrid): SolvePathResult {
+  const startedAt = Date.now()
+  const steps: SolvePathStep[] = []
+  const log: string[] = [
+    'Method: greedy, single-candidate-per-step (no branching/backtracking) - at each step, every currently-applicable ' +
+      'technique is evaluated once and whichever solves the most cells right now is chosen (ties broken by most ' +
+      'candidates eliminated). This is not an exhaustive search for the true minimum step count, which is ' +
+      'combinatorially intractable for a full puzzle.',
+  ]
+  let curBoard = board
+  let curCandidates = candidates
+  let stoppedReason: SolvePathResult['stoppedReason'] = 'stuck'
+
+  while (steps.length < SOLVE_PATH_MAX_STEPS) {
+    if (curBoard.every((row) => row.every((v) => v !== 0))) {
+      stoppedReason = 'solved'
+      break
+    }
+    if (Date.now() - startedAt > SOLVE_PATH_TIME_BUDGET_MS) {
+      stoppedReason = 'time-budget'
+      break
+    }
+
+    const stepStart = Date.now()
+    const instances = buildTechniqueInstances(curBoard, curCandidates, 0)
+    const chosen = pickGreedyInstance(instances)
+    const stepElapsed = Date.now() - stepStart
+    if (!chosen) {
+      log.push(`Step ${steps.length + 1}: no technique applies (evaluated 0 candidates in ${stepElapsed}ms) - stuck.`)
+      stoppedReason = 'stuck'
+      break
+    }
+
+    const effect = fullTechniqueEffect(chosen)
+    log.push(
+      `Step ${steps.length + 1}: chose "${chosen.name}" (solves ${effect.solvedCandidates.length} cell${effect.solvedCandidates.length === 1 ? '' : 's'}, eliminates ${effect.eliminatedCandidates.length} candidate${effect.eliminatedCandidates.length === 1 ? '' : 's'}) - evaluated ${instances.length} applicable technique${instances.length === 1 ? '' : 's'} in ${stepElapsed}ms (cumulative ${Date.now() - startedAt}ms).`,
+    )
+
+    steps.push({
+      instance: chosen,
+      boardBefore: curBoard,
+      candidatesBefore: curCandidates,
+    })
+
+    const next = applyTechniqueEffect(curBoard, curCandidates, effect)
+    curBoard = next.board
+    curCandidates = next.candidates
+  }
+
+  if (steps.length >= SOLVE_PATH_MAX_STEPS && stoppedReason !== 'solved') {
+    stoppedReason = 'step-cap'
+  }
+
+  const elapsed = Date.now() - startedAt
+  const solvedFully = stoppedReason === 'solved'
+  const stopSummary =
+    stoppedReason === 'solved'
+      ? 'reached a full solve'
+      : stoppedReason === 'time-budget'
+        ? `stopped after hitting the ${SOLVE_PATH_TIME_BUDGET_MS}ms time budget - the puzzle may need more steps than shown`
+        : stoppedReason === 'step-cap'
+          ? `stopped after hitting the ${SOLVE_PATH_MAX_STEPS}-step safety cap`
+          : 'got stuck - no known technique applies from here; the rest would need brute force'
+  log.push(`Total: ${steps.length} step${steps.length === 1 ? '' : 's'} found in ${elapsed}ms - ${stopSummary}.`)
+  for (const line of log) {
+    console.log(`[Solve Path] ${line}`)
+  }
+
+  return { steps, solvedFully, stoppedReason, log }
+}
+
+export type PuzzleSolvability =
+  | { kind: 'solvable' }
+  | { kind: 'solvable-brute-force' }
+  | {
+      kind: 'unsolvable'
+      reason: 'inaccurate-candidates' | 'multiple-solutions' | 'no-solutions' | 'inaccurate-placements'
+    }
+
+/** Whether the puzzle's own givens (not the user's current candidate
+ * marks or solving progress) can be solved by this app's known
+ * techniques alone, need brute-force guessing despite being a valid
+ * unique-solution puzzle, or aren't solvable at all - and if not, why.
+ * Candidate accuracy is checked against the marked candidates actually on
+ * the board (a cell with nothing marked yet isn't treated as an error),
+ * but "solvable"/"solvable with brute force" is decided from a *fresh*
+ * autofill, independent of the user's own candidate-marking progress -
+ * this is a property of the puzzle, not of how far they've gotten. Takes
+ * the pieces as already-computed values (see the component's own memos)
+ * rather than doing that work itself, so the expensive fresh-autofill
+ * solve-path search can be memoized separately from - and far less often
+ * than - this cheap combination step. */
+function derivePuzzleSolvability(
+  solveStatus: SolveStatus,
+  candidatesAccurate: boolean,
+  solvedByTechniques: boolean,
+): PuzzleSolvability {
+  if (solveStatus === 'invalid') {
+    return { kind: 'unsolvable', reason: 'inaccurate-placements' }
+  }
+  if (solveStatus === 'unsolvable') {
+    return { kind: 'unsolvable', reason: 'no-solutions' }
+  }
+  if (solveStatus === 'multiple') {
+    return { kind: 'unsolvable', reason: 'multiple-solutions' }
+  }
+  if (!candidatesAccurate) {
+    return { kind: 'unsolvable', reason: 'inaccurate-candidates' }
+  }
+  return solvedByTechniques ? { kind: 'solvable' } : { kind: 'solvable-brute-force' }
+}
+
+const UNSOLVABLE_REASON_TEXT: Record<Extract<PuzzleSolvability, { kind: 'unsolvable' }>['reason'], string> = {
+  'inaccurate-candidates': 'inaccurate candidates',
+  'multiple-solutions': 'multiple solutions',
+  'no-solutions': 'no solutions',
+  'inaccurate-placements': 'inaccurate digit placements',
+}
+
+function solvabilityText(solvability: PuzzleSolvability): string {
+  switch (solvability.kind) {
+    case 'solvable':
+      return 'Solvable'
+    case 'solvable-brute-force':
+      return 'Solvable with brute force'
+    case 'unsolvable':
+      return `Unsolvable (${UNSOLVABLE_REASON_TEXT[solvability.reason]})`
+  }
+}
+
+type TechniquePanelTab = 'techniques' | 'solve-path'
+
 interface TechniquePanelProps {
+  tab: TechniquePanelTab
+  onTabChange: (tab: TechniquePanelTab) => void
   instances: TechniqueInstance[]
   activeId: string | null
   onSelect: (id: string) => void
   dragonStepIndex: number
   onDragonStep: (delta: number) => void
+  solvePath: SolvePathResult | null
+  activeSolvePathIndex: number | null
+  onSelectSolvePathStep: (index: number) => void
   onApply: () => void
+  canApply: boolean
+  onGenerateSolvePath: () => void
+  solvePathStale: boolean
+  showSolvePathLog: boolean
+  onToggleSolvePathLog: () => void
 }
 
-/** The panel to the left of the grid listing every technique instance the
- * current candidates support, in Sudoku notation. Clicking a row highlights
- * what it uses/eliminates/solves on the grid; it doesn't change the board.
- * A Dragon Colouring row expands in place into a forward/rewind stepper
- * instead, since its reasoning only makes sense played out move by move.
- * The "Apply" button next to the heading commits whichever row is
- * currently selected - the only way this panel ever changes the board. */
-function TechniquePanel({ instances, activeId, onSelect, dragonStepIndex, onDragonStep, onApply }: TechniquePanelProps) {
+/** The panel to the left of the grid, with two tabs sharing one "Apply"
+ * button:
+ *  - Techniques: every technique instance the current candidates support,
+ *    in Sudoku notation. Clicking a row highlights what it uses/
+ *    eliminates/solves on the grid; it doesn't change the board. A Dragon
+ *    Colouring row expands in place into a forward/rewind stepper instead,
+ *    since its reasoning only makes sense played out move by move.
+ *  - Solve path: empty until Generate is clicked (its own submenu below
+ *    the tabs). The sequence buildSolvePath found is cached, not
+ *    recomputed on every grid change - Apply here performs the selected
+ *    step directly on the live grid and drops it from the list, without
+ *    recalculating the rest. Regenerate re-runs the search from scratch;
+ *    "View search log" opens a small scrollable window with how it was
+ *    found, step by step. */
+function TechniquePanel({
+  tab,
+  onTabChange,
+  instances,
+  activeId,
+  onSelect,
+  dragonStepIndex,
+  onDragonStep,
+  solvePath,
+  activeSolvePathIndex,
+  onSelectSolvePathStep,
+  onApply,
+  canApply,
+  onGenerateSolvePath,
+  solvePathStale,
+  showSolvePathLog,
+  onToggleSolvePathLog,
+}: TechniquePanelProps) {
   return (
     <div className="technique-panel">
       <div className="technique-panel-header">
-        <h2 className="control-label">Techniques</h2>
-        <button type="button" className="technique-apply-button" disabled={!activeId} onClick={onApply}>
+        <div className="technique-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'techniques'}
+            className={['technique-tab', tab === 'techniques' ? 'active' : ''].filter(Boolean).join(' ')}
+            onClick={() => onTabChange('techniques')}
+          >
+            Techniques
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'solve-path'}
+            className={['technique-tab', tab === 'solve-path' ? 'active' : ''].filter(Boolean).join(' ')}
+            onClick={() => onTabChange('solve-path')}
+          >
+            Solve path <span className="experimental-label">experimental</span>
+          </button>
+        </div>
+        <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
           Apply
         </button>
       </div>
-      {instances.length === 0 ? (
-        <p className="technique-empty">
-          None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (Please click "Autofill all candidates")
-        </p>
-      ) : (
-        <ul className="technique-list">
-          {instances.map((instance) => {
-            const isActive = activeId === instance.id
-            const moves = instance.moves
-            const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
-            return (
-              <li key={instance.id}>
-                <button
-                  type="button"
-                  className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
-                  aria-pressed={isActive}
-                  onClick={() => onSelect(instance.id)}
-                >
-                  <span className="technique-name">{instance.name}</span>
-                  <span className="technique-notation">{instance.notation}</span>
-                </button>
-                {isActive && moves && (
-                  <div className="dragon-player">
-                    <div className="dragon-player-controls">
-                      <button
-                        type="button"
-                        className="dragon-player-button"
-                        disabled={stepIndex <= 0}
-                        onClick={() => onDragonStep(-1)}
-                      >
-                        ◀ Rewind
-                      </button>
-                      <span className="dragon-player-step">
-                        Step {stepIndex + 1} / {moves.length}
-                      </span>
-                      <button
-                        type="button"
-                        className="dragon-player-button"
-                        disabled={stepIndex >= moves.length - 1}
-                        onClick={() => onDragonStep(1)}
-                      >
-                        Forward ▶
-                      </button>
+      {tab === 'techniques' ? (
+        instances.length === 0 ? (
+          <p className="technique-empty">
+            None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (Please click "Autofill all candidates")
+          </p>
+        ) : (
+        <>
+          <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
+            Click on a technique and click on the "Apply" button to execute the technique.
+          </p>
+          <ul className="technique-list">
+            {instances.map((instance) => {
+              const isActive = activeId === instance.id
+              const moves = instance.moves
+              const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
+              return (
+                <li key={instance.id}>
+                  <button
+                    type="button"
+                    className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
+                    aria-pressed={isActive}
+                    onClick={() => onSelect(instance.id)}
+                  >
+                    <span className="technique-name">{instance.name}</span>
+                    <span className="technique-notation">{instance.notation}</span>
+                  </button>
+                  {isActive && moves && (
+                    <div className="dragon-player">
+                      <div className="dragon-player-controls">
+                        <button
+                          type="button"
+                          className="dragon-player-button"
+                          disabled={stepIndex <= 0}
+                          onClick={() => onDragonStep(-1)}
+                        >
+                          ◀ Rewind
+                        </button>
+                        <span className="dragon-player-step">
+                          Step {stepIndex + 1} / {moves.length}
+                        </span>
+                        <button
+                          type="button"
+                          className="dragon-player-button"
+                          disabled={stepIndex >= moves.length - 1}
+                          onClick={() => onDragonStep(1)}
+                        >
+                          Forward ▶
+                        </button>
+                      </div>
+                      <p className="dragon-player-description">{moves[stepIndex].description}</p>
                     </div>
-                    <p className="dragon-player-description">{moves[stepIndex].description}</p>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </>
+        )
+      ) : (
+        <>
+          <div className="solve-path-submenu">
+            <button type="button" className="solve-path-generate-button" onClick={onGenerateSolvePath}>
+              {solvePath ? 'Regenerate' : 'Generate'}
+            </button>
+            <button
+              type="button"
+              className={['solve-path-log-toggle', showSolvePathLog ? 'active' : ''].filter(Boolean).join(' ')}
+              aria-pressed={showSolvePathLog}
+              onClick={onToggleSolvePathLog}
+            >
+              {showSolvePathLog ? 'Hide search log' : 'View search log'}
+            </button>
+          </div>
+          {showSolvePathLog && (
+            <div className="solve-path-log" role="log">
+              {solvePath ? (
+                solvePath.log.map((line, i) => <div key={i}>{line}</div>)
+              ) : (
+                <div>No search has been run yet - click Generate.</div>
+              )}
+            </div>
+          )}
+          {!solvePath ? (
+            <p className="technique-empty">Click "Generate" to find a solve path from the current grid.</p>
+          ) : solvePath.steps.length === 0 ? (
+            <p className="technique-empty">
+              {solvePath.solvedFully ? 'Already solved.' : 'No known technique applies - the puzzle would need brute force from here.'}
+            </p>
+          ) : (
+            <>
+              <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
+                Click on a step and click on the "Apply" button to execute up to and including the step.
+              </p>
+              <ul className="technique-list">
+                {solvePath.steps.map((step, index) => {
+                  const isActive = activeSolvePathIndex === index
+                  const moves = step.instance.moves
+                  const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
+                  return (
+                    <li key={`${step.instance.id}-${index}`}>
+                      <button
+                        type="button"
+                        className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
+                        aria-pressed={isActive}
+                        onClick={() => onSelectSolvePathStep(index)}
+                      >
+                        <span className="technique-name">
+                          Step {index + 1}: {step.instance.name}
+                        </span>
+                        <span className="technique-notation">{step.instance.notation}</span>
+                      </button>
+                      {isActive && moves && (
+                        <div className="dragon-player">
+                          <div className="dragon-player-controls">
+                            <button
+                              type="button"
+                              className="dragon-player-button"
+                              disabled={stepIndex <= 0}
+                              onClick={() => onDragonStep(-1)}
+                            >
+                              ◀ Rewind
+                            </button>
+                            <span className="dragon-player-step">
+                              Step {stepIndex + 1} / {moves.length}
+                            </span>
+                            <button
+                              type="button"
+                              className="dragon-player-button"
+                              disabled={stepIndex >= moves.length - 1}
+                              onClick={() => onDragonStep(1)}
+                            >
+                              Forward ▶
+                            </button>
+                          </div>
+                          <p className="dragon-player-description">{moves[stepIndex].description}</p>
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+              {!solvePath.solvedFully && (
+                <p className="technique-empty">
+                  {solvePath.stoppedReason === 'time-budget'
+                    ? 'Stopped early - the search took too long, so this may not reach a full solve.'
+                    : solvePath.stoppedReason === 'step-cap'
+                      ? 'Stopped after hitting the step safety cap.'
+                      : 'Got stuck here - the rest of the puzzle would need brute force.'}
+                </p>
+              )}
+            </>
+          )}
+          {solvePathStale && (
+            <p className="solve-path-stale-warning">
+              The grid no longer matches this solve path - a Regenerate might be needed.
+            </p>
+          )}
+        </>
       )}
     </div>
   )
@@ -790,7 +1264,7 @@ function DigitPad({ variant, isActive, isDisabled, onSelect }: DigitPadProps) {
 
 export default function App() {
   const [grid, setGrid] = useState<GridState>(createInitialGrid)
-  const [historyEntries, setHistoryEntries] = useState<GridState[]>(() => [createInitialGrid()])
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => [{ grid: createInitialGrid(), solvePath: null }])
   const [historyIndex, setHistoryIndex] = useState(0)
   const { board, givens, candidates, candidateColors } = grid
 
@@ -801,10 +1275,20 @@ export default function App() {
   const [highlightedDigit, setHighlightedDigit] = useState<number | null>(null)
   const [activeTechniqueId, setActiveTechniqueId] = useState<string | null>(null)
   const [dragonStepIndex, setDragonStepIndex] = useState(0)
+  const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
+  const [activeSolvePathIndex, setActiveSolvePathIndex] = useState<number | null>(null)
+  // Deliberately state, not a useMemo off [board, candidates]: the whole
+  // point is this does NOT recompute on every grid change - only Generate/
+  // Regenerate (or clearing it out when auto-solve is used) ever touches
+  // it, so it survives switching tabs and applying its own steps for free.
+  const [solvePath, setSolvePath] = useState<SolvePathResult | null>(null)
+  const [showSolvePathLog, setShowSolvePathLog] = useState(false)
   const [keyboardMode, setKeyboardMode] = useState<'solution' | 'candidate'>('solution')
   const [paintColor, setPaintColor] = useState<CandidateColor | null>(null)
   const [showStrongLinks, setShowStrongLinks] = useState(false)
   const [showBivalueCells, setShowBivalueCells] = useState(false)
+  const [gridWhiteMode, setGridWhiteMode] = useState(true)
+  const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(false)
   const [importText, setImportText] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [solving, setSolving] = useState(false)
@@ -845,31 +1329,110 @@ export default function App() {
   }, [board, candidates, showBivalueCells])
 
   const techniqueInstances = useMemo(
-    () => buildTechniqueInstances(board, candidates),
-    [board, candidates],
+    () => buildTechniqueInstances(board, candidates, minBaseMedusaFilter ? MIN_BASE_MEDUSA_CANDIDATES : 0),
+    [board, candidates, minBaseMedusaFilter],
   )
   // Looked up by id (rather than kept as its own state) so that if the
   // board changes underneath an active selection, it silently reflects the
   // fresh instance, or disappears if it no longer applies.
   const activeTechnique = techniqueInstances.find((t) => t.id === activeTechniqueId) ?? null
+  // What the grid actually highlights/explains - the Techniques tab's own
+  // selection, or (when the Solve Path tab is the one showing a selection)
+  // that step's own captured instance, so selecting a solve-path row drives
+  // the exact same highlight rendering a live Techniques click would,
+  // rather than a separate path. Only one of the two tabs' selections is
+  // ever "live" here, matching whichever tab is actually open.
+  const highlightedTechnique =
+    techniquePanelTab === 'solve-path'
+      ? (activeSolvePathIndex !== null ? (solvePath?.steps[activeSolvePathIndex]?.instance ?? null) : null)
+      : activeTechnique
   // Dragon Colouring's colors/eliminations/solves come from folding its
   // move log up through the current step, not from static fields, since
   // which candidate has which color changes as the playback advances.
   const dragonHighlight = useMemo(
-    () => (activeTechnique?.moves ? foldDragonMoves(activeTechnique.moves, dragonStepIndex) : null),
-    [activeTechnique, dragonStepIndex],
+    () => (highlightedTechnique?.moves ? foldDragonMoves(highlightedTechnique.moves, dragonStepIndex) : null),
+    [highlightedTechnique, dragonStepIndex],
   )
   // Dynamic Dragon Colouring's non-colouring technique (a naked pair, a
   // Unique Rectangle) only applies at its own single step - unlike the
   // colours/eliminations above, this isn't cumulative, so it comes from
   // just the one move currently on screen, not the fold.
   const dragonTechniqueCellKeys = useMemo(() => {
-    const move = activeTechnique?.moves?.[Math.min(dragonStepIndex, activeTechnique.moves.length - 1)]
+    const move = highlightedTechnique?.moves?.[Math.min(dragonStepIndex, highlightedTechnique.moves.length - 1)]
     if (!move?.dynamicTechniqueCells) {
       return null
     }
     return new Set(move.dynamicTechniqueCells.map(([r, c]) => `${r},${c}`))
-  }, [activeTechnique, dragonStepIndex])
+  }, [highlightedTechnique, dragonStepIndex])
+
+  // True once the live board/candidates have drifted from what the cached
+  // solve path's own next step expects (someone applied it out of order,
+  // edited a cell by hand, undid something, etc.) - the remaining steps
+  // were never recalculated against this new state, so they may no longer
+  // make sense.
+  const solvePathStale = useMemo(() => {
+    if (!solvePath || solvePath.steps.length === 0) {
+      return false
+    }
+    const nextStep = solvePath.steps[0]
+    return !boardsEqual(board, nextStep.boardBefore) || !candidatesEqual(candidates, nextStep.candidatesBefore)
+  }, [board, candidates, solvePath])
+
+  // The "solvable / solvable with brute force / unsolvable" status below
+  // the grid, split into three memos so the expensive part (a fresh-
+  // autofill solve-path search) only reruns when the board's own givens
+  // change, not on every candidate the user marks or clears - candidate
+  // accuracy is checked separately, cheaply, straight off the live marks.
+  // A board with fewer than MIN_UNIQUE_SOLUTION_CLUES filled cells can
+  // never be uniquely solvable (a proven fact about Sudoku, not something
+  // that needs solving to find out), so that case skips the backtracking
+  // solver entirely rather than asking it to prove what's already known -
+  // classified as "multiple solutions" since an under-clued board that's
+  // otherwise a normal, non-contrived arrangement is virtually always
+  // satisfiable many different ways, never exactly zero.
+  const puzzleSolveResult = useMemo(
+    () => (filled < MIN_UNIQUE_SOLUTION_CLUES ? SolveResponse.multiple() : solver.solve(board)),
+    [board, filled],
+  )
+  const candidatesAccurate = useMemo(() => {
+    if (puzzleSolveResult.status !== 'solved' || !puzzleSolveResult.board) {
+      return true
+    }
+    const solution = puzzleSolveResult.board
+    for (const r of NINE) {
+      for (const c of NINE) {
+        if (board[r][c] !== 0) {
+          continue
+        }
+        const marked = candidates[r][c]
+        if (!marked.some(Boolean)) {
+          continue
+        }
+        if (!marked[solution[r][c] - 1]) {
+          return false
+        }
+      }
+    }
+    return true
+  }, [board, candidates, puzzleSolveResult])
+  const bruteSolvePath = useMemo(() => {
+    if (puzzleSolveResult.status !== 'solved' || !candidatesAccurate) {
+      return null
+    }
+    const freshCandidates = createEmptyCandidates()
+    for (const r of NINE) {
+      for (const c of NINE) {
+        if (board[r][c] === 0) {
+          freshCandidates[r][c] = DIGITS.map((d) => SudokuRules.isSafe(board, r, c, d))
+        }
+      }
+    }
+    return buildSolvePath(board, freshCandidates)
+  }, [board, puzzleSolveResult, candidatesAccurate])
+  const solvability = useMemo(
+    () => derivePuzzleSolvability(puzzleSolveResult.status, candidatesAccurate, bruteSolvePath?.solvedFully ?? false),
+    [puzzleSolveResult, candidatesAccurate, bruteSolvePath],
+  )
 
   const selectedIsLocked = selected !== null && givens[selected.row][selected.col]
   const selectedIsSolved = selected !== null && board[selected.row][selected.col] !== 0
@@ -881,18 +1444,40 @@ export default function App() {
    * Callers that don't touch candidate colours (nearly all of them - only
    * the paint action itself does) can omit candidateColors entirely; it
    * carries forward from the current grid and drops any colour left over
-   * on a candidate the change just solved or eliminated. */
-  function commitGrid(next: Omit<GridState, 'candidateColors'> & { candidateColors?: CandidateColorGrid }) {
+   * on a candidate the change just solved or eliminated.
+   *
+   * `nextSolvePath` bundles the cached Solve Path into this same undo
+   * step - omit it (leave as undefined) to carry the current one forward
+   * unchanged (an ordinary cell edit doesn't touch it), or pass a value
+   * (including null, to clear it) when this specific action changes it,
+   * so undoing this step restores the grid *and* the path together rather
+   * than leaving them out of sync. */
+  function commitGrid(
+    next: Omit<GridState, 'candidateColors'> & { candidateColors?: CandidateColorGrid },
+    nextSolvePath?: SolvePathResult | null,
+  ) {
     const resolved: GridState = {
       board: next.board,
       givens: next.givens,
       candidates: next.candidates,
       candidateColors: sanitizeCandidateColors(next.candidateColors ?? grid.candidateColors, next.board, next.candidates),
     }
+    const resolvedSolvePath = nextSolvePath === undefined ? solvePath : nextSolvePath
     const truncated = historyEntries.slice(0, historyIndex + 1)
     setGrid(resolved)
-    setHistoryEntries([...truncated, resolved])
+    setSolvePath(resolvedSolvePath)
+    setHistoryEntries([...truncated, { grid: resolved, solvePath: resolvedSolvePath }])
     setHistoryIndex(truncated.length)
+  }
+
+  /** Same as commitGrid, but also drops any cached solve path - used only
+   * by the Auto-solve buttons, since they change the grid through a
+   * completely different route than the Solve Path tab's own step-by-step
+   * apply, and the cached path has no way to know it needs to account for
+   * that. The user has to Regenerate afterward, same as any other
+   * out-of-band edit. */
+  function commitAutoSolve(next: Omit<GridState, 'candidateColors'> & { candidateColors?: CandidateColorGrid }) {
+    commitGrid(next, null)
   }
 
   function undo() {
@@ -901,7 +1486,9 @@ export default function App() {
       return
     }
     const nextIndex = historyIndex - 1
-    setGrid(historyEntries[nextIndex])
+    setGrid(historyEntries[nextIndex].grid)
+    setSolvePath(historyEntries[nextIndex].solvePath)
+    setActiveSolvePathIndex(null)
     setHistoryIndex(nextIndex)
     setStatus('Undid last action.')
   }
@@ -912,7 +1499,9 @@ export default function App() {
       return
     }
     const nextIndex = historyIndex + 1
-    setGrid(historyEntries[nextIndex])
+    setGrid(historyEntries[nextIndex].grid)
+    setSolvePath(historyEntries[nextIndex].solvePath)
+    setActiveSolvePathIndex(null)
     setHistoryIndex(nextIndex)
     setStatus('Redid last action.')
   }
@@ -1014,7 +1603,7 @@ export default function App() {
       SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
     }
 
-    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
     setStatus(`Filled ${assignments.length} ${assignments.length === 1 ? singularLabel : pluralLabel}.`)
   }
 
@@ -1037,7 +1626,7 @@ export default function App() {
       nextCandidates[row][col][digit - 1] = false
     }
 
-    commitGrid({ board, givens, candidates: nextCandidates })
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
     setStatus(
       `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via locked candidates.`,
     )
@@ -1062,7 +1651,7 @@ export default function App() {
       nextCandidates[row][col][digit - 1] = false
     }
 
-    commitGrid({ board, givens, candidates: nextCandidates })
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
     setStatus(
       `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via naked pairs.`,
     )
@@ -1087,7 +1676,7 @@ export default function App() {
       nextCandidates[row][col][digit - 1] = false
     }
 
-    commitGrid({ board, givens, candidates: nextCandidates })
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
     setStatus(
       `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via naked triples.`,
     )
@@ -1112,7 +1701,7 @@ export default function App() {
       nextCandidates[row][col][digit - 1] = false
     }
 
-    commitGrid({ board, givens, candidates: nextCandidates })
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
     setStatus(
       `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via naked quads.`,
     )
@@ -1163,7 +1752,7 @@ export default function App() {
       }
     }
 
-    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
 
     const parts: string[] = []
     if (solvedAssignments.length > 0) {
@@ -1217,7 +1806,7 @@ export default function App() {
       nextCandidates[row][col][digit - 1] = false
     }
 
-    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
 
     const parts: string[] = []
     if (solvedAssignments.length > 0) {
@@ -1286,7 +1875,7 @@ export default function App() {
       }
     }
 
-    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
 
     const parts: string[] = []
     if (solvedAssignments.length > 0) {
@@ -1340,7 +1929,7 @@ export default function App() {
       }
     }
 
-    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
 
     const parts: string[] = []
     if (solvedAssignments.length > 0) {
@@ -1388,46 +1977,114 @@ export default function App() {
     setShowBivalueCells((current) => !current)
   }
 
+  function toggleMinBaseMedusaFilter() {
+    setMinBaseMedusaFilter((current) => !current)
+  }
+
+  function toggleGridWhiteMode() {
+    setGridWhiteMode((current) => !current)
+  }
+
   function onSelectTechnique(id: string) {
     setActiveTechniqueId((current) => (current === id ? null : id))
     setDragonStepIndex(0)
   }
 
+  function onTechniquePanelTabChange(tab: TechniquePanelTab) {
+    setTechniquePanelTab(tab)
+  }
+
+  function onSelectSolvePathStep(index: number) {
+    setActiveSolvePathIndex((current) => (current === index ? null : index))
+    setDragonStepIndex(0)
+  }
+
   function onDragonStep(delta: number) {
-    const maxIndex = (activeTechnique?.moves?.length ?? 1) - 1
+    const maxIndex = (highlightedTechnique?.moves?.length ?? 1) - 1
     setDragonStepIndex((current) => Math.min(maxIndex, Math.max(0, current + delta)))
   }
 
-  /** Commits whatever the selected technique row is currently highlighting
-   * on the grid - for a plain technique that's its own eliminated/solved
-   * candidates; for a Dragon Colouring row (whose colours are conditional,
-   * not real board changes) it's the fold of its moves up through the
-   * step the player is currently showing, exactly matching what's drawn on
-   * the board right now. */
+  /** Commits the selected technique's own full effect - for a plain
+   * technique that's its own eliminated/solved candidates; for a Dragon
+   * Colouring or Dynamic Dragon Colouring row, its *entire* move chain
+   * folded to the end, regardless of which step the player is currently
+   * showing. The stepper is purely a walkthrough aid - Apply always
+   * commits the whole technique, the same as it counts as a single step
+   * everywhere else (the Solve Path search, "one step per Dragon chain"). */
   function onApplySelectedTechnique() {
     if (!activeTechnique) {
       return
     }
-    const eliminatedCandidates = dragonHighlight?.eliminatedCandidates ?? activeTechnique.eliminatedCandidates
-    const solvedCandidates = dragonHighlight?.solvedCandidates ?? activeTechnique.solvedCandidates
+    const { eliminatedCandidates, solvedCandidates } = fullTechniqueEffect(activeTechnique)
     if (eliminatedCandidates.length === 0 && solvedCandidates.length === 0) {
-      setStatus('Nothing to apply yet - step further to reach an actual conclusion.')
+      setStatus('Nothing to apply - this technique has no effect.')
       return
     }
 
-    const nextBoard = cloneBoard(board)
-    const nextCandidates = cloneCandidates(candidates)
-    for (const { row, col, digit } of solvedCandidates) {
-      nextBoard[row][col] = digit
-      nextCandidates[row][col] = Array(9).fill(false)
-      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
-    }
-    for (const { row, col, digit } of eliminatedCandidates) {
-      nextCandidates[row][col][digit - 1] = false
-    }
-
-    commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    const next = applyTechniqueEffect(board, candidates, { eliminatedCandidates, solvedCandidates })
+    commitGrid({ board: next.board, givens, candidates: next.candidates })
     setStatus(`Applied ${activeTechnique.name}.`)
+  }
+
+  /** Applies the selected solve-path step's own precomputed effect
+   * directly to the live grid - no jump to the Techniques tab, no
+   * re-selecting anything there. Selecting a step other than the first
+   * one means everything ahead of it hasn't been applied yet, so Apply
+   * replays every step up to and including the selected one, in order
+   * (each one's own full effect, same as a Dragon row - see
+   * fullTechniqueEffect), not just the one that's selected. All of them
+   * are then dropped from the cached path (so whatever came after becomes
+   * the new first step) without recalculating the rest - see
+   * solvePathStale for what happens if that leaves the remaining steps
+   * out of sync with the live grid. */
+  function onApplySolvePathStep() {
+    if (!solvePath || activeSolvePathIndex === null) {
+      return
+    }
+    const stepsToApply = solvePath.steps.slice(0, activeSolvePathIndex + 1)
+    let curBoard = board
+    let curCandidates = candidates
+    for (const step of stepsToApply) {
+      const next = applyTechniqueEffect(curBoard, curCandidates, fullTechniqueEffect(step.instance))
+      curBoard = next.board
+      curCandidates = next.candidates
+    }
+    const remainingSolvePath = { ...solvePath, steps: solvePath.steps.slice(activeSolvePathIndex + 1) }
+    commitGrid({ board: curBoard, givens, candidates: curCandidates }, remainingSolvePath)
+    setActiveSolvePathIndex(null)
+    const lastStep = stepsToApply[stepsToApply.length - 1]
+    setStatus(
+      stepsToApply.length === 1
+        ? `Applied solve path step: ${lastStep.instance.name}.`
+        : `Applied ${stepsToApply.length} solve path steps (through "${lastStep.instance.name}").`,
+    )
+  }
+
+  function onApplyPanelSelection() {
+    if (techniquePanelTab === 'solve-path') {
+      onApplySolvePathStep()
+    } else {
+      onApplySelectedTechnique()
+    }
+  }
+
+  /** Generate/Regenerate: runs the search fresh from the live board/
+   * candidates, replacing whatever solve path was cached before (if
+   * any). This is the only thing (besides an auto-solve action clearing
+   * it outright) that ever changes the cached path - a normal grid edit,
+   * or applying a step from this same tab, does not. */
+  /** Generating (or regenerating) is itself a history step, even though
+   * the grid doesn't change - otherwise undoing an Apply would skip right
+   * past it to whatever the path looked like before it was ever
+   * generated, instead of restoring it to what it was immediately before
+   * that Apply. */
+  function onGenerateSolvePath() {
+    commitGrid({ board, givens, candidates }, buildSolvePath(board, candidates))
+    setActiveSolvePathIndex(null)
+  }
+
+  function onToggleSolvePathLog() {
+    setShowSolvePathLog((current) => !current)
   }
 
   function onCellClick(row: number, col: number) {
@@ -1705,7 +2362,8 @@ export default function App() {
           Sudoku Colouring Trainer <span className="app-version">{APP_VERSION}</span>
         </h1>
         <p>
-          Learn, practice, and solve Sudoku puzzles using Colouring techniques.  
+          Advanced Sudoku solver and trainer for Colouring techniques. <div></div>
+          For the Colouring enthusiasts :)  
         </p>
         <div className="toggle-row">
           <button
@@ -1724,7 +2382,7 @@ export default function App() {
             aria-pressed={showStrongLinks}
             onClick={toggleStrongLinks}
           >
-            Show Strong links: <strong>{showStrongLinks ? 'On' : 'Off'}</strong>
+            Toggle Strong links: <strong>{showStrongLinks ? 'On' : 'Off'}</strong>
           </button>
           <button
             type="button"
@@ -1734,7 +2392,29 @@ export default function App() {
             aria-pressed={showBivalueCells}
             onClick={toggleBivalueCells}
           >
-            Show Bivalue cells: <strong>{showBivalueCells ? 'On' : 'Off'}</strong>
+            Toggle Bivalue cells: <strong>{showBivalueCells ? 'On' : 'Off'}</strong>
+          </button>
+          <button
+            type="button"
+            className={['mode-toggle', 'min-base-medusa-toggle', minBaseMedusaFilter ? 'active' : '']
+              .filter(Boolean)
+              .join(' ')}
+            aria-pressed={minBaseMedusaFilter}
+            onClick={toggleMinBaseMedusaFilter}
+            title={`Only show Dragon Colouring / Dynamic Dragon Colouring techniques whose starting, stuck Medusa chain has at least ${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates`}
+          >
+            Dragon require {MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates: <strong>{minBaseMedusaFilter ? 'On' : 'Off'}</strong>
+          </button>
+          <button
+            type="button"
+            className={['mode-toggle', 'grid-white-mode-toggle', gridWhiteMode ? 'active' : '']
+              .filter(Boolean)
+              .join(' ')}
+            aria-pressed={gridWhiteMode}
+            onClick={toggleGridWhiteMode}
+            title="Force the grid (lines, background, numbers, candidates) into white mode regardless of system dark mode"
+          >
+            Grid colour: <strong>{gridWhiteMode ? 'White' : 'Dark'}</strong>
           </button>
         </div>
       </header>
@@ -1761,9 +2441,9 @@ export default function App() {
           type="button"
           onClick={onNewDynamicDragonPuzzle}
           disabled={busy}
-          title="Generates a puzzle where a stuck chain right at the start needs Dynamic Dragon Colouring - naked pairs and/or Unique Rectangle Type 1 propagated through a side's assumption - to progress"
+          title="Generates a puzzle state that includes dynamic Dragon Colouring"
         >
-          {generating ? 'Generating…' : 'Generate Dynamic Dragon Colouring puzzle'}
+          {generating ? 'Generating…' : 'Generate Dynamic Dragon Colouring practice puzzle'}
         </button>
         <button type="button" onClick={onClear} disabled={busy}>
           Clear grid
@@ -1772,15 +2452,30 @@ export default function App() {
 
       <div className="board-area">
         <TechniquePanel
+          tab={techniquePanelTab}
+          onTabChange={onTechniquePanelTabChange}
           instances={techniqueInstances}
           activeId={activeTechniqueId}
           onSelect={onSelectTechnique}
           dragonStepIndex={dragonStepIndex}
           onDragonStep={onDragonStep}
-          onApply={onApplySelectedTechnique}
+          solvePath={solvePath}
+          activeSolvePathIndex={activeSolvePathIndex}
+          onSelectSolvePathStep={onSelectSolvePathStep}
+          onApply={onApplyPanelSelection}
+          canApply={techniquePanelTab === 'solve-path' ? activeSolvePathIndex !== null : !!activeTechniqueId}
+          onGenerateSolvePath={onGenerateSolvePath}
+          solvePathStale={solvePathStale}
+          showSolvePathLog={showSolvePathLog}
+          onToggleSolvePathLog={onToggleSolvePathLog}
         />
 
-        <div className="grid" role="grid" aria-label="Sudoku board" tabIndex={0}>
+        <div
+          className={['grid', gridWhiteMode ? 'grid-white-mode' : ''].filter(Boolean).join(' ')}
+          role="grid"
+          aria-label="Sudoku board"
+          tabIndex={0}
+        >
           {NINE.map((boxIndex) => {
             const boxRow = Math.floor(boxIndex / 3)
             const boxCol = boxIndex % 3
@@ -1795,9 +2490,11 @@ export default function App() {
                   const isDigitHighlighted = value !== 0 && highlightedDigit === value
                   const cellHasCandidates = candidates[r][c].some(Boolean)
                   const isTechniqueCell =
-                    activeTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
+                    highlightedTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
                   const isBivalueCell = bivalueCells.has(`${r},${c}`)
                   const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
+                  const isMedusaHighlightCell =
+                    highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false
                   const classes = [
                     'cell',
                     givens[r][c] ? 'given' : value ? 'filled' : '',
@@ -1805,6 +2502,7 @@ export default function App() {
                     isDigitHighlighted ? 'digit-highlighted' : '',
                     isBivalueCell ? 'bivalue-highlighted' : '',
                     isTechniqueCell ? 'technique-used' : '',
+                    isMedusaHighlightCell ? 'medusa-highlight-cell' : '',
                     isDragonTechniqueCell ? 'dragon-technique-cell' : '',
                   ]
                     .filter(Boolean)
@@ -1830,32 +2528,32 @@ export default function App() {
                             const isHighlighted = active && highlightedDigit === digit
                             const isTechniqueUsed =
                               active &&
-                              (activeTechnique?.usedCandidates.some(
+                              (highlightedTechnique?.usedCandidates.some(
                                 (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                               ) ??
                                 false)
-                            const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? activeTechnique?.eliminatedCandidates
+                            const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? highlightedTechnique?.eliminatedCandidates
                             const isTechniqueEliminated =
                               active &&
                               (eliminatedSource?.some(
                                 (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                               ) ??
                                 false)
-                            const solvedSource = dragonHighlight?.solvedCandidates ?? activeTechnique?.solvedCandidates
+                            const solvedSource = dragonHighlight?.solvedCandidates ?? highlightedTechnique?.solvedCandidates
                             const isTechniqueSolved =
                               active &&
                               (solvedSource?.some(
                                 (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                               ) ??
                                 false)
-                            const blueSource = dragonHighlight?.blueCandidates ?? activeTechnique?.blueCandidates
+                            const blueSource = dragonHighlight?.blueCandidates ?? highlightedTechnique?.blueCandidates
                             const isTechniqueBlue =
                               active &&
                               (blueSource?.some(
                                 (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                               ) ??
                                 false)
-                            const yellowSource = dragonHighlight?.yellowCandidates ?? activeTechnique?.yellowCandidates
+                            const yellowSource = dragonHighlight?.yellowCandidates ?? highlightedTechnique?.yellowCandidates
                             const isTechniqueYellow =
                               active &&
                               (yellowSource?.some(
@@ -2154,7 +2852,7 @@ export default function App() {
       <div className="import-row">
         <textarea
           className="import-input"
-          placeholder="Paste a Sudoku.Coach puzzle string or SudokuWiki.org text board..."
+          placeholder="Paste a 81-char string, or Sudoku.Coach puzzle string, or SudokuWiki.org text format..."
           rows={1}
           value={importText}
           disabled={busy}
@@ -2164,7 +2862,7 @@ export default function App() {
           Import
         </button>
         <button type="button" onClick={onExportToSudokuCoach} disabled={busy} title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard">
-          Export to SC
+          Copy SC puzzle string
         </button>
       </div>
 
@@ -2188,7 +2886,7 @@ export default function App() {
         </span>
         {!ocrBusy && (
           <label className="image-import-browse">
-            browse a file
+            browse for an image
             <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
           </label>
         )}
@@ -2196,13 +2894,14 @@ export default function App() {
 
       <div className="actions">
         <button type="button" className="primary" onClick={onSolve} disabled={busy}>
-          {solving ? 'Solving…' : 'Solve'}
+          {solving ? 'Solving…' : 'Brute force solve'}
         </button>
       </div>
 
       <p className="status" role="status">
         {status} <span className="muted">(grid has {filled}/81 cells filled)</span>
       </p>
+      <p className={['solvability', `solvability-${solvability.kind}`].join(' ')}>{solvabilityText(solvability)}</p>
 
       {toastMessage && (
         <div className="toast" role="status">

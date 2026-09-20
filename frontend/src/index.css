@@ -24,3 +24,8 @@ body {
 #root {
   min-height: 100svh;
 }
+
+.experimental-label {
+  font-size: 0.60em;
+  vertical-align: sub;
+}

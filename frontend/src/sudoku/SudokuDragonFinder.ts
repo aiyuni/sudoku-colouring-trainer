@@ -1,6 +1,12 @@
 import { cloneBoard, cloneCandidates, markedCandidateDigits } from './boardUtils'
 import { SudokuLockedCandidateFinder, type LockedCandidateInstance } from './SudokuLockedCandidateFinder'
-import type { MedusaChain } from './SudokuMedusaFinder'
+import {
+  SudokuMedusaFinder,
+  type ChainColor,
+  type ColoredCandidate,
+  type MedusaChain,
+  type StrongLinkGraph,
+} from './SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder, type NakedSubsetInstance } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder, type NakedPairInstance } from './SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE, SudokuRules } from './SudokuRules'
@@ -26,6 +32,7 @@ export type DragonMoveKind =
   | 'extension-hidden-single'
   | 'extension-rule3'
   | 'promotion'
+  | 'medusa-growth'
   | 'mass-elimination'
   | 'rule3'
   | 'rule4'
@@ -225,6 +232,7 @@ const MAX_RULE3_SIMULATION_STEPS = 200
 export class SudokuDragonFinder {
   private readonly pairFinder = new SudokuPairFinder()
   private readonly lockedCandidateFinder = new SudokuLockedCandidateFinder()
+  private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
 
@@ -258,6 +266,15 @@ export class SudokuDragonFinder {
       },
     ]
 
+    // Lazily built on the first promotion, then reused for every later one
+    // in this same call - board/candidates never change within one extend()
+    // call, so the strong-link graph over them doesn't either, and building
+    // it is far too costly (an O(board) scan) to redo per promotion. Most
+    // extend() calls promote zero or one time, but a long chain can promote
+    // repeatedly, and this call is itself made many times over during
+    // puzzle generation's grind, so avoiding the redundant rebuild matters.
+    let strongLinkGraph: StrongLinkGraph | null = null
+
     let counter = 0
     // Whose turn it is to extend next - alternated after every extension
     // move, so the chain grows both sides evenly instead of exhausting
@@ -276,6 +293,43 @@ export class SudokuDragonFinder {
         return { moves }
       }
 
+      // Promotion is checked - and taken - before any extension attempt,
+      // on every iteration: once two opposite-side colours are proven, that
+      // proof doesn't get any more or less true by waiting, and a
+      // proactive promotion can itself unlock strong-link growth (see
+      // below) or a mass elimination the caller would otherwise have to
+      // wait an extra round-trip through this loop to reach. It isn't an
+      // extension of either side - it's what resolves the two sides
+      // against each other - so it doesn't participate in the turn
+      // alternation below.
+      const promotionMove = this.findPromotionMove(nodeMap)
+      if (promotionMove) {
+        for (const n of promotionMove.colored) {
+          nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+        }
+        promotionMove.id = `promotion-${counter++}`
+        moves.push(promotionMove)
+
+        // A newly-promoted candidate is now genuinely known true, not just
+        // "true if this side is true" - so it can have its own strong
+        // links (conjugate pairs, bivalue cells) that were never part of
+        // the original Medusa chain (Dragon's extension rules don't follow
+        // strong links, only colour visibility), reaching cells the
+        // original chain never touched. Surfaced as its own step, exactly
+        // like the initial "Colour the Medusa chain" move, before
+        // anything else is attempted.
+        strongLinkGraph ??= this.medusaFinder.buildStrongLinkGraph(board, candidates)
+        const growthMove = this.findMedusaGrowthMove(nodeMap, strongLinkGraph, promotionMove.colored)
+        if (growthMove) {
+          for (const n of growthMove.colored) {
+            nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+          }
+          growthMove.id = `medusa-growth-${counter++}`
+          moves.push(growthMove)
+        }
+        continue
+      }
+
       let move =
         this.findExtensionRule1Move(nodeMap, board, candidates, turnPrimary) ??
         this.findExtensionRule2Move(nodeMap, board, candidates, turnPrimary) ??
@@ -290,10 +344,6 @@ export class SudokuDragonFinder {
           this.findExtensionHiddenSingleMove(nodeMap, board, candidates, extendedPrimary) ??
           (options.dynamic ? this.findExtensionRule3Move(nodeMap, board, candidates, extendedPrimary) : null)
       }
-      // Promotion isn't an extension of either side - it's what resolves
-      // the two sides against each other - so it doesn't participate in
-      // the alternation and never changes whose turn is next.
-      move ??= this.findPromotionMove(nodeMap)
       if (!move) {
         // Nothing actionable came out of the extension - not worth surfacing.
         return null
@@ -311,6 +361,54 @@ export class SudokuDragonFinder {
       ) {
         turnPrimary = oppositePrimary(extendedPrimary)
       }
+    }
+  }
+
+  /** After a promotion, checks whether either newly-primary candidate has
+   * strong links (conjugate pairs, bivalue cells) reaching cells the
+   * original Medusa chain never coloured - see growChainFrom. Returns null
+   * if nothing new turns up, so a promotion that doesn't unlock further
+   * strong-link colouring doesn't add an empty, pointless step. */
+  private findMedusaGrowthMove(
+    nodeMap: Map<string, DragonNode>,
+    graph: StrongLinkGraph,
+    promoted: DragonNode[],
+  ): DragonMove | null {
+    const known = new Set(Array.from(nodeMap.keys()))
+    const added: ColoredCandidate[] = []
+    let hasBivalueCellLink = false
+
+    for (const node of promoted) {
+      const startColor = node.color as ChainColor
+      const result = this.medusaFinder.growChainFromGraph(graph, node, startColor, known)
+      for (const candidate of result.added) {
+        const key = nodeKey(candidate.row, candidate.col, candidate.digit)
+        if (known.has(key)) {
+          // Already reached from the other promoted node this same turn.
+          continue
+        }
+        known.add(key)
+        added.push(candidate)
+      }
+      hasBivalueCellLink ||= result.hasBivalueCellLink
+    }
+
+    if (added.length === 0) {
+      return null
+    }
+
+    const blueCount = added.filter((n) => n.color === 'blue').length
+    const yellowCount = added.filter((n) => n.color === 'yellow').length
+    const parts = []
+    if (blueCount > 0) parts.push(`${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue`)
+    if (yellowCount > 0) parts.push(`${yellowCount} yellow`)
+    return {
+      id: '',
+      kind: 'medusa-growth',
+      description: `Promoting reaches further Medusa candidates via strong links: ${parts.join(', ')}.`,
+      colored: added,
+      eliminated: [],
+      solved: [],
     }
   }
 
@@ -1020,11 +1118,7 @@ export class SudokuDragonFinder {
         if (!sameUnit([a.row, a.col], [b.row, b.col])) {
           continue
         }
-        return this.buildPromotionMove(
-          a,
-          b,
-          `${cellRef(a.row, a.col)} (${colorLabel(a.color)}) and ${cellRef(b.row, b.col)} (${colorLabel(b.color)}) both hold ${a.digit} and see each other - opposite colours seeing each other promote to their medusa colours.`,
-        )
+        return this.buildPromotionMove(a, b)
       }
     }
 
@@ -1043,11 +1137,7 @@ export class SudokuDragonFinder {
           if (sideOf(a.color) === sideOf(b.color) || (isPrimary(a.color) && isPrimary(b.color))) {
             continue
           }
-          return this.buildPromotionMove(
-            a,
-            b,
-            `${cellRef(a.row, a.col)} holds both ${a.digit} (${colorLabel(a.color)}) and ${b.digit} (${colorLabel(b.color)}) - opposite colours in the same cell promote to their medusa colours.`,
-          )
+          return this.buildPromotionMove(a, b)
         }
       }
     }
@@ -1055,7 +1145,7 @@ export class SudokuDragonFinder {
     return null
   }
 
-  private buildPromotionMove(a: DragonNode, b: DragonNode, description: string): DragonMove {
+  private buildPromotionMove(a: DragonNode, b: DragonNode): DragonMove {
     const colored: DragonNode[] = []
     if (!isPrimary(a.color)) {
       colored.push({ ...a, color: primaryForSide(sideOf(a.color)) })
@@ -1063,6 +1153,7 @@ export class SudokuDragonFinder {
     if (!isPrimary(b.color)) {
       colored.push({ ...b, color: primaryForSide(sideOf(b.color)) })
     }
+    const description = `${a.digit}${cellRef(a.row, a.col)} and ${b.digit}${cellRef(b.row, b.col)} are coloured in ${colorLabel(a.color)} and ${colorLabel(b.color)}. Promote both colours to their primary Medusa colour.`
     return { id: '', kind: 'promotion', description, colored, eliminated: [], solved: [] }
   }
 

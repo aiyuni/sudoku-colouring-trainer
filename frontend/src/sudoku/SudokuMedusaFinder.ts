@@ -98,8 +98,21 @@ function opposite(color: ChainColor): ChainColor {
  * different digits into a single chain, which is what lets Medusa's rules
  * reach conclusions Simple Coloring's single-digit chains can't.
  */
+export interface StrongLinkGraph {
+  adjacency: Map<string, string[]>
+  nodeByKey: Map<string, { row: number; col: number; digit: number }>
+  bivalueEdgeKeys: Set<string>
+}
+
 export class SudokuMedusaFinder {
-  findChains(board: Board, candidates: CandidateGrid): MedusaChain[] {
+  /** Builds the strong-link graph shared by findChains and growChainFrom:
+   * one node per (cell, digit) candidate, with a bilocal edge for every
+   * digit conjugate pair and a bivalue edge for every two-candidate cell.
+   * Public so a caller making several growChainFromGraph calls against the
+   * same board/candidates (e.g. one per promotion within a single Dragon
+   * Colouring extension) can build it once and reuse it, rather than
+   * paying this O(board) cost again for every single call. */
+  buildStrongLinkGraph(board: Board, candidates: CandidateGrid): StrongLinkGraph {
     const adjacency = new Map<string, string[]>()
     const nodeByKey = new Map<string, { row: number; col: number; digit: number }>()
     const edgeKeys = new Set<string>()
@@ -167,6 +180,82 @@ export class SudokuMedusaFinder {
         }
       }
     }
+
+    return { adjacency, nodeByKey, bivalueEdgeKeys }
+  }
+
+  /** Convenience one-shot form of growChainFromGraph for a single call -
+   * builds the graph itself, at the cost of rebuilding it from scratch
+   * every time. A caller making more than one call against the same
+   * board/candidates (see buildStrongLinkGraph) should build the graph
+   * once and use growChainFromGraph directly instead. */
+  growChainFrom(
+    board: Board,
+    candidates: CandidateGrid,
+    start: { row: number; col: number; digit: number },
+    startColor: ChainColor,
+    known: ReadonlySet<string>,
+  ): { added: ColoredCandidate[]; hasBivalueCellLink: boolean } {
+    return this.growChainFromGraph(this.buildStrongLinkGraph(board, candidates), start, startColor, known)
+  }
+
+  /** Re-runs the same strong-link propagation findChains uses, but seeded
+   * from one already-known-true candidate (e.g. one Dragon Colouring just
+   * promoted to its primary Medusa colour) instead of picking an arbitrary
+   * starting point - so a promotion can discover genuinely new Medusa
+   * candidates it just made reachable, without re-deriving every chain on
+   * the board from scratch. `known` is the set of "row,col,digit" keys
+   * already accounted for (already coloured, by any means) - traversal
+   * stops at an already-known node rather than trying to recolour it, so a
+   * node whose Dragon-derived colour happens to disagree with what strong-
+   * link propagation would assign here is left alone rather than
+   * overridden or flagged; that disagreement would only matter for a
+   * contradiction this method isn't responsible for finding. */
+  growChainFromGraph(
+    graph: StrongLinkGraph,
+    start: { row: number; col: number; digit: number },
+    startColor: ChainColor,
+    known: ReadonlySet<string>,
+  ): { added: ColoredCandidate[]; hasBivalueCellLink: boolean } {
+    const { adjacency, nodeByKey, bivalueEdgeKeys } = graph
+    const startKey = candidateKey(start.row, start.col, start.digit)
+    const added: ColoredCandidate[] = []
+    if (!adjacency.has(startKey)) {
+      return { added, hasBivalueCellLink: false }
+    }
+
+    const colorMap = new Map<string, ChainColor>([[startKey, startColor]])
+    const visited = new Set<string>([startKey])
+    const queue = [startKey]
+    let hasBivalueCellLink = false
+
+    while (queue.length > 0) {
+      const currentKey = queue.shift()!
+      const currentColor = colorMap.get(currentKey)!
+      const nextColor = opposite(currentColor)
+
+      for (const neighborKey of adjacency.get(currentKey) ?? []) {
+        const edgeKey = currentKey < neighborKey ? `${currentKey}|${neighborKey}` : `${neighborKey}|${currentKey}`
+        if (bivalueEdgeKeys.has(edgeKey)) {
+          hasBivalueCellLink = true
+        }
+        if (visited.has(neighborKey)) {
+          continue
+        }
+        visited.add(neighborKey)
+        colorMap.set(neighborKey, nextColor)
+        queue.push(neighborKey)
+        if (!known.has(neighborKey)) {
+          added.push({ ...nodeByKey.get(neighborKey)!, color: nextColor })
+        }
+      }
+    }
+
+    return { added, hasBivalueCellLink }
+  }
+
+  findChains(board: Board, candidates: CandidateGrid): MedusaChain[] {
+    const { adjacency, nodeByKey, bivalueEdgeKeys } = this.buildStrongLinkGraph(board, candidates)
 
     const visited = new Set<string>()
     const chains: MedusaChain[] = []

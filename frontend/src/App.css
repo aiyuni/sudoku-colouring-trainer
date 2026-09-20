@@ -1,3 +1,66 @@
+/* Grid colour variables, grouped by the four adjustable categories the grid
+   toggle covers. Edit these to retheme the grid; everything else (panels,
+   buttons, technique highlight colours) is unaffected by them on purpose. */
+:root {
+  /* Grid lines: .grid's own background/border draws the thick box dividers,
+     .box's background draws the thin cell dividers. */
+  --grid-line-thick: #1f2937;
+  --grid-line-thin: #c5ccd6;
+
+  /* Grid background: each cell's fill, plus its hover/selected/spotlight
+     tints (spotlight = .digit-highlighted, a background swap over the base
+     fill so it also needs to be legible per-mode). */
+  --grid-bg: #fffef8;
+  --grid-bg-hover: #eef2ff;
+  --grid-bg-selected: #dbeafe;
+  --grid-bg-spotlight: #fde68a;
+  --grid-selected-outline: #2563eb;
+
+  /* Grid numbers: given (clue) digits vs user-entered digits get a slightly
+     different shade in every mode so the two remain visually distinct. */
+  --grid-number-given: #111827;
+  --grid-number-user: #2e415c;
+
+  /* Grid candidates: colour of an un-highlighted pencil mark. Highlighted/
+     technique pip colours are intentionally NOT variables here - they stay
+     fixed across light/dark/white so the same colour always means the same
+     thing (used/eliminated/solved/chain side) no matter the grid theme. */
+  --grid-candidate: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --grid-line-thick: #64748b;
+    --grid-line-thin: #334155;
+    --grid-bg: #16181d;
+    --grid-bg-hover: #1e293b;
+    --grid-bg-selected: #1e3a5f;
+    --grid-bg-spotlight: #4a2f0a;
+    --grid-selected-outline: #60a5fa;
+    --grid-number-given: #f1f5f9;
+    --grid-number-user: #3b8df1;
+    --grid-candidate: #94a3b8;
+  }
+}
+
+/* Explicit "Grid colour: White" toggle - forces the grid back to its light
+   values regardless of system dark mode. Setting these on .grid itself
+   always wins over the inherited :root value (a locally set custom property
+   beats inheritance from an ancestor, independent of media queries), so this
+   works whether or not prefers-color-scheme: dark is active. */
+.grid.grid-white-mode {
+  --grid-line-thick: #1f2937;
+  --grid-line-thin: #c5ccd6;
+  --grid-bg: #fffef8;
+  --grid-bg-hover: #eef2ff;
+  --grid-bg-selected: #dbeafe;
+  --grid-bg-spotlight: #fde68a;
+  --grid-selected-outline: #2563eb;
+  --grid-number-given: #111827;
+  --grid-number-user: #155ab9;
+  --grid-candidate: #6b7280;
+}
+
 .page {
   max-width: 76rem;
   margin: 0 auto;
@@ -71,6 +134,18 @@
   color: #fff;
 }
 
+.grid-white-mode-toggle {
+  border-color: #e2e8f0;
+  color: #475569;
+  background: #f8fafc;
+}
+
+.grid-white-mode-toggle.active {
+  background: #facc15;
+  border-color: #eab308;
+  color: #422006;
+}
+
 .board-area {
   display: flex;
   flex-wrap: wrap;
@@ -91,8 +166,8 @@
   width: min(100%, 32rem);
   aspect-ratio: 1;
   flex: 0 1 32rem;
-  background: #1f2937;
-  border: 3px solid #1f2937;
+  background: var(--grid-line-thick);
+  border: 3px solid var(--grid-line-thick);
   border-radius: 0.75rem;
   overflow: hidden;
   box-shadow: 0 12px 30px -14px rgb(15 23 42 / 0.45);
@@ -110,14 +185,14 @@
 }
 
 .strong-link-line {
-  stroke: #dc2626;
+  stroke: #ef4444;
   stroke-width: 4;
   stroke-linecap: round;
   opacity: 0.85;
 }
 
 .grid:focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid var(--grid-selected-outline);
   outline-offset: 2px;
 }
 
@@ -126,7 +201,7 @@
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: repeat(3, 1fr);
   gap: 1px;
-  background: #c5ccd6;
+  background: var(--grid-line-thin);
 }
 
 .cell {
@@ -138,26 +213,26 @@
   border-radius: 0;
   margin: 0;
   padding: 0;
-  font: 700 1.5rem/1 'Segoe UI', system-ui, sans-serif;
-  background: #fffef8;
-  color: #111827;
+  font: 700 1.9rem/1 'Segoe UI', system-ui, sans-serif;
+  background: var(--grid-bg);
+  color: var(--grid-number-user);
   cursor: pointer;
   transition: background-color 120ms ease;
 }
 
 .cell.given {
-  color: #111827;
-  font-weight: 800;
+  color: var(--grid-number-given);
+  font-weight: 700;
   cursor: default;
 }
 
 .cell.filled:not(.given) {
-  color: #334155;
+  color: var(--grid-number-user);
 }
 
 .cell.selected {
-  background: #dbeafe;
-  outline: 3px solid #2563eb;
+  background: var(--grid-bg-selected);
+  outline: 3px solid var(--grid-selected-outline);
   outline-offset: -3px;
   z-index: 1;
 }
@@ -165,7 +240,7 @@
 /* Comes after .selected so a cell that is both selected and spotlighted
    still shows the spotlight tint, with the selection ring on top of it. */
 .cell.digit-highlighted {
-  background: #fde68a;
+  background: var(--grid-bg-spotlight);
 }
 
 /* A bivalue cell (exactly two candidates) - highlighted on request, since
@@ -173,13 +248,13 @@
    inset box-shadow rather than background/outline so it layers cleanly
    under .selected's outline and independently of .digit-highlighted. */
 .cell.bivalue-highlighted {
-  box-shadow: inset 0 0 0 3px #0d9488;
+  box-shadow: inset 0 0 0 3px #2dd4bf;
 }
 
 /* A cell the currently-inspected technique (left panel) uses as its basis.
    Comes after .selected/.digit-highlighted so its ring always shows. */
 .cell.technique-used {
-  outline: 3px solid #ca8a04;
+  outline: 3px solid #eab308;
   outline-offset: -3px;
   z-index: 2;
 }
@@ -191,11 +266,22 @@
    player steps through. Inset box-shadow, like .bivalue-highlighted, so it
    layers independently of .selected's outline. */
 .cell.dragon-technique-cell {
-  box-shadow: inset 0 0 0 3px #16a34a;
+  box-shadow: inset 0 0 0 3px #4ade80;
+}
+
+/* 3D Medusa only: the cell holding the elimination or same-cell/same-unit
+   colour contradiction the inspected instance rests on. A yellow border,
+   kept visually distinct from .technique-used's gold outline and from the
+   red technique-eliminated pip so "why this candidate is gone" (pip) and
+   "which cell that conclusion lives in" (this border) read separately. */
+.cell.medusa-highlight-cell {
+  outline: 3px solid #facc15;
+  outline-offset: -3px;
+  z-index: 3;
 }
 
 .cell:hover:not(.given) {
-  background: #eef2ff;
+  background: var(--grid-bg-hover);
 }
 
 /* Pencil marks: a 3x3 grid inside the cell, 1-3 top row, 4-6 middle,
@@ -213,7 +299,7 @@
   align-items: center;
   justify-content: center;
   font: 700 0.85rem/1 'Segoe UI', system-ui, sans-serif;
-  color: #6b7280;
+  color: var(--grid-candidate);
 }
 
 .candidate.highlighted {
@@ -234,8 +320,8 @@
 }
 
 .candidate.technique-eliminated {
-  color: #7f1d1d;
-  background: #fca5a5;
+  color: #220202;
+  background: #f80909;
   border-radius: 999px;
   margin: 1px;
   text-decoration: line-through;
@@ -251,15 +337,17 @@
 
 /* Simple Coloring's two chain colors (light blue / light yellow). */
 .candidate.technique-blue {
-  color: #075985;
-  background: #bae6fd;
+  color: #011018;
+  /*background: #bae6fd;*/
+  background: #38BDF8;
   border-radius: 999px;
   margin: 1px;
 }
 
 .candidate.technique-yellow {
-  color: #713f12;
-  background: #fef08a;
+  color: #361b03;
+  /*background: #fef08a; */
+  background: #FDE047;
   border-radius: 999px;
   margin: 1px;
 }
@@ -275,7 +363,7 @@
 }
 
 .candidate.technique-orange {
-  color: #7c2d12;
+  color: #411405;
   background: #fb923c;
   border-radius: 999px;
   margin: 1px;
@@ -357,8 +445,28 @@
   margin-bottom: 0.3rem;
 }
 
-.technique-panel-header .control-label {
-  margin-bottom: 0;
+.technique-tabs {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.technique-tab {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.7rem 0.3rem;
+  border: 1px solid #cbd5e1;
+  border-bottom: none;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.technique-tab.active {
+  background: #fff;
+  color: #0f172a;
+  border-color: #94a3b8;
 }
 
 .technique-apply-button {
@@ -371,6 +479,45 @@
   margin: 0;
   font-size: 0.8rem;
   color: #64748b;
+}
+
+.solve-path-submenu {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.solve-path-generate-button,
+.solve-path-log-toggle {
+  font-size: 0.7rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.4rem;
+}
+
+.solve-path-log-toggle.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+.solve-path-log {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.6rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  background: #0f172a;
+  color: #d1d5db;
+  border-radius: 0.4rem;
+  font-size: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.4;
+}
+
+.solve-path-stale-warning {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #b45309;
 }
 
 .technique-list {
@@ -640,6 +787,24 @@ button.primary {
   color: #334155;
 }
 
+.solvability {
+  margin: 0.3rem 0 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.solvability-solvable {
+  color: #15803d;
+}
+
+.solvability-solvable-brute-force {
+  color: #b45309;
+}
+
+.solvability-unsolvable {
+  color: #b91c1c;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -677,6 +842,18 @@ button.primary {
     color: #cbd5e1;
   }
 
+  .solvability-solvable {
+    color: #4ade80;
+  }
+
+  .solvability-solvable-brute-force {
+    color: #fbbf24;
+  }
+
+  .solvability-unsolvable {
+    color: #f87171;
+  }
+
   .muted {
     color: #94a3b8;
   }
@@ -686,79 +863,7 @@ button.primary {
   }
 
   .grid {
-    background: #64748b;
-    border-color: #64748b;
     box-shadow: 0 12px 30px -14px rgb(0 0 0 / 0.6);
-  }
-
-  .grid:focus-visible {
-    outline-color: #60a5fa;
-  }
-
-  .box {
-    background: #334155;
-  }
-
-  .cell {
-    background: #16181d;
-    color: #e2e8f0;
-  }
-
-  .cell.given {
-    color: #f1f5f9;
-  }
-
-  .cell.selected {
-    background: #1e3a5f;
-    outline-color: #60a5fa;
-  }
-
-  .cell.digit-highlighted {
-    background: #4a2f0a;
-  }
-
-  .cell.bivalue-highlighted {
-    box-shadow: inset 0 0 0 3px #2dd4bf;
-  }
-
-  .cell.technique-used {
-    outline-color: #eab308;
-  }
-
-  .cell.dragon-technique-cell {
-    box-shadow: inset 0 0 0 3px #4ade80;
-  }
-
-  .cell.filled:not(.given) {
-    color: #cbd5e1;
-  }
-
-  .cell:hover:not(.given) {
-    background: #1e293b;
-  }
-
-  .candidate {
-    color: #94a3b8;
-  }
-
-  .candidate.highlighted {
-    color: #1f2937;
-    background: #f59e0b;
-  }
-
-  .candidate.technique-used {
-    color: #1f2937;
-    background: #eab308;
-  }
-
-  .candidate.technique-eliminated {
-    color: #1f2937;
-    background: #ef4444;
-  }
-
-  .candidate.technique-solved {
-    color: #052e16;
-    background: #4ade80;
   }
 
   .control-group,
@@ -771,9 +876,25 @@ button.primary {
     color: #94a3b8;
   }
 
+  .solve-path-stale-warning {
+    color: #fbbf24;
+  }
+
   .technique-item.active {
     background: #3f3405;
     border-color: #eab308;
+  }
+
+  .technique-tab {
+    background: #0f172a;
+    color: #94a3b8;
+    border-color: #334155;
+  }
+
+  .technique-tab.active {
+    background: #1e293b;
+    color: #e2e8f0;
+    border-color: #64748b;
   }
 
   .dragon-player {
@@ -830,10 +951,6 @@ button.primary {
     color: #fff;
   }
 
-  .strong-link-line {
-    stroke: #f87171;
-  }
-
   .bivalue-toggle {
     border-color: #115e59;
     color: #5eead4;
@@ -846,24 +963,10 @@ button.primary {
     color: #fff;
   }
 
-  .candidate.technique-blue {
-    color: #082f49;
-    background: #38bdf8;
-  }
-
-  .candidate.technique-yellow {
-    color: #422006;
-    background: #fde047;
-  }
-
-  .candidate.technique-darkblue {
-    color: #eff6ff;
-    background: #2563eb;
-  }
-
-  .candidate.technique-orange {
-    color: #431407;
-    background: #fb923c;
+  .grid-white-mode-toggle {
+    border-color: #334155;
+    color: #cbd5e1;
+    background: #1a2434;
   }
 
   .candidate.candidate-painted {

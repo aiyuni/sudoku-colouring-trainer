@@ -20,8 +20,9 @@ interface SudokuCoachState {
 
 /**
  * Parses puzzle strings from the sources people paste in:
- *  - Sudoku.Coach's plain 81-character givens string (row-major, '0' empty,
- *    '1'-'9' a given digit)
+ *  - A plain 81-character givens string (row-major, '0' or '.' empty,
+ *    '1'-'9' a given digit) - the format Sudoku.Coach and most other sites
+ *    use for a bare puzzle string
  *  - Sudoku.Coach's full "SCv7_32_<payload>" state string, which is
  *    base32(deflate(json)) of a state object also carrying the user's
  *    entered digits and pencil marks (each candidate digit d is bit d,
@@ -51,11 +52,14 @@ export class PuzzleImporter {
         error: `Expected an 81-character puzzle string, got ${digits.length}.`,
       }
     }
-    if (!/^[0-9]{81}$/.test(digits)) {
-      return { ok: false, error: 'The puzzle string must contain only digits 0-9.' }
+    if (!/^[0-9.]{81}$/.test(digits)) {
+      return { ok: false, error: 'The puzzle string must contain only digits 0-9 or "." for empty cells.' }
     }
 
-    return this.buildResultFromDigitStrings(digits, '0'.repeat(CELL_COUNT), '')
+    // '.' is the other common stand-in for an empty cell (alongside '0');
+    // normalize it before splitting into given digits.
+    const normalized = digits.replace(/\./g, '0')
+    return this.buildResultFromDigitStrings(normalized, '0'.repeat(CELL_COUNT), '')
   }
 
   private async importSudokuCoachState(raw: string): Promise<ImportResult> {
