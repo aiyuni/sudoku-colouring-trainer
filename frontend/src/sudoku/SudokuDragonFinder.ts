@@ -1,4 +1,5 @@
 import { cloneBoard, cloneCandidates, markedCandidateDigits } from './boardUtils'
+import { SudokuHiddenPairFinder, type HiddenPairInstance } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder, type LockedCandidateInstance } from './SudokuLockedCandidateFinder'
 import {
   SudokuMedusaFinder,
@@ -10,6 +11,7 @@ import {
 import { SudokuNakedSubsetFinder, type NakedSubsetInstance } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder, type NakedPairInstance } from './SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE, SudokuRules } from './SudokuRules'
+import { classifyShortAic, SudokuShortAicFinder, type ShortAicInstance } from './SudokuShortAicFinder'
 import { sudokuUnits } from './SudokuUnits'
 import { SudokuUniqueRectangleFinder, type UniqueRectangleType1Instance } from './SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './types'
@@ -45,6 +47,16 @@ export type DragonMoveKind =
  * already directly visible from the colouring alone. */
 export interface DragonExtendOptions {
   dynamic?: boolean
+  /** Which non-colouring techniques Extension Rule 3's simulation may lean
+   * on - defaults to DEFAULT_RULE3_TECHNIQUES (every technique except the
+   * two AIC kinds, which are opt-in for Dynamic Dragon Colouring). 'naked
+   * pair' is always allowed regardless of what's passed here, since the
+   * settings UI never lets it be excluded. */
+  allowedRule3Techniques?: ReadonlySet<Rule3Technique>
+  /** At most one of a combined move's chained technique applications may
+   * be an AIC (either kind) - defaults to true. False allows as many as
+   * the chain needs. */
+  aicLimitPerStep?: boolean
 }
 
 export interface DragonCandidateRef {
@@ -89,6 +101,19 @@ export interface DragonMove {
    * `dynamicTechniques` (a naked pair's two cells, a Unique Rectangle's
    * four, etc.), for highlighting them while this step is on screen. */
   dynamicTechniqueCells?: readonly (readonly [number, number])[]
+  /** extension-rule3 only: one entry per AIC (either kind) this move's
+   * chain leaned on - its own candidates/links, for the same purple/
+   * curved-line rendering the standalone Short AIC technique gets, plus
+   * which candidate(s) the AIC itself eliminated as its own internal
+   * deduction. That internal elimination isn't a real board elimination
+   * this move claims (it's consumed within the chain's own reasoning), so
+   * it's rendered as a hollow circle + faint cross rather than the usual
+   * red elimination pip - see App.tsx's technique-aic-hypothetical class. */
+  aicChains?: Array<{
+    candidates: DragonCandidateRef[]
+    links: Array<{ from: DragonCandidateRef; to: DragonCandidateRef; kind: 'strong' | 'weak' }>
+    hypotheticalEliminations: DragonCandidateRef[]
+  }>
 }
 
 export interface DragonResult {
@@ -167,7 +192,41 @@ function uniqueCells(eliminations: { row: number; col: number }[]): readonly (re
  * final technique, never a chainable antecedent - see
  * findNewlyHiddenSingleCell), but is included here so it shares one type
  * with the final-technique parameter and DragonMove.dynamicTechniques. */
-type Rule3Technique = 'hidden single' | 'locked candidate' | 'naked pair' | 'naked triple' | 'naked quad' | 'UR'
+export type Rule3Technique =
+  | 'hidden single'
+  | 'locked candidate'
+  | 'naked pair'
+  | 'naked triple'
+  | 'naked quad'
+  | 'hidden pair'
+  | 'UR'
+  | 'short single-digit aic'
+  | 'short aic'
+
+/** Every Rule3Technique, in the order the settings checkboxes and
+ * findExtensionRule3Move's own simulation loop present them. 'naked pair'
+ * can never be excluded (see extend()'s allowedTechniques) - it's included
+ * here anyway so this stays the single source of truth for "every
+ * technique that exists". */
+export const ALL_RULE3_TECHNIQUES: readonly Rule3Technique[] = [
+  'hidden single',
+  'locked candidate',
+  'naked pair',
+  'naked triple',
+  'naked quad',
+  'hidden pair',
+  'UR',
+  'short single-digit aic',
+  'short aic',
+]
+
+/** ALL_RULE3_TECHNIQUES minus both AIC kinds - the default allowed set for
+ * both extend()'s own fallback and the app's initial settings state, since
+ * either AIC is opt-in for Dynamic Dragon Colouring even though both are on
+ * by default for the standalone solver. */
+export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TECHNIQUES.filter(
+  (t) => t !== 'short aic' && t !== 'short single-digit aic',
+)
 
 interface Rule3ChainStep {
   technique: Rule3Technique
@@ -176,6 +235,11 @@ interface Rule3ChainStep {
   /** The "we have a ..." fragment for this step, used only when it turns
    * out to be a dependency of the final technique. */
   antecedentClause: string
+  /** Present only when `technique` is an AIC (either kind) - carried
+   * through to the resulting DragonMove's `aicChains` so the step can be
+   * drawn with the same purple/curved-line chain visualization the
+   * standalone technique gets. */
+  aic?: ShortAicInstance
 }
 
 /** Which kind of unit a set of cells belongs to - used to say "row",
@@ -234,6 +298,8 @@ export class SudokuDragonFinder {
   private readonly lockedCandidateFinder = new SudokuLockedCandidateFinder()
   private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
+  private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
+  private readonly shortAicFinder = new SudokuShortAicFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
 
   extend(
@@ -274,6 +340,13 @@ export class SudokuDragonFinder {
     // repeatedly, and this call is itself made many times over during
     // puzzle generation's grind, so avoiding the redundant rebuild matters.
     let strongLinkGraph: StrongLinkGraph | null = null
+
+    // 'naked pair' is enforced as always-on here rather than trusted from
+    // the caller, since it's the one technique the settings UI itself never
+    // lets the user exclude.
+    const allowedRule3Techniques = new Set(options.allowedRule3Techniques ?? DEFAULT_RULE3_TECHNIQUES)
+    allowedRule3Techniques.add('naked pair')
+    const aicLimitPerStep = options.aicLimitPerStep ?? true
 
     let counter = 0
     // Whose turn it is to extend next - alternated after every extension
@@ -334,7 +407,9 @@ export class SudokuDragonFinder {
         this.findExtensionRule1Move(nodeMap, board, candidates, turnPrimary) ??
         this.findExtensionRule2Move(nodeMap, board, candidates, turnPrimary) ??
         this.findExtensionHiddenSingleMove(nodeMap, board, candidates, turnPrimary) ??
-        (options.dynamic ? this.findExtensionRule3Move(nodeMap, board, candidates, turnPrimary) : null)
+        (options.dynamic
+          ? this.findExtensionRule3Move(nodeMap, board, candidates, turnPrimary, allowedRule3Techniques, aicLimitPerStep)
+          : null)
       let extendedPrimary = turnPrimary
       if (!move) {
         extendedPrimary = oppositePrimary(turnPrimary)
@@ -342,7 +417,16 @@ export class SudokuDragonFinder {
           this.findExtensionRule1Move(nodeMap, board, candidates, extendedPrimary) ??
           this.findExtensionRule2Move(nodeMap, board, candidates, extendedPrimary) ??
           this.findExtensionHiddenSingleMove(nodeMap, board, candidates, extendedPrimary) ??
-          (options.dynamic ? this.findExtensionRule3Move(nodeMap, board, candidates, extendedPrimary) : null)
+          (options.dynamic
+            ? this.findExtensionRule3Move(
+                nodeMap,
+                board,
+                candidates,
+                extendedPrimary,
+                allowedRule3Techniques,
+                aicLimitPerStep,
+              )
+            : null)
       }
       if (!move) {
         // Nothing actionable came out of the extension - not worth surfacing.
@@ -648,6 +732,8 @@ export class SudokuDragonFinder {
     board: Board,
     candidates: CandidateGrid,
     primary: PrimaryColor,
+    allowedTechniques: ReadonlySet<Rule3Technique>,
+    aicLimitPerStep: boolean,
   ): DragonMove | null {
     const side = sideOfPrimary(primary)
     const secondary = secondaryForSide(side)
@@ -658,54 +744,65 @@ export class SudokuDragonFinder {
     const { hypBoard, hypCandidates } = hypothetical
 
     const steps: Rule3ChainStep[] = []
+    // Counts every AIC application actually tried during this simulation
+    // (antecedent or final), not just the ones that end up relevant to the
+    // final conclusion - simpler to reason about, and "used" is a fair
+    // reading of "used once within a step" either way.
+    let aicStepsUsed = 0
 
     for (let step = 0; step < MAX_RULE3_SIMULATION_STEPS; step++) {
       let appliedSomething = false
 
-      const hiddenSingle = this.findNewlyHiddenSingleCell(hypBoard, hypCandidates, nodeMap)
-      if (hiddenSingle) {
-        const finalClause = this.hiddenSingleFinalClause(secondary, hiddenSingle)
-        return this.buildRule3CombinedMove(
-          primary,
-          steps,
-          'hidden single',
-          [[hiddenSingle.row, hiddenSingle.col]],
-          finalClause,
-          { row: hiddenSingle.row, col: hiddenSingle.col, digit: hiddenSingle.digit, color: secondary },
-          hiddenSingle.unit,
-        )
+      if (allowedTechniques.has('hidden single')) {
+        const hiddenSingle = this.findNewlyHiddenSingleCell(hypBoard, hypCandidates, nodeMap)
+        if (hiddenSingle) {
+          const finalClause = this.hiddenSingleFinalClause(secondary, hiddenSingle)
+          return this.buildRule3CombinedMove(
+            primary,
+            steps,
+            'hidden single',
+            [[hiddenSingle.row, hiddenSingle.col]],
+            finalClause,
+            { row: hiddenSingle.row, col: hiddenSingle.col, digit: hiddenSingle.digit, color: secondary },
+            hiddenSingle.unit,
+          )
+        }
       }
 
-      for (const locked of this.lockedCandidateFinder.findInstances(hypBoard, hypCandidates)) {
-        if (locked.eliminations.length === 0) {
-          continue
-        }
-        for (const { row, col, digit } of locked.eliminations) {
-          hypCandidates[row][col][digit - 1] = false
-        }
-        const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-        if (forced) {
-          const finalClause = this.lockedCandidateFinalClause(secondary, locked, forced)
-          return this.buildRule3CombinedMove(primary, steps, 'locked candidate', locked.basisCells, finalClause, {
-            row: forced.row,
-            col: forced.col,
-            digit: forced.digit,
-            color: secondary,
+      if (allowedTechniques.has('locked candidate')) {
+        for (const locked of this.lockedCandidateFinder.findInstances(hypBoard, hypCandidates)) {
+          if (locked.eliminations.length === 0) {
+            continue
+          }
+          for (const { row, col, digit } of locked.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
+          }
+          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
+          if (forced) {
+            const finalClause = this.lockedCandidateFinalClause(secondary, locked, forced)
+            return this.buildRule3CombinedMove(primary, steps, 'locked candidate', locked.basisCells, finalClause, {
+              row: forced.row,
+              col: forced.col,
+              digit: forced.digit,
+              color: secondary,
+            })
+          }
+          steps.push({
+            technique: 'locked candidate',
+            basisCells: locked.basisCells,
+            affectedCells: uniqueCells(locked.eliminations),
+            antecedentClause: this.lockedCandidateAntecedentClause(locked),
           })
+          appliedSomething = true
+          break
         }
-        steps.push({
-          technique: 'locked candidate',
-          basisCells: locked.basisCells,
-          affectedCells: uniqueCells(locked.eliminations),
-          antecedentClause: this.lockedCandidateAntecedentClause(locked),
-        })
-        appliedSomething = true
-        break
       }
       if (appliedSomething) {
         continue
       }
 
+      // No allowedTechniques.has('naked pair') gate here - extend() always
+      // adds 'naked pair' back to the set, so it can never be excluded.
       for (const pair of this.pairFinder.findNakedPairs(hypBoard, hypCandidates)) {
         if (pair.eliminations.length === 0) {
           continue
@@ -736,89 +833,18 @@ export class SudokuDragonFinder {
         continue
       }
 
-      for (const triple of this.nakedSubsetFinder.findNakedTriples(hypBoard, hypCandidates)) {
-        if (triple.eliminations.length === 0) {
-          continue
-        }
-        for (const { row, col, digit } of triple.eliminations) {
-          hypCandidates[row][col][digit - 1] = false
-        }
-        const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-        if (forced) {
-          const finalClause = this.nakedSubsetFinalClause(secondary, triple, forced)
-          return this.buildRule3CombinedMove(primary, steps, 'naked triple', triple.cells, finalClause, {
-            row: forced.row,
-            col: forced.col,
-            digit: forced.digit,
-            color: secondary,
-          })
-        }
-        steps.push({
-          technique: 'naked triple',
-          basisCells: triple.cells,
-          affectedCells: uniqueCells(triple.eliminations),
-          antecedentClause: this.nakedSubsetAntecedentClause(triple),
-        })
-        appliedSomething = true
-        break
-      }
-      if (appliedSomething) {
-        continue
-      }
-
-      for (const quad of this.nakedSubsetFinder.findNakedQuads(hypBoard, hypCandidates)) {
-        if (quad.eliminations.length === 0) {
-          continue
-        }
-        for (const { row, col, digit } of quad.eliminations) {
-          hypCandidates[row][col][digit - 1] = false
-        }
-        const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-        if (forced) {
-          const finalClause = this.nakedSubsetFinalClause(secondary, quad, forced)
-          return this.buildRule3CombinedMove(primary, steps, 'naked quad', quad.cells, finalClause, {
-            row: forced.row,
-            col: forced.col,
-            digit: forced.digit,
-            color: secondary,
-          })
-        }
-        steps.push({
-          technique: 'naked quad',
-          basisCells: quad.cells,
-          affectedCells: uniqueCells(quad.eliminations),
-          antecedentClause: this.nakedSubsetAntecedentClause(quad),
-        })
-        appliedSomething = true
-        break
-      }
-      if (appliedSomething) {
-        continue
-      }
-
-      for (const ur of this.uniqueRectangleFinder.findType1Instances(hypBoard, hypCandidates)) {
-        const [er, ec] = ur.extraCell
-        if (ur.solvedDigit !== null) {
-          // The Unique Rectangle's own conclusion *is* the move - no need
-          // to also check for a newly-single-candidate cell, and no
-          // reason to keep simulating past it first.
-          const digit = ur.solvedDigit
-          const finalClause = this.uniqueRectangleSolveFinalClause(secondary, ur)
-          return this.buildRule3CombinedMove(primary, steps, 'UR', ur.cells, finalClause, {
-            row: er,
-            col: ec,
-            digit,
-            color: secondary,
-          })
-        }
-        if (ur.eliminatedDigits.length > 0) {
-          for (const digit of ur.eliminatedDigits) {
-            hypCandidates[er][ec][digit - 1] = false
+      if (allowedTechniques.has('naked triple')) {
+        for (const triple of this.nakedSubsetFinder.findNakedTriples(hypBoard, hypCandidates)) {
+          if (triple.eliminations.length === 0) {
+            continue
+          }
+          for (const { row, col, digit } of triple.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
           }
           const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
           if (forced) {
-            const finalClause = this.uniqueRectangleEliminationFinalClause(secondary, ur, forced)
-            return this.buildRule3CombinedMove(primary, steps, 'UR', ur.cells, finalClause, {
+            const finalClause = this.nakedSubsetFinalClause(secondary, triple, forced)
+            return this.buildRule3CombinedMove(primary, steps, 'naked triple', triple.cells, finalClause, {
               row: forced.row,
               col: forced.col,
               digit: forced.digit,
@@ -826,10 +852,163 @@ export class SudokuDragonFinder {
             })
           }
           steps.push({
-            technique: 'UR',
-            basisCells: ur.cells,
-            affectedCells: [ur.extraCell],
-            antecedentClause: this.uniqueRectangleAntecedentClause(ur),
+            technique: 'naked triple',
+            basisCells: triple.cells,
+            affectedCells: uniqueCells(triple.eliminations),
+            antecedentClause: this.nakedSubsetAntecedentClause(triple),
+          })
+          appliedSomething = true
+          break
+        }
+      }
+      if (appliedSomething) {
+        continue
+      }
+
+      if (allowedTechniques.has('naked quad')) {
+        for (const quad of this.nakedSubsetFinder.findNakedQuads(hypBoard, hypCandidates)) {
+          if (quad.eliminations.length === 0) {
+            continue
+          }
+          for (const { row, col, digit } of quad.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
+          }
+          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
+          if (forced) {
+            const finalClause = this.nakedSubsetFinalClause(secondary, quad, forced)
+            return this.buildRule3CombinedMove(primary, steps, 'naked quad', quad.cells, finalClause, {
+              row: forced.row,
+              col: forced.col,
+              digit: forced.digit,
+              color: secondary,
+            })
+          }
+          steps.push({
+            technique: 'naked quad',
+            basisCells: quad.cells,
+            affectedCells: uniqueCells(quad.eliminations),
+            antecedentClause: this.nakedSubsetAntecedentClause(quad),
+          })
+          appliedSomething = true
+          break
+        }
+      }
+      if (appliedSomething) {
+        continue
+      }
+
+      if (allowedTechniques.has('hidden pair')) {
+        for (const pair of this.hiddenPairFinder.findHiddenPairs(hypBoard, hypCandidates)) {
+          if (pair.eliminations.length === 0) {
+            continue
+          }
+          for (const { row, col, digit } of pair.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
+          }
+          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
+          if (forced) {
+            const finalClause = this.hiddenPairFinalClause(secondary, pair, forced)
+            return this.buildRule3CombinedMove(primary, steps, 'hidden pair', pair.cells, finalClause, {
+              row: forced.row,
+              col: forced.col,
+              digit: forced.digit,
+              color: secondary,
+            })
+          }
+          steps.push({
+            technique: 'hidden pair',
+            basisCells: pair.cells,
+            affectedCells: uniqueCells(pair.eliminations),
+            antecedentClause: this.hiddenPairAntecedentClause(pair),
+          })
+          appliedSomething = true
+          break
+        }
+      }
+      if (appliedSomething) {
+        continue
+      }
+
+      if (allowedTechniques.has('UR')) {
+        for (const ur of this.uniqueRectangleFinder.findType1Instances(hypBoard, hypCandidates)) {
+          const [er, ec] = ur.extraCell
+          if (ur.solvedDigit !== null) {
+            // The Unique Rectangle's own conclusion *is* the move - no need
+            // to also check for a newly-single-candidate cell, and no
+            // reason to keep simulating past it first.
+            const digit = ur.solvedDigit
+            const finalClause = this.uniqueRectangleSolveFinalClause(secondary, ur)
+            return this.buildRule3CombinedMove(primary, steps, 'UR', ur.cells, finalClause, {
+              row: er,
+              col: ec,
+              digit,
+              color: secondary,
+            })
+          }
+          if (ur.eliminatedDigits.length > 0) {
+            for (const digit of ur.eliminatedDigits) {
+              hypCandidates[er][ec][digit - 1] = false
+            }
+            const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
+            if (forced) {
+              const finalClause = this.uniqueRectangleEliminationFinalClause(secondary, ur, forced)
+              return this.buildRule3CombinedMove(primary, steps, 'UR', ur.cells, finalClause, {
+                row: forced.row,
+                col: forced.col,
+                digit: forced.digit,
+                color: secondary,
+              })
+            }
+            steps.push({
+              technique: 'UR',
+              basisCells: ur.cells,
+              affectedCells: [ur.extraCell],
+              antecedentClause: this.uniqueRectangleAntecedentClause(ur),
+            })
+            appliedSomething = true
+            break
+          }
+        }
+      }
+      if (appliedSomething) {
+        continue
+      }
+
+      if (allowedTechniques.has('short single-digit aic') || allowedTechniques.has('short aic')) {
+        for (const aic of this.shortAicFinder.findShortAics(hypBoard, hypCandidates)) {
+          const technique = classifyShortAic(aic) === 'single-digit' ? 'short single-digit aic' : 'short aic'
+          if (!allowedTechniques.has(technique)) {
+            continue
+          }
+          if (aicLimitPerStep && aicStepsUsed >= 1) {
+            continue
+          }
+
+          for (const { row, col, digit } of aic.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
+          }
+          aicStepsUsed++
+          const basisCells = aic.nodes.map((n) => [n.row, n.col] as const)
+          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
+          if (forced) {
+            const finalClause = this.shortAicFinalClause(secondary, aic, forced, technique)
+            return this.buildRule3CombinedMove(
+              primary,
+              steps,
+              technique,
+              basisCells,
+              finalClause,
+              { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+              undefined,
+              aic,
+            )
+          }
+          steps.push({
+            technique,
+            basisCells,
+            affectedCells: uniqueCells(aic.eliminations),
+            antecedentClause: this.shortAicAntecedentClause(aic, technique),
+            aic,
           })
           appliedSomething = true
           break
@@ -890,6 +1069,10 @@ export class SudokuDragonFinder {
      * resolves, so that case passes the unit's 9 cells here instead while
      * still highlighting only the resolved cell via `finalBasisCells`. */
     dependencyCells: readonly (readonly [number, number])[] = finalBasisCells,
+    /** Set only when `finalTechnique` is an AIC (either kind) - its chain
+     * data, folded into `aicChains` alongside any antecedent step that was
+     * also an AIC. */
+    finalAic?: ShortAicInstance,
   ): DragonMove {
     const antecedents = this.selectRelevantChainSteps(steps, dependencyCells)
     const clauses = [...antecedents.map((s) => s.antecedentClause), finalClause]
@@ -901,6 +1084,22 @@ export class SudokuDragonFinder {
     const labeledTechniques = [...antecedents.map((s) => s.technique), finalTechnique].filter(
       (t): t is Exclude<Rule3Technique, 'hidden single'> => t !== 'hidden single',
     )
+    const aicInstances = [
+      ...antecedents.map((s) => s.aic).filter((aic): aic is ShortAicInstance => !!aic),
+      ...(finalAic ? [finalAic] : []),
+    ]
+    const aicChains =
+      aicInstances.length > 0
+        ? aicInstances.map((aic) => ({
+            candidates: aic.nodes.map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
+            links: aic.links.map((link) => ({
+              from: { row: link.from.row, col: link.from.col, digit: link.from.digit },
+              to: { row: link.to.row, col: link.to.col, digit: link.to.digit },
+              kind: link.kind,
+            })),
+            hypotheticalEliminations: aic.eliminations.map((e) => ({ row: e.row, col: e.col, digit: e.digit })),
+          }))
+        : undefined
     return {
       id: '',
       kind: 'extension-rule3',
@@ -910,6 +1109,7 @@ export class SudokuDragonFinder {
       colored: [colored],
       eliminated: [],
       solved: [],
+      aicChains,
     }
   }
 
@@ -1005,10 +1205,33 @@ export class SudokuDragonFinder {
     return `a naked ${sizeWord} of {${digitsLabel}} in {${cellsLabel}}`
   }
 
+  private hiddenPairAntecedentClause(pair: HiddenPairInstance): string {
+    const [a, b] = pair.digits
+    const cellsLabel = pair.cells.map(([r, c]) => cellRef(r, c)).join(', ')
+    return `a hidden pair of {${a},${b}} in {${cellsLabel}}`
+  }
+
   private uniqueRectangleAntecedentClause(ur: UniqueRectangleType1Instance): string {
     const cellsLabel = ur.cells.map(([r, c]) => cellRef(r, c)).join(', ')
     const [a, b] = ur.urDigits
     return `an UR type 1 consisting of {${cellsLabel}} with UR candidates {${a},${b}}`
+  }
+
+  private formatAicChainText(aic: ShortAicInstance): string {
+    return aic.nodes
+      .map((n, i) => {
+        const connector = i === 0 ? '' : i % 2 === 1 ? ' = ' : ' - '
+        return `${connector}${n.digit}${cellRef(n.row, n.col)}`
+      })
+      .join('')
+  }
+
+  private aicLabel(technique: 'short single-digit aic' | 'short aic'): string {
+    return technique === 'short single-digit aic' ? 'short single-digit AIC' : 'short AIC'
+  }
+
+  private shortAicAntecedentClause(aic: ShortAicInstance, technique: 'short single-digit aic' | 'short aic'): string {
+    return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType}) of ${this.formatAicChainText(aic)}`
   }
 
   // --- Extension Rule 3 final clauses (the technique that actually forces
@@ -1055,6 +1278,27 @@ export class SudokuDragonFinder {
     const digitsLabel = subset.digits.join(',')
     const eliminationsLabel = this.formatCandidateGroups(subset.eliminations)
     return `a naked ${sizeWord} of {${digitsLabel}} at ${cellsLabel}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
+  }
+
+  private hiddenPairFinalClause(
+    secondary: DragonColor,
+    pair: HiddenPairInstance,
+    forced: { row: number; col: number; digit: number },
+  ): string {
+    const [a, b] = pair.digits
+    const cellsLabel = pair.cells.map(([r, c]) => cellRef(r, c)).join(', ')
+    const eliminationsLabel = this.formatCandidateGroups(pair.eliminations)
+    return `a hidden pair of {${a},${b}} at ${cellsLabel}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
+  }
+
+  private shortAicFinalClause(
+    secondary: DragonColor,
+    aic: ShortAicInstance,
+    forced: { row: number; col: number; digit: number },
+    technique: 'short single-digit aic' | 'short aic',
+  ): string {
+    const eliminationsLabel = this.formatCandidateGroups(aic.eliminations)
+    return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType}) of ${this.formatAicChainText(aic)}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
   }
 
   private uniqueRectangleSolveFinalClause(secondary: DragonColor, ur: UniqueRectangleType1Instance): string {

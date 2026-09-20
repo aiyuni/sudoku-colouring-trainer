@@ -1,20 +1,54 @@
 import { cloneBoard, cloneCandidates, computeGivenMask, createEmptyCandidates } from './boardUtils'
 import { SudokuColorFinder } from './SudokuColorFinder'
 import { SudokuDragonFinder } from './SudokuDragonFinder'
+import { SudokuHiddenPairFinder } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './SudokuLockedCandidateFinder'
 import { SudokuMedusaFinder } from './SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
+import { classifyShortAic, SudokuShortAicFinder } from './SudokuShortAicFinder'
 import { SudokuSingleFinder } from './SudokuSingleFinder'
 import { SudokuSolver } from './SudokuSolver'
 import { SudokuUniqueRectangleFinder } from './SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './types'
 
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-const MAX_GRID_ATTEMPTS = 600
+/** A generous backstop only - `generate` is normally bounded by
+ * `timeBudgetMs`, not by attempt count (each attempt's own cost varies a
+ * lot with how quickly a random solved grid's reduction dead-ends). This
+ * just prevents a runaway loop if a caller passes a near-zero budget. */
+const MAX_GRID_ATTEMPTS = 1_000_000
+const DEFAULT_TIME_BUDGET_MS = 30_000
+/** How long generate()'s attempt loop is allowed to run uninterrupted
+ * before it hands control back to the browser for a tick - without this,
+ * a long timeBudgetMs (a minute, five minutes) blocks the main thread
+ * continuously for that whole duration, which is exactly what trips
+ * Chrome's own "Page Unresponsive" warning, not just makes the UI feel
+ * laggy. Short enough that even a run that's about to succeed on the very
+ * next attempt still yields well before the browser's own hang detector
+ * would fire. */
+const YIELD_INTERVAL_MS = 50
+
+/** Hands control back to the browser's event loop for a tick - see
+ * YIELD_INTERVAL_MS. A plain `setTimeout(resolve, 0)` rather than
+ * `requestAnimationFrame`, since rAF never fires in a backgrounded tab and
+ * a generation the user tabbed away from should still keep progressing
+ * (just slower, throttled like any other background timer) rather than
+ * stall completely. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
 
 type CellCoordinate = [row: number, col: number]
+
+/** Which Short AIC kinds a checkpoint may still have available. */
+interface DisregardedAicKinds {
+  singleDigit: boolean
+  general: boolean
+}
 
 export interface GeneratedDragonPuzzle {
   board: Board
@@ -28,14 +62,33 @@ export interface DragonPuzzleGenerateOptions {
    * Extension Rule 3 (naked pairs / Unique Rectangle Type 1 propagated
    * through a side's assumption) is what's actually needed. */
   requireDynamic?: boolean
+  /** Wall-clock budget for the whole search, across as many fresh solved
+   * grids as it takes - defaults to DEFAULT_TIME_BUDGET_MS. A qualifying
+   * checkpoint (especially a Dynamic-Dragon-only one) can be rare enough
+   * that finding one is mostly a function of how long the search keeps
+   * retrying with fresh random grids, not of any single grid's own cost. */
+  timeBudgetMs?: number
+  /** When true (the default), a checkpoint may also have a Short
+   * Single-Digit AIC available alongside the Dragon technique; when false,
+   * one existing means "something easier than Dragon still works" and the
+   * checkpoint is rejected. */
+  disregardSingleDigitAic?: boolean
+  /** Same as disregardSingleDigitAic, for the general Short AIC (everything
+   * classifyShortAic doesn't call single-digit). The two are independent
+   * here; the UI is what keeps "don't disregard general AIC" from being
+   * combined with "disregard single-digit AIC". */
+  disregardAic?: boolean
 }
 
 /**
  * Generates a puzzle state where, the moment it's loaded and candidates are
  * freshly autofilled, Dragon Colouring is the only technique this app
- * implements that can make progress - naked/hidden singles, naked pairs,
- * Unique Rectangle Type 1, Simple Colouring, and 3D Medusa's own rules all
- * come up empty.
+ * implements that can make progress - naked/hidden singles, naked pairs/
+ * triples/quads, hidden pairs, Unique Rectangle Type 1, Simple Colouring,
+ * Short AIC, and 3D Medusa's own rules all come up empty. Short AIC comes
+ * in two kinds (single-digit and general) that the caller can each choose
+ * to disregard - by default both are, so the state may still have one
+ * available next to the Dragon technique.
  *
  * That "the moment candidates are freshly autofilled" part is the subtlety:
  * naked pairs, Unique Rectangle Type 1's eliminations, and Medusa's rules
@@ -64,19 +117,34 @@ export class SudokuDragonPuzzleGenerator {
   private readonly lockedCandidateFinder = new SudokuLockedCandidateFinder()
   private readonly pairFinder = new SudokuPairFinder()
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
+  private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
   private readonly colorFinder = new SudokuColorFinder()
+  private readonly shortAicFinder = new SudokuShortAicFinder()
   private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly dragonFinder = new SudokuDragonFinder()
 
-  /** Returns null if no qualifying puzzle turned up within the attempt
-   * budget - rare, but this is a much narrower target than an ordinary
-   * generated puzzle. */
-  generate(options: DragonPuzzleGenerateOptions = {}): GeneratedDragonPuzzle | null {
+  /** Returns null if no qualifying puzzle turned up within the time budget
+   * - rare, but this is a much narrower target than an ordinary generated
+   * puzzle (a Dynamic-Dragon-only one especially so).
+   *
+   * async purely to yield periodically (see YIELD_INTERVAL_MS/
+   * yieldToEventLoop) - the search itself is still ordinary synchronous
+   * work between those yield points, not offloaded to a worker. */
+  async generate(options: DragonPuzzleGenerateOptions = {}): Promise<GeneratedDragonPuzzle | null> {
+    const deadline = Date.now() + (options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS)
+    let lastYield = Date.now()
     for (let attempt = 0; attempt < MAX_GRID_ATTEMPTS; attempt++) {
       const result = this.reduceUntilDragonNeeded(this.generateSolvedGrid(), options)
       if (result) {
         return result
+      }
+      if (Date.now() >= deadline) {
+        return null
+      }
+      if (Date.now() - lastYield >= YIELD_INTERVAL_MS) {
+        await yieldToEventLoop()
+        lastYield = Date.now()
       }
     }
     return null
@@ -85,6 +153,10 @@ export class SudokuDragonPuzzleGenerator {
   private reduceUntilDragonNeeded(solved: Board, options: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
     const puzzle = cloneBoard(solved)
     const requireDynamic = options.requireDynamic ?? false
+    const disregardKinds: DisregardedAicKinds = {
+      singleDigit: options.disregardSingleDigitAic ?? true,
+      general: options.disregardAic ?? true,
+    }
 
     for (const [row, col] of this.shuffled(this.allCoordinates())) {
       const removedValue = puzzle[row][col]
@@ -98,7 +170,7 @@ export class SudokuDragonPuzzleGenerator {
         continue
       }
 
-      const checkpoint = this.buildRobustCheckpoint(puzzle, requireDynamic)
+      const checkpoint = this.buildRobustCheckpoint(puzzle, requireDynamic, disregardKinds)
       if (!checkpoint) {
         // Still too easy (something short of the target technique still
         // works once candidates are freshly autofilled), or a dead end
@@ -111,7 +183,16 @@ export class SudokuDragonPuzzleGenerator {
         // necessary - and robustly so, surviving a fresh "Autofill all" -
         // while the puzzle is still solvable start to finish with what
         // this app implements. Exactly the target.
-        return { board: checkpoint.board, givens: computeGivenMask(puzzle), candidates: checkpoint.candidates }
+        //
+        // givens comes from checkpoint.board, not puzzle: buildRobustCheckpoint
+        // solved checkpoint.board further than puzzle via naked/hidden singles
+        // (see solveWithSinglesOnly), so it has strictly more filled cells.
+        // Those singles-derived cells are just as pre-filled as puzzle's own
+        // clues from the player's perspective - nobody typed them in - so
+        // marking only puzzle's cells as "given" would wrongly show some
+        // pre-filled cells in the user-entry colour and (worse) leave them
+        // editable/erasable despite never having been the player's own move.
+        return { board: checkpoint.board, givens: computeGivenMask(checkpoint.board), candidates: checkpoint.candidates }
       }
       // This removal demands something harder than the target technique -
       // too far, put the clue back and try removing a different one.
@@ -150,6 +231,7 @@ export class SudokuDragonPuzzleGenerator {
   private buildRobustCheckpoint(
     clueBoard: Board,
     requireDynamic: boolean,
+    disregardKinds: DisregardedAicKinds,
   ): { board: Board; candidates: CandidateGrid } | null {
     const { board, candidates } = this.solveWithSinglesOnly(clueBoard)
 
@@ -168,10 +250,16 @@ export class SudokuDragonPuzzleGenerator {
     if (this.nakedSubsetFinder.findNakedQuadEliminations(board, candidates).length > 0) {
       return null
     }
+    if (this.hiddenPairFinder.findHiddenPairEliminations(board, candidates).length > 0) {
+      return null
+    }
     if (this.uniqueRectangleFinder.findType1Instances(board, candidates).length > 0) {
       return null
     }
     if (this.anySimpleColoringApplies(board, candidates)) {
+      return null
+    }
+    if (this.anyBlockingShortAic(board, candidates, disregardKinds)) {
       return null
     }
 
@@ -211,6 +299,22 @@ export class SudokuDragonPuzzleGenerator {
     }
 
     return { board, candidates }
+  }
+
+  /** True when a short AIC of a kind the caller does *not* disregard has
+   * eliminations. Uses the same findShortAics + classifyShortAic split the
+   * app's Techniques panel does, so "a single-digit AIC exists" means the
+   * same thing here as what the player would see listed. Skips the (fairly
+   * costly) chain search entirely when both kinds are disregarded, which
+   * is the default. */
+  private anyBlockingShortAic(board: Board, candidates: CandidateGrid, disregarded: DisregardedAicKinds): boolean {
+    if (disregarded.singleDigit && disregarded.general) {
+      return false
+    }
+    return this.shortAicFinder.findShortAics(board, candidates).some((aic) => {
+      const singleDigit = classifyShortAic(aic) === 'single-digit'
+      return singleDigit ? !disregarded.singleDigit : !disregarded.general
+    })
   }
 
   private anySimpleColoringApplies(board: Board, candidates: CandidateGrid): boolean {
@@ -264,8 +368,10 @@ export class SudokuDragonPuzzleGenerator {
       if (this.applyNakedPairs(board, candidates)) continue
       if (this.applyNakedTriples(board, candidates)) continue
       if (this.applyNakedQuads(board, candidates)) continue
+      if (this.applyHiddenPairs(board, candidates)) continue
       if (this.applyUniqueRectangleType1(board, candidates)) continue
       if (this.applySimpleColoring(board, candidates)) continue
+      if (this.applyShortAic(board, candidates)) continue
       if (this.applyMedusa(board, candidates)) continue
       break
     }
@@ -328,6 +434,17 @@ export class SudokuDragonPuzzleGenerator {
     return true
   }
 
+  private applyHiddenPairs(board: Board, candidates: CandidateGrid): boolean {
+    const eliminations = this.hiddenPairFinder.findHiddenPairEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      return false
+    }
+    for (const { row, col, digit } of eliminations) {
+      candidates[row][col][digit - 1] = false
+    }
+    return true
+  }
+
   private applyUniqueRectangleType1(board: Board, candidates: CandidateGrid): boolean {
     let changed = false
     for (const ur of this.uniqueRectangleFinder.findType1Instances(board, candidates)) {
@@ -373,6 +490,17 @@ export class SudokuDragonPuzzleGenerator {
       }
     }
     return changed
+  }
+
+  private applyShortAic(board: Board, candidates: CandidateGrid): boolean {
+    const eliminations = this.shortAicFinder.findShortAicEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      return false
+    }
+    for (const { row, col, digit } of eliminations) {
+      candidates[row][col][digit - 1] = false
+    }
+    return true
   }
 
   private applyMedusa(board: Board, candidates: CandidateGrid): boolean {

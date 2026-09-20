@@ -26,6 +26,26 @@
      fixed across light/dark/white so the same colour always means the same
      thing (used/eliminated/solved/chain side) no matter the grid theme. */
   --grid-candidate: #6b7280;
+
+  /* Short AIC chain highlighting: the 4-6 chain candidates' pip colour/
+     background, and the curved connector lines joining them (solid for a
+     strong link, dotted for a weak one). Free to retheme - like every
+     other technique highlight colour, these stay fixed regardless of
+     light/dark/white grid mode. */
+  --aic-node-color: #6b21a8;
+  --aic-node-bg: #e9d5ff;
+  --aic-strong-link-color: #dc2626;
+  --aic-strong-link-width: 4;
+  --aic-weak-link-color: #2563eb;
+  --aic-weak-link-width: 3;
+  --aic-weak-link-dash: 7 6;
+
+  /* Dynamic Dragon Colouring only: the candidate an embedded AIC step
+     eliminates as its own internal deduction - not a real board
+     elimination this move claims, so it's a hollow circle + faint cross
+     over the digit rather than the usual red elimination pip. */
+  --aic-hypothetical-circle-color: #dc2626;
+  --aic-hypothetical-cross-color: rgb(220 38 38 / 55%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -67,6 +87,16 @@
   padding: 2rem 1rem 3rem;
 }
 
+/* Solving/generating/OCR/solve-path calculation: shown for the whole
+   duration of the operation (set just before the blocking work starts,
+   cleared in a `finally` right after it ends or throws) so the cursor
+   never gets stuck mid-op. `!important` because buttons, links, and
+   disabled inputs all set their own `cursor` further down. */
+.page.is-busy,
+.page.is-busy * {
+  cursor: progress !important;
+}
+
 .header h1 {
   margin: 0 0 0.35rem;
   font-size: 2rem;
@@ -87,13 +117,6 @@
   max-width: 40rem;
 }
 
-.toggle-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  margin: 0 0 1.5rem;
-}
-
 .mode-toggle {
   font-weight: 600;
 }
@@ -110,40 +133,152 @@
   background: #f8fafc;
 }
 
-.strong-link-toggle {
-  border-color: #fecaca;
-  color: #b91c1c;
-  background: #fef2f2;
+/* The single toolbar row under the header: quick-access edit actions on
+   the left, the two "everything else" dropdown menus on the right - keeps
+   the page from opening with a dozen buttons and toggles all visible at
+   once. */
+.main-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0 0 1.25rem;
 }
 
-.strong-link-toggle.active {
-  background: #dc2626;
-  border-color: #dc2626;
-  color: #fff;
+.toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.bivalue-toggle {
-  border-color: #99f6e4;
-  color: #0f766e;
-  background: #f0fdfa;
+.dropdown-menu {
+  position: relative;
+  display: inline-block;
 }
 
-.bivalue-toggle.active {
-  background: #0d9488;
-  border-color: #0d9488;
-  color: #fff;
+.dropdown-trigger {
+  font-weight: 600;
 }
 
-.grid-white-mode-toggle {
-  border-color: #e2e8f0;
+.dropdown-trigger.active {
+  border-color: #1d4ed8;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.generate-puzzle-trigger {
+  border-color: #86efac;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.generate-puzzle-trigger.active {
+  border-color: #16a34a;
+  color: #14532d;
+  background: #dcfce7;
+}
+
+.dropdown-caret {
+  display: inline-block;
+  margin-left: 0.15rem;
+  font-size: 0.75em;
+  opacity: 0.75;
+}
+
+.dropdown-panel {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 30;
+  min-width: 15rem;
+  max-width: 20rem;
+  max-height: min(70vh, 32rem);
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  box-shadow: 0 16px 36px -14px rgb(15 23 42 / 0.35);
+}
+
+.settings-panel {
+  left: auto;
+  right: 0;
+}
+
+.dropdown-section + .dropdown-section {
+  margin-top: 0.2rem;
+}
+
+.dropdown-section-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: #475569;
-  background: #f8fafc;
 }
 
-.grid-white-mode-toggle.active {
-  background: #facc15;
-  border-color: #eab308;
-  color: #422006;
+.dropdown-divider {
+  height: 1px;
+  background: #e2e8f0;
+  border: 0;
+  margin: 0.65rem 0;
+}
+
+.dropdown-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.dropdown-item + .dropdown-item {
+  margin-top: 0.3rem;
+}
+
+.menu-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: #334155;
+  padding: 0.25rem 0;
+  cursor: pointer;
+}
+
+.menu-checkbox:has(input:disabled) {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.menu-select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: #334155;
+  padding: 0.25rem 0;
+}
+
+.menu-select select {
+  font-size: 0.82rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 0.35rem;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
 }
 
 .board-area {
@@ -189,6 +324,34 @@
   stroke-width: 4;
   stroke-linecap: round;
   opacity: 0.85;
+}
+
+/* Short AIC chain overlay: same 900x900 coordinate space as the strong-link
+   overlay above, but each link is a curved (quadratic-bezier) path instead
+   of a straight line, so a strong and a weak link between nearby pips never
+   visually merge into one. */
+.aic-links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.aic-link-strong {
+  fill: none;
+  stroke: var(--aic-strong-link-color);
+  stroke-width: var(--aic-strong-link-width);
+  stroke-linecap: round;
+}
+
+.aic-link-weak {
+  fill: none;
+  stroke: var(--aic-weak-link-color);
+  stroke-width: var(--aic-weak-link-width);
+  stroke-dasharray: var(--aic-weak-link-dash);
+  stroke-linecap: round;
 }
 
 .grid:focus-visible {
@@ -280,6 +443,28 @@
   z-index: 3;
 }
 
+/* A user-entered digit that duplicates another digit already in its row,
+   column, or box - the most basic rule violation, so it outranks every
+   other cell highlight (comes last, highest z-index) and, like the
+   .technique-eliminated pip's red, stays fixed across light/dark/white
+   grid mode rather than following --grid-bg-*. Clears itself the instant
+   the conflicting digit is edited or removed - see the conflictedCells
+   memo in App.tsx, which re-derives it from the board on every change
+   rather than tracking it as an event. */
+.cell.conflict {
+  background: #fecaca;
+  outline: 3px solid #dc2626;
+  outline-offset: -3px;
+  z-index: 4;
+}
+
+/* Matches .cell.filled:not(.given)'s specificity (three class-equivalent
+   selectors) so this red wins over the ordinary user-digit colour instead
+   of losing to source order. */
+.cell.filled.conflict {
+  color: #b91c1c;
+}
+
 .cell:hover:not(.given) {
   background: var(--grid-bg-hover);
 }
@@ -369,6 +554,45 @@
   margin: 1px;
 }
 
+/* Short AIC's chain candidates - purple, distinct from the yellow
+   .technique-used a naked pair/triple/etc. basis gets, since an AIC node
+   isn't quite the same relationship (it's one end of an alternating
+   strong/weak chain, not a technique's direct basis cell). */
+.candidate.technique-aic {
+  color: var(--aic-node-color);
+  background: var(--aic-node-bg);
+  border-radius: 999px;
+  margin: 1px;
+}
+
+/* Dynamic Dragon Colouring only: an embedded AIC's own internal
+   elimination - a hollow circle around the digit plus a faint diagonal
+   cross over it, instead of the solid red .technique-eliminated pill,
+   since this candidate isn't actually removed by this move itself. */
+.candidate.technique-aic-hypothetical {
+  position: relative;
+  background: transparent;
+  border-radius: 999px;
+  margin: 1px;
+  box-shadow: inset 0 0 0 2px var(--aic-hypothetical-circle-color);
+}
+
+.candidate.technique-aic-hypothetical::before,
+.candidate.technique-aic-hypothetical::after {
+  content: '';
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  top: 50%;
+  height: 1.5px;
+  background: var(--aic-hypothetical-cross-color);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.candidate.technique-aic-hypothetical::after {
+  transform: translateY(-50%) rotate(-45deg);
+}
+
 /* A manually painted candidate colour - background comes from an inline
    style (the user's chosen swatch), this just gives it the same pill shape
    as every other candidate highlight. */
@@ -384,16 +608,22 @@
 
 .paint-swatches {
   display: grid;
-  grid-template-columns: repeat(3, 1.5rem);
-  gap: 0.3rem;
+  grid-template-columns: repeat(3, 2.1rem);
+  gap: 0.5rem;
   justify-content: center;
 }
 
+.paint-swatch-wrapper {
+  position: relative;
+  width: 2.1rem;
+  height: 2.1rem;
+}
+
 .paint-swatch {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 2.1rem;
+  height: 2.1rem;
   border: 1.5px solid rgba(0, 0, 0, 0.25);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 0;
   cursor: pointer;
 }
@@ -401,6 +631,63 @@
 .paint-swatch.active {
   border-color: #1f2937;
   box-shadow: 0 0 0 1.5px #fff, 0 0 0 3px #1f2937;
+}
+
+/* "Customize this colour" - a small round badge pinned to the swatch's
+   bottom-right corner instead of a separate strip underneath it, so it
+   reads as an edit control on the swatch rather than an unrelated sliver
+   of colour. .paint-swatch-edit-icon is a purely decorative pencil glyph
+   layered on top (pointer-events: none - clicks fall through to the input
+   beneath it); this is the actual native colour-picker input, just reset
+   with appearance: none and reshaped into a small circle instead of the
+   browser's default rectangle. */
+.paint-swatch-color-input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  right: -0.3rem;
+  bottom: -0.3rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  background: none;
+  z-index: 1;
+}
+
+.paint-swatch-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: 50%;
+}
+
+.paint-swatch-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+.paint-swatch-color-input::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+.paint-swatch-edit-icon {
+  position: absolute;
+  right: -0.3rem;
+  bottom: -0.3rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  line-height: 1;
+  color: #1f2937;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .paint-hint {
@@ -479,6 +766,11 @@
   margin: 0;
   font-size: 0.8rem;
   color: #64748b;
+}
+
+.solve-path-unsolvable {
+  color: #b91c1c;
+  font-weight: 700;
 }
 
 .solve-path-submenu {
@@ -643,6 +935,8 @@
 .solution-button {
   border-color: #bfdbfe;
   color: #1d4ed8;
+  font-size: 1.4rem;
+  font-weight: 800;
 }
 
 .candidate-group {
@@ -650,8 +944,22 @@
   background: #f8fafc;
 }
 
+/* A candidate button's digit sits where that digit's own pencil mark would
+   sit inside a cell (2 top-middle, 5 dead center, 9 bottom-right, etc.) -
+   the button itself is a flex container so the per-digit alignment set in
+   DigitPad's inline style actually has something to align against, rather
+   than the browser's default centered button text. aspect-ratio keeps it
+   square (the grid's 3 equal-width columns would otherwise make it wide
+   and short, since nothing else pins its height to its width) - smaller
+   and in the candidate group's own grey/slate palette rather than
+   .solution-button's blue, so the two stay visually distinct even though
+   both now read as squares rather than one being a flat bar. */
 .candidate-button {
-  font-size: 0.85rem;
+  display: flex;
+  /*aspect-ratio: 1 / 1;*/
+  padding: 0.5rem 1.0rem;
+  font-size: 0.8rem;
+  font-weight: 700;
   color: #475569;
 }
 
@@ -720,14 +1028,22 @@
   cursor: not-allowed;
 }
 
+.import-secondary-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 34rem;
+  margin: 0.75rem auto 0;
+}
+
 .image-import-drop {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
   gap: 0.3rem;
-  max-width: 34rem;
-  margin: 0.75rem auto 0;
+  flex: 1 1 18rem;
   padding: 0.75rem 1rem;
   border: 2px dashed #cbd5e1;
   border-radius: 0.5rem;
@@ -735,6 +1051,11 @@
   color: #64748b;
   text-align: center;
   cursor: default;
+}
+
+.copy-sc-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .image-import-drop.active {
@@ -854,6 +1175,10 @@ button.primary {
     color: #f87171;
   }
 
+  .solve-path-unsolvable {
+    color: #f87171;
+  }
+
   .muted {
     color: #94a3b8;
   }
@@ -939,34 +1264,54 @@ button.primary {
     background: #1a2434;
   }
 
-  .strong-link-toggle {
-    border-color: #7f1d1d;
-    color: #fca5a5;
-    background: #2a0e0e;
+  .dropdown-trigger.active {
+    border-color: #60a5fa;
+    color: #93c5fd;
+    background: #16233a;
   }
 
-  .strong-link-toggle.active {
-    background: #dc2626;
-    border-color: #dc2626;
-    color: #fff;
+  .generate-puzzle-trigger {
+    border-color: #14532d;
+    color: #86efac;
+    background: #0f1f13;
   }
 
-  .bivalue-toggle {
-    border-color: #115e59;
-    color: #5eead4;
-    background: #0b2b28;
+  .generate-puzzle-trigger.active {
+    border-color: #22c55e;
+    color: #bbf7d0;
+    background: #0f2d18;
   }
 
-  .bivalue-toggle.active {
-    background: #0d9488;
-    border-color: #0d9488;
-    color: #fff;
-  }
-
-  .grid-white-mode-toggle {
+  .dropdown-panel {
+    background: #1e293b;
     border-color: #334155;
-    color: #cbd5e1;
-    background: #1a2434;
+    box-shadow: 0 16px 36px -14px rgb(0 0 0 / 0.6);
+  }
+
+  .dropdown-section-title {
+    color: #94a3b8;
+  }
+
+  .dropdown-divider {
+    background: #334155;
+  }
+
+  .dropdown-hint {
+    color: #94a3b8;
+  }
+
+  .menu-checkbox {
+    color: #e2e8f0;
+  }
+
+  .menu-select {
+    color: #e2e8f0;
+  }
+
+  .menu-select select {
+    background: #1e293b;
+    border-color: #475569;
+    color: #e2e8f0;
   }
 
   .candidate.candidate-painted {
@@ -1062,4 +1407,5 @@ button.primary {
     border-color: #334155;
     color: #e2e8f0;
   }
+  
 }
