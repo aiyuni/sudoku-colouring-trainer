@@ -39,6 +39,7 @@ export type DragonMoveKind =
   | 'rule3'
   | 'rule4'
   | 'rule5'
+  | 'solution'
 
 /** extend()'s options. `dynamic` turns on Dynamic Dragon Colouring:
  * Extension Rule 3, which reaches further than Rules 1-2 by simulating
@@ -57,6 +58,23 @@ export interface DragonExtendOptions {
    * be an AIC (either kind) - defaults to true. False allows as many as
    * the chain needs. */
   aicLimitPerStep?: boolean
+  /** Exhaustive Dragon Colouring - defaults to false, which stops at the
+   * first elimination found (the original behaviour).
+   *
+   * When true, a non-mass elimination (Rules 3-5) doesn't end the
+   * technique: its eliminations are applied to a working copy of the
+   * candidates and the colouring carries on from that state, promotions
+   * first, then the usual eliminations/extensions, each promotion or
+   * extension its own move. It ends at a mass elimination (a whole side
+   * proved false - that step is kept), at a colouring that covers every
+   * empty cell with one side (a 'solution' move), or - keeping only the
+   * moves up to the last elimination - once nothing more can be extended or
+   * every dragon colour has been promoted to its medusa colour.
+   *
+   * Never changes *whether* a chain yields a result (that is decided by the
+   * first elimination, exactly as when false), only how much it reports, so
+   * callers that only need to know if a chain resolves can leave it off. */
+  exhaustive?: boolean
 }
 
 export interface DragonCandidateRef {
@@ -76,9 +94,10 @@ export interface DragonMove {
   colored: DragonNode[]
   eliminated: DragonCandidateRef[]
   solved: DragonCandidateRef[]
-  /** mass-elimination only: the medusa colour a same-side contradiction
-   * proved true (its opposite proved false), the actual conclusion the
-   * move's eliminations/solves are both just consequences of. */
+  /** mass-elimination and solution only: the medusa colour a same-side
+   * contradiction proved true (its opposite proved false) or whose
+   * colouring covers the whole grid - the actual conclusion the move's
+   * eliminations/solves are both just consequences of. */
   provenTrueColor?: PrimaryColor
   /** extension-rule3 only: every non-colouring technique this step's
    * reasoning actually depended on, in the order they were chained -
@@ -325,20 +344,38 @@ export class SudokuDragonFinder {
       {
         id: 'medusa',
         kind: 'medusa',
-        description: `Consider this 3d Medusa: ${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue, ${yellowCount} yellow.`,
+        description: `Consider this 3d Medusa with: ${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue, and ${yellowCount} candidates yellow.`,
         colored: seed,
         eliminated: [],
         solved: [],
       },
     ]
 
+    const exhaustive = options.exhaustive ?? false
+    // What every rule below reads. The caller's `candidates` is never
+    // mutated: in exhaustive mode the first non-mass elimination swaps in a
+    // private copy with that elimination applied, and later ones keep
+    // editing the copy - so with exhaustive off this is always `candidates`
+    // itself, and nothing here differs from the original stop-at-the-first-
+    // elimination behaviour.
+    let workingCandidates = candidates
+    // True once an elimination has been applied and the colouring is being
+    // carried on from the resulting state (exhaustive only) - see the
+    // continuation rules in the loop below.
+    let continuing = false
+    // moves.length just after the last elimination group - where a
+    // continuation that runs dry gets cut back to, so the result never ends
+    // on promotions/extensions that led nowhere.
+    let lastEliminationEnd = 0
+
     // Lazily built on the first promotion, then reused for every later one
-    // in this same call - board/candidates never change within one extend()
-    // call, so the strong-link graph over them doesn't either, and building
-    // it is far too costly (an O(board) scan) to redo per promotion. Most
-    // extend() calls promote zero or one time, but a long chain can promote
-    // repeatedly, and this call is itself made many times over during
-    // puzzle generation's grind, so avoiding the redundant rebuild matters.
+    // - building it is far too costly (an O(board) scan) to redo per
+    // promotion. Most extend() calls promote zero or one time, but a long
+    // chain can promote repeatedly, and this call is itself made many times
+    // over during puzzle generation's grind, so avoiding the redundant
+    // rebuild matters. Only ever stale in exhaustive mode, where an applied
+    // elimination can create new conjugate pairs/bivalue cells - so applying
+    // one resets this to null and the next promotion rebuilds it.
     let strongLinkGraph: StrongLinkGraph | null = null
 
     // 'naked pair' is enforced as always-on here rather than trusted from
@@ -355,73 +392,129 @@ export class SudokuDragonFinder {
     // other's. A side with nothing to extend on its turn doesn't block
     // things - the other side's turn is tried immediately as a fallback.
     let turnPrimary: PrimaryColor = 'blue'
+
+    // Promotion is taken before any extension attempt, on every iteration:
+    // once two opposite-side colours are proven, that proof doesn't get any
+    // more or less true by waiting, and a proactive promotion can itself
+    // unlock strong-link growth (see below) or a mass elimination the
+    // caller would otherwise have to wait an extra round-trip through this
+    // loop to reach. It isn't an extension of either side - it's what
+    // resolves the two sides against each other - so it doesn't participate
+    // in the turn alternation below. Returns whether it promoted anything.
+    const applyPromotion = (): boolean => {
+      const promotionMove = this.findPromotionMove(nodeMap)
+      if (!promotionMove) {
+        return false
+      }
+      for (const n of promotionMove.colored) {
+        nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+      }
+      promotionMove.id = `promotion-${counter++}`
+      moves.push(promotionMove)
+
+      // A newly-promoted candidate is now genuinely known true, not just
+      // "true if this side is true" - so it can have its own strong
+      // links (conjugate pairs, bivalue cells) that were never part of
+      // the original Medusa chain (Dragon's extension rules don't follow
+      // strong links, only colour visibility), reaching cells the
+      // original chain never touched. Surfaced as its own step, exactly
+      // like the initial "Colour the Medusa chain" move, before
+      // anything else is attempted.
+      strongLinkGraph ??= this.medusaFinder.buildStrongLinkGraph(board, workingCandidates)
+      const growthMove = this.findMedusaGrowthMove(nodeMap, strongLinkGraph, promotionMove.colored)
+      if (growthMove) {
+        for (const n of growthMove.colored) {
+          nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+        }
+        growthMove.id = `medusa-growth-${counter++}`
+        moves.push(growthMove)
+      }
+      return true
+    }
+
     for (;;) {
+      // Exhaustive continuation only: once an elimination has been applied,
+      // promotions come before everything else, eliminations included.
+      // (Before the first elimination the order is the original one -
+      // eliminations, then promotion - so the first elimination found is the
+      // same with or without exhaustive.)
+      if (continuing && applyPromotion()) {
+        continue
+      }
+
       // Check for an elimination after every single new coloring, not just
       // once the extension is fully exhausted - as soon as one is
       // available, stop growing the chain further and surface it, rather
       // than colouring dozens more (unneeded) candidates first.
-      const eliminationMoves = this.findEliminationMoves(Array.from(nodeMap.values()), board, candidates)
-      if (eliminationMoves.length > 0) {
+      const eliminationMoves = this.findEliminationMoves(Array.from(nodeMap.values()), board, workingCandidates)
+      // A mass elimination proves a whole side false, so it ends the
+      // technique outright, exhaustive or not: nothing is left to colour.
+      const isMassElimination = eliminationMoves.length === 1 && eliminationMoves[0].kind === 'mass-elimination'
+      if (eliminationMoves.length > 0 && (!exhaustive || isMassElimination)) {
         moves.push(...eliminationMoves)
         return { moves }
       }
 
-      // Promotion is checked - and taken - before any extension attempt,
-      // on every iteration: once two opposite-side colours are proven, that
-      // proof doesn't get any more or less true by waiting, and a
-      // proactive promotion can itself unlock strong-link growth (see
-      // below) or a mass elimination the caller would otherwise have to
-      // wait an extra round-trip through this loop to reach. It isn't an
-      // extension of either side - it's what resolves the two sides
-      // against each other - so it doesn't participate in the turn
-      // alternation below.
-      const promotionMove = this.findPromotionMove(nodeMap)
-      if (promotionMove) {
-        for (const n of promotionMove.colored) {
-          nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+      if (continuing) {
+        const solutionMove = this.findColouringSolutionMove(nodeMap, board)
+        if (solutionMove) {
+          moves.push(solutionMove)
+          return { moves }
         }
-        promotionMove.id = `promotion-${counter++}`
-        moves.push(promotionMove)
+        if (!Array.from(nodeMap.values()).some((n) => !isPrimary(n.color))) {
+          // Every dragon colour has been promoted to its medusa colour.
+          return { moves: moves.slice(0, lastEliminationEnd) }
+        }
+      }
 
-        // A newly-promoted candidate is now genuinely known true, not just
-        // "true if this side is true" - so it can have its own strong
-        // links (conjugate pairs, bivalue cells) that were never part of
-        // the original Medusa chain (Dragon's extension rules don't follow
-        // strong links, only colour visibility), reaching cells the
-        // original chain never touched. Surfaced as its own step, exactly
-        // like the initial "Colour the Medusa chain" move, before
-        // anything else is attempted.
-        strongLinkGraph ??= this.medusaFinder.buildStrongLinkGraph(board, candidates)
-        const growthMove = this.findMedusaGrowthMove(nodeMap, strongLinkGraph, promotionMove.colored)
-        if (growthMove) {
-          for (const n of growthMove.colored) {
-            nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
-          }
-          growthMove.id = `medusa-growth-${counter++}`
-          moves.push(growthMove)
+      if (eliminationMoves.length > 0) {
+        // Exhaustive, and not a mass elimination: report it, then carry on
+        // from the state where it has been applied.
+        moves.push(...eliminationMoves)
+        lastEliminationEnd = moves.length
+        if (workingCandidates === candidates) {
+          workingCandidates = cloneCandidates(candidates)
         }
+        for (const move of eliminationMoves) {
+          for (const { row, col, digit } of move.eliminated) {
+            workingCandidates[row][col][digit - 1] = false
+          }
+        }
+        strongLinkGraph = null
+        continuing = true
+        continue
+      }
+
+      if (!continuing && applyPromotion()) {
         continue
       }
 
       let move =
-        this.findExtensionRule1Move(nodeMap, board, candidates, turnPrimary) ??
-        this.findExtensionRule2Move(nodeMap, board, candidates, turnPrimary) ??
-        this.findExtensionHiddenSingleMove(nodeMap, board, candidates, turnPrimary) ??
+        this.findExtensionRule1Move(nodeMap, board, workingCandidates, turnPrimary) ??
+        this.findExtensionRule2Move(nodeMap, board, workingCandidates, turnPrimary) ??
+        this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, turnPrimary) ??
         (options.dynamic
-          ? this.findExtensionRule3Move(nodeMap, board, candidates, turnPrimary, allowedRule3Techniques, aicLimitPerStep)
+          ? this.findExtensionRule3Move(
+              nodeMap,
+              board,
+              workingCandidates,
+              turnPrimary,
+              allowedRule3Techniques,
+              aicLimitPerStep,
+            )
           : null)
       let extendedPrimary = turnPrimary
       if (!move) {
         extendedPrimary = oppositePrimary(turnPrimary)
         move =
-          this.findExtensionRule1Move(nodeMap, board, candidates, extendedPrimary) ??
-          this.findExtensionRule2Move(nodeMap, board, candidates, extendedPrimary) ??
-          this.findExtensionHiddenSingleMove(nodeMap, board, candidates, extendedPrimary) ??
+          this.findExtensionRule1Move(nodeMap, board, workingCandidates, extendedPrimary) ??
+          this.findExtensionRule2Move(nodeMap, board, workingCandidates, extendedPrimary) ??
+          this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, extendedPrimary) ??
           (options.dynamic
             ? this.findExtensionRule3Move(
                 nodeMap,
                 board,
-                candidates,
+                workingCandidates,
                 extendedPrimary,
                 allowedRule3Techniques,
                 aicLimitPerStep,
@@ -429,8 +522,10 @@ export class SudokuDragonFinder {
             : null)
       }
       if (!move) {
-        // Nothing actionable came out of the extension - not worth surfacing.
-        return null
+        // Nothing actionable came out of the extension. Not worth surfacing
+        // - unless exhaustive mode has already reported eliminations, in
+        // which case those stand and only the dead-end tail is dropped.
+        return continuing ? { moves: moves.slice(0, lastEliminationEnd) } : null
       }
       for (const n of move.colored) {
         nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
@@ -489,8 +584,9 @@ export class SudokuDragonFinder {
     return {
       id: '',
       kind: 'medusa-growth',
-      description: `Promoting reaches further Medusa candidates via strong links: ${parts.join(', ')}.`,
-      colored: added,
+description: `Medusa extension(s) using promoted Colour(s): ${added
+  .map((candidate) => `${candidate.digit}r${candidate.row + 1}c${candidate.col + 1}`)
+  .join(', ')}.`,      colored: added,
       eliminated: [],
       solved: [],
     }
@@ -1397,8 +1493,60 @@ export class SudokuDragonFinder {
     if (!isPrimary(b.color)) {
       colored.push({ ...b, color: primaryForSide(sideOf(b.color)) })
     }
-    const description = `${a.digit}${cellRef(a.row, a.col)} and ${b.digit}${cellRef(b.row, b.col)} are coloured in ${colorLabel(a.color)} and ${colorLabel(b.color)}. Promote both colours to their primary Medusa colour.`
+    const description = `${a.digit}${cellRef(a.row, a.col)} and ${b.digit}${cellRef(b.row, b.col)} are coloured in ${colorLabel(a.color)} and ${colorLabel(b.color)}. Promote both colours to their primary Medusa colour (if not already Medusa).`
     return { id: '', kind: 'promotion', description, colored, eliminated: [], solved: [] }
+  }
+
+  /** Exhaustive mode only: if one side's nodes (primary or dragon) between
+   * them cover every empty cell, assuming that side true fills the whole
+   * grid. Callers must already have ruled out a mass elimination (which
+   * would show that side contradicting itself), so what's left is a
+   * conflict-free full grid - and a valid puzzle has just one solution, so
+   * it's the solution. The same reliance on uniqueness as Unique Rectangle
+   * Type 1. Returns null if neither side, or both sides, cover the grid
+   * (two conflict-free full grids would mean two solutions, so there's no
+   * telling which is meant). */
+  private findColouringSolutionMove(nodeMap: Map<string, DragonNode>, board: Board): DragonMove | null {
+    const sidesByCell = new Map<string, Set<Side>>()
+    for (const n of nodeMap.values()) {
+      const key = cellKey(n.row, n.col)
+      const sides = sidesByCell.get(key) ?? new Set<Side>()
+      sides.add(sideOf(n.color))
+      sidesByCell.set(key, sides)
+    }
+
+    const covers: Record<Side, boolean> = { A: true, B: true }
+    let emptyCells = 0
+    for (let row = 0; row < BOARD_SIZE; row++) {
+      for (let col = 0; col < BOARD_SIZE; col++) {
+        if (board[row][col] !== 0) {
+          continue
+        }
+        emptyCells++
+        const sides = sidesByCell.get(cellKey(row, col))
+        covers.A &&= sides?.has('A') ?? false
+        covers.B &&= sides?.has('B') ?? false
+        if (!covers.A && !covers.B) {
+          return null
+        }
+      }
+    }
+    if (emptyCells === 0 || covers.A === covers.B) {
+      return null
+    }
+
+    const side: Side = covers.A ? 'A' : 'B'
+    return {
+      id: '',
+      kind: 'solution',
+      description: `Every empty cell is coloured ${colorLabel(primaryForSide(side))} (or its dragon colour), so that colouring is the solution.`,
+      colored: [],
+      provenTrueColor: primaryForSide(side),
+      eliminated: [],
+      solved: Array.from(nodeMap.values())
+        .filter((n) => sideOf(n.color) === side)
+        .map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
+    }
   }
 
   private findEliminationMoves(nodes: DragonNode[], board: Board, candidates: CandidateGrid): DragonMove[] {
@@ -1433,7 +1581,7 @@ export class SudokuDragonFinder {
             return this.buildMassMove(
               nodes,
               sideOf(a.color),
-              `In ${cellRef(a.row, a.col)}, ${a.digit} (${colorLabel(a.color)}) and ${b.digit} (${colorLabel(b.color)}) are on the same side, so that side is false.`,
+              `In ${cellRef(a.row, a.col)}, ${a.digit} (${colorLabel(a.color)}) and ${b.digit} (${colorLabel(b.color)}) are colours belonging to the same Medusa color, so that Medusa color is false.`,
             )
           }
         }
@@ -1453,7 +1601,7 @@ export class SudokuDragonFinder {
         return this.buildMassMove(
           nodes,
           sideOf(a.color),
-          `${a.digit} in ${cellRef(a.row, a.col)} (${colorLabel(a.color)}) and ${cellRef(b.row, b.col)} (${colorLabel(b.color)}) are on the same side, so that side is false.`,
+          `${a.digit} in ${cellRef(a.row, a.col)} (${colorLabel(a.color)}) and ${cellRef(b.row, b.col)} (${colorLabel(b.color)}) are colours belonging to the same Medusa color, so that Medusa color is false.`,
         )
       }
     }

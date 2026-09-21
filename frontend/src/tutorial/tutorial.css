@@ -1,0 +1,544 @@
+/* How It Works page. The boards inside reuse the app's own .grid/.box/.cell/
+   .candidate rules and technique-* colours from App.css; everything here is
+   either page layout or a small `tutorial-*` addition on top of those. */
+
+.tutorial-page {
+  --t-bg: #f8fafc;
+  --t-surface: #ffffff;
+  --t-border: #e2e8f0;
+  --t-text: #0f172a;
+  --t-muted: #475569;
+  --t-accent: #2563eb;
+  --t-accent-soft: #eff6ff;
+  --t-accent-text: #1d4ed8;
+  --t-good: #16a34a;
+
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  overflow-y: auto;
+  background: var(--t-bg);
+  color: var(--t-text);
+}
+
+/* ---- header + tabs ---- */
+
+.tutorial-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--t-bg);
+  border-bottom: 1px solid var(--t-border);
+}
+
+.tutorial-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0.85rem 1rem 0.4rem;
+}
+
+.tutorial-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.03em;
+}
+
+.tutorial-tabs {
+  display: flex;
+  gap: 0.25rem;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+  overflow-x: auto;
+}
+
+.tutorial-tab {
+  flex: none;
+  padding: 0.6rem 1rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: transparent;
+  color: var(--t-muted);
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+
+.tutorial-tab:hover {
+  color: var(--t-text);
+  background: var(--t-accent-soft);
+}
+
+.tutorial-tab.active {
+  color: var(--t-accent-text);
+  border-bottom-color: var(--t-accent);
+  background: transparent;
+}
+
+.tutorial-content {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1.1rem 1rem 3.5rem;
+}
+
+.tutorial-tagline {
+  margin: 0 0 1.25rem;
+  font-size: 1.1rem;
+  line-height: 1.4;
+  color: var(--t-muted);
+}
+
+.tutorial-empty {
+  color: var(--t-muted);
+}
+
+/* ---- the board, scaled down ---- */
+
+.grid.tutorial-grid {
+  flex: none;
+  container-type: inline-size;
+  box-shadow: 0 8px 22px -14px rgb(15 23 42 / 0.5);
+}
+
+.grid.tutorial-grid-md {
+  width: min(100%, 26rem);
+}
+
+.grid.tutorial-grid-lg {
+  width: min(100%, 33rem);
+}
+
+/* Type scales with the board itself, so a phone-width board stays legible. */
+.tutorial-grid .cell {
+  font-size: 5.6cqw;
+  cursor: default;
+}
+
+.tutorial-grid .cell:hover:not(.given) {
+  background: var(--grid-bg);
+}
+
+.tutorial-grid .candidate {
+  font-size: max(8px, 2.75cqw);
+}
+
+.tutorial-grid .cell.tutorial-unit,
+.tutorial-grid .cell.tutorial-unit:hover:not(.given) {
+  background: #e4ebfa;
+}
+
+.tutorial-grid .cell.tutorial-placed,
+.tutorial-grid .cell.tutorial-placed:hover:not(.given) {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.tutorial-grid .candidate.tutorial-dim {
+  opacity: 0.82;
+}
+
+/* The candidate that just got its colour: a dark ring, popped in once. */
+.tutorial-grid .candidate.tutorial-fresh {
+  position: relative;
+  z-index: 2;
+  outline: 2.5px solid #0f172a;
+  border-radius: 999px;
+  animation: tutorial-pop 0.55s ease-out;
+}
+
+@keyframes tutorial-pop {
+  0% {
+    transform: scale(1.7);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.tutorial-links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.tutorial-link-strong {
+  stroke: #dc2626;
+  stroke-width: 7;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+.tutorial-link-sees {
+  stroke: #0f172a;
+  stroke-width: 5;
+  stroke-dasharray: 12 9;
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+
+.tutorial-arrowhead {
+  fill: #dc2626;
+}
+
+/* ---- step player (the colouring tabs) ---- */
+
+.tutorial-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.9rem;
+}
+
+.tutorial-pill {
+  border-radius: 999px;
+  padding: 0.4rem 0.95rem;
+  font-size: 0.88rem;
+  color: var(--t-muted);
+  background: var(--t-surface);
+  border: 1px solid var(--t-border);
+}
+
+.tutorial-pill.active {
+  color: var(--t-accent-text);
+  border-color: var(--t-accent);
+  background: var(--t-accent-soft);
+}
+
+.tutorial-lesson-hint {
+  margin: 0 0 0.9rem;
+  font-weight: 600;
+  color: var(--t-text);
+}
+
+.tutorial-player {
+  display: grid;
+  grid-template-columns: minmax(0, 33rem) minmax(15rem, 1fr);
+  gap: 1.75rem;
+  align-items: start;
+}
+
+.tutorial-player-board {
+  min-width: 0;
+}
+
+.tutorial-player-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.tutorial-step-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--t-muted);
+}
+
+.tutorial-badge {
+  display: inline-block;
+  margin-right: 0.45rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--t-accent-text);
+  background: var(--t-accent-soft);
+  border: 1px solid var(--t-accent);
+  vertical-align: middle;
+}
+
+.tutorial-step-meta .tutorial-badge {
+  margin-right: 0;
+}
+
+.tutorial-caption {
+  margin: 0;
+  min-height: 4.3em;
+  font-size: 1.2rem;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.tutorial-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tutorial-dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--t-accent);
+  background: transparent;
+}
+
+.tutorial-dot.done {
+  background: var(--t-accent);
+  opacity: 0.55;
+}
+
+.tutorial-dot.active {
+  background: var(--t-accent);
+  opacity: 1;
+  transform: scale(1.25);
+}
+
+.tutorial-controls {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.tutorial-controls button {
+  min-width: 6.5rem;
+  padding: 0.65rem 1.1rem;
+  font-size: 1rem;
+}
+
+.tutorial-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 0.2rem 0 0;
+  padding: 0.7rem 0 0;
+  list-style: none;
+  border-top: 1px solid var(--t-border);
+  font-size: 0.8rem;
+  color: var(--t-muted);
+}
+
+.tutorial-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tutorial-legend-note {
+  opacity: 0.85;
+}
+
+.tutorial-swatch {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+}
+
+.tutorial-swatch-blue {
+  background: #38bdf8;
+}
+.tutorial-swatch-yellow {
+  background: #fde047;
+}
+.tutorial-swatch-darkBlue {
+  background: #1d4ed8;
+}
+.tutorial-swatch-orange {
+  background: #fb923c;
+}
+.tutorial-swatch-eliminated {
+  background: #f80909;
+}
+.tutorial-swatch-solved {
+  background: #86efac;
+}
+.tutorial-swatch-link {
+  width: 1.4rem;
+  height: 0.22rem;
+  border-radius: 999px;
+  background: #dc2626;
+}
+.tutorial-swatch-helper {
+  border-radius: 0.2rem;
+  box-shadow: inset 0 0 0 3px #4ade80;
+}
+
+/* ---- basics: every step on screen at once ---- */
+
+.tutorial-basics {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.tutorial-card {
+  padding: 1.2rem 1.3rem 1.4rem;
+  background: var(--t-surface);
+  border: 1px solid var(--t-border);
+  border-radius: 1rem;
+}
+
+.tutorial-card h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.tutorial-card-blurb {
+  margin: 0 0 1rem;
+  color: var(--t-muted);
+}
+
+.tutorial-example + .tutorial-example {
+  margin-top: 1.4rem;
+  padding-top: 1.2rem;
+  border-top: 1px dashed var(--t-border);
+}
+
+.tutorial-example h3 {
+  margin: 0 0 0.7rem;
+  font-size: 1rem;
+}
+
+.tutorial-example-hint {
+  margin-left: 0.4rem;
+  font-weight: 400;
+  color: var(--t-muted);
+  font-size: 0.88rem;
+}
+
+.tutorial-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2.6rem;
+  align-items: flex-start;
+}
+
+.tutorial-figure {
+  position: relative;
+  margin: 0;
+  flex: 1 1 18rem;
+  max-width: 26rem;
+}
+
+.tutorial-figure figcaption {
+  margin-top: 0.6rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.tutorial-figure:not(:last-child)::after {
+  content: '→';
+  position: absolute;
+  top: 11rem;
+  right: -1.9rem;
+  width: 1.4rem;
+  text-align: center;
+  font-size: 1.7rem;
+  color: var(--t-muted);
+}
+
+/* ---- narrow screens ---- */
+
+@media (max-width: 52rem) {
+  .tutorial-player {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tutorial-caption {
+    min-height: 0;
+  }
+
+  .tutorial-figure:not(:last-child)::after {
+    display: none;
+  }
+
+  .tutorial-strip {
+    gap: 1.2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-grid .candidate.tutorial-fresh {
+    animation: none;
+  }
+}
+
+/* ---- dark mode (the boards themselves stay light, like the main board's
+   "light grid" mode - the colour classes are designed for it) ---- */
+
+@media (prefers-color-scheme: dark) {
+  .tutorial-page {
+    --t-bg: #020617;
+    --t-surface: #0f172a;
+    --t-border: #1e293b;
+    --t-text: #e2e8f0;
+    --t-muted: #94a3b8;
+    --t-accent: #60a5fa;
+    --t-accent-soft: #16233a;
+    --t-accent-text: #93c5fd;
+  }
+
+  .tutorial-tab {
+    background: transparent;
+    color: var(--t-muted);
+    border-color: transparent;
+  }
+
+  .tutorial-tab.active {
+    color: var(--t-accent-text);
+    border-bottom-color: var(--t-accent);
+  }
+
+  .tutorial-dot {
+    background: transparent;
+    border-color: var(--t-accent);
+  }
+
+  .tutorial-dot.done,
+  .tutorial-dot.active {
+    background: var(--t-accent);
+  }
+
+  .tutorial-pill {
+    background: var(--t-surface);
+    color: var(--t-muted);
+    border-color: var(--t-border);
+  }
+
+  .tutorial-pill.active {
+    background: var(--t-accent-soft);
+    color: var(--t-accent-text);
+    border-color: var(--t-accent);
+  }
+
+  .tutorial-badge {
+    background: var(--t-accent-soft);
+  }
+}
+
+/* The toolbar button that opens the page (it lives in App.tsx's toolbar). */
+.how-it-works-trigger {
+  font-weight: 600;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.how-it-works-trigger:hover {
+  border-color: #1d4ed8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .how-it-works-trigger {
+    color: #93c5fd;
+    border-color: #1e3a5f;
+    background: #16233a;
+  }
+
+  .how-it-works-trigger:hover {
+    border-color: #60a5fa;
+  }
+}

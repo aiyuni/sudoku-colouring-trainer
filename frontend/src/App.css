@@ -262,6 +262,170 @@
   opacity: 0.7;
 }
 
+/* Round "?" button beside Generate Puzzle - opens the Settings guide modal
+   (HelpModal.tsx; its wording lives in helpContent.ts). */
+.help-button {
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.help-button:hover {
+  border-color: #1d4ed8;
+}
+
+/* The Settings guide modal. */
+.help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 0.55);
+}
+
+.help-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(44rem, 100%);
+  max-height: min(90vh, 50rem);
+  background: #fff;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 1rem;
+  box-shadow: 0 24px 60px -20px rgb(15 23 42 / 0.55);
+  overflow: hidden;
+}
+
+.help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.help-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.help-close {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.help-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.25rem 0.5rem;
+}
+
+.help-intro {
+  white-space: pre-line;
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #1e3a8a;
+  background: #eff6ff;
+  border-left: 4px solid #3b82f6;
+  border-radius: 0.4rem;
+}
+
+.help-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  color: #1d4ed8;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.help-section {
+  margin: 0 0 1.4rem;
+}
+
+.help-section-title {
+  margin: 0 0 0.5rem;
+  padding-bottom: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #475569;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.help-section-intro {
+  margin: 0 0 0.7rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.help-item {
+  margin: 0 0 0.6rem;
+  padding: 0.7rem 0.85rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.6rem;
+}
+
+.help-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.3rem;
+}
+
+.help-item-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.help-default {
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  color: #166534;
+  background: #dcfce7;
+  border-radius: 999px;
+}
+
+.help-item-description {
+  margin: 0.3rem 0 0;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: #334155;
+}
+
+.help-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid #e2e8f0;
+}
+
 .menu-select {
   display: flex;
   flex-direction: column;
@@ -1298,6 +1462,58 @@ button.primary {
 
   .dropdown-hint {
     color: #94a3b8;
+  }
+
+  .help-button {
+    color: #93c5fd;
+    border-color: #1e3a5f;
+    background: #16233a;
+  }
+
+  .help-button:hover {
+    border-color: #60a5fa;
+  }
+
+  .help-modal {
+    background: #1e293b;
+    color: #e2e8f0;
+    border-color: #334155;
+  }
+
+  .help-header,
+  .help-footer,
+  .help-section-title {
+    border-color: #334155;
+  }
+
+  .help-link {
+    background: none;
+    color: #93c5fd;
+  }
+
+  .help-intro {
+    color: #bfdbfe;
+    background: #16233a;
+    border-left-color: #60a5fa;
+  }
+
+  .help-section-title,
+  .help-section-intro {
+    color: #94a3b8;
+  }
+
+  .help-item {
+    background: #1a2434;
+    border-color: #334155;
+  }
+
+  .help-default {
+    color: #bbf7d0;
+    background: #14361f;
+  }
+
+  .help-item-description {
+    color: #cbd5e1;
   }
 
   .menu-checkbox {

@@ -32,6 +32,7 @@ import {
   type DragonMove,
   type Rule3Technique,
 } from './sudoku/SudokuDragonFinder'
+import { foldDragonMoves } from './sudoku/dragonReplay'
 import { SudokuDragonPuzzleGenerator } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
@@ -46,6 +47,14 @@ import { SudokuSingleFinder, type SingleAssignment } from './sudoku/SudokuSingle
 import { SudokuSolver } from './sudoku/SudokuSolver'
 import { SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
 import { SAMPLE_PUZZLE, type Board, type CandidateColor, type CandidateColorGrid, type CandidateGrid } from './sudoku/types'
+import HelpModal from './HelpModal'
+import TutorialPage from './tutorial/TutorialPage'
+import {
+  DEFAULT_SETTINGS,
+  DRAGON_GENERATION_TIMEOUT_OPTIONS,
+  MIN_BASE_MEDUSA_CANDIDATES,
+  RULE3_TECHNIQUE_LABELS,
+} from './settingsDefaults'
 import './App.css'
 
 const solver = new SudokuSolver()
@@ -68,40 +77,6 @@ const dragonFinder = new SudokuDragonFinder()
 const NINE = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 const APP_VERSION = 'v0.1.0-beta'
-/** Threshold for the "Require a bigger base Medusa" toggle - the minimum
- * number of coloured candidates the *starting*, stuck Medusa chain (before
- * any Dragon Colouring extension) must have for a Dragon Colouring or
- * Dynamic Dragon Colouring instance to be shown. */
-const MIN_BASE_MEDUSA_CANDIDATES = 3
-
-/** Options for the "Dragon puzzle generation timeout" setting - how long
- * SudokuDragonPuzzleGenerator.generate() keeps retrying fresh random grids
- * before giving up. A Dynamic-Dragon-only checkpoint especially can be
- * rare, so this is mostly a "how long am I willing to wait" dial rather
- * than a safety cap. */
-const DRAGON_GENERATION_TIMEOUT_OPTIONS: Array<{ label: string; ms: number }> = [
-  { label: '15 seconds', ms: 15_000 },
-  { label: '30 seconds', ms: 30_000 },
-  { label: '1 minute', ms: 60_000 },
-  { label: '2 minutes', ms: 120_000 },
-  { label: '5 minutes', ms: 300_000 },
-]
-const DEFAULT_DRAGON_GENERATION_TIMEOUT_MS = 30_000
-
-/** Display labels for the Dynamic Dragon Colouring settings checkboxes -
- * one per Rule3Technique, in the same order findExtensionRule3Move checks
- * them in. */
-const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
-  'hidden single': 'Hidden Single',
-  'locked candidate': 'Locked Candidates',
-  'naked pair': 'Naked Pair',
-  'naked triple': 'Naked Triple',
-  'naked quad': 'Naked Quad',
-  'hidden pair': 'Hidden Pair',
-  UR: 'Unique Rectangle',
-  'short single-digit aic': 'Short Single-Digit AIC' ,
-  'short aic': 'Short AIC (links <= 5)',
-}
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -164,15 +139,19 @@ const DEFAULT_CANDIDATE_COLOR_SWATCHES: Array<{ id: CandidateColor; label: strin
 
 const CANDIDATE_SWATCH_COLORS_STORAGE_KEY = 'sudoku-solver-candidate-swatch-colors'
 
+function defaultSwatchColors(): Record<CandidateColor, string> {
+  return Object.fromEntries(DEFAULT_CANDIDATE_COLOR_SWATCHES.map((s) => [s.id, s.hex])) as Record<
+    CandidateColor,
+    string
+  >
+}
+
 /** Reads any user-customized swatch colours from localStorage, falling
  * back to (and filling in any missing/invalid entries with) the defaults
  * above - corrupt or inaccessible storage is treated the same as "nothing
  * saved yet" rather than breaking the page. */
 function loadCustomSwatchColors(): Record<CandidateColor, string> {
-  const colors = Object.fromEntries(DEFAULT_CANDIDATE_COLOR_SWATCHES.map((s) => [s.id, s.hex])) as Record<
-    CandidateColor,
-    string
-  >
+  const colors = defaultSwatchColors()
   try {
     const raw = localStorage.getItem(CANDIDATE_SWATCH_COLORS_STORAGE_KEY)
     if (!raw) {
@@ -324,39 +303,6 @@ interface TechniqueInstance {
   moves?: DragonMove[]
 }
 
-/** Every candidate's color as of `moves[0..stepIndex]` - a promotion move
- * overwrites an earlier color for the same candidate rather than adding a
- * second one, so each candidate shows only its latest color at that step. */
-function foldDragonMoves(moves: DragonMove[], stepIndex: number) {
-  const colorByKey = new Map<string, { row: number; col: number; digit: number; color: DragonMove['colored'][number]['color'] }>()
-  const eliminatedCandidates: TechniqueCandidateRef[] = []
-  const solvedCandidates: TechniqueCandidateRef[] = []
-
-  const lastIndex = Math.min(stepIndex, moves.length - 1)
-  for (let i = 0; i <= lastIndex; i++) {
-    const move = moves[i]
-    for (const n of move.colored) {
-      colorByKey.set(`${n.row},${n.col},${n.digit}`, n)
-    }
-    eliminatedCandidates.push(...move.eliminated)
-    solvedCandidates.push(...move.solved)
-  }
-
-  const blueCandidates: TechniqueCandidateRef[] = []
-  const yellowCandidates: TechniqueCandidateRef[] = []
-  const darkBlueCandidates: TechniqueCandidateRef[] = []
-  const orangeCandidates: TechniqueCandidateRef[] = []
-  for (const n of colorByKey.values()) {
-    const ref = { row: n.row, col: n.col, digit: n.digit }
-    if (n.color === 'blue') blueCandidates.push(ref)
-    else if (n.color === 'yellow') yellowCandidates.push(ref)
-    else if (n.color === 'darkBlue') darkBlueCandidates.push(ref)
-    else orangeCandidates.push(ref)
-  }
-
-  return { blueCandidates, yellowCandidates, darkBlueCandidates, orangeCandidates, eliminatedCandidates, solvedCandidates }
-}
-
 function cellRef(row: number, col: number): string {
   return `r${row + 1}c${col + 1}`
 }
@@ -379,6 +325,7 @@ function computeStuckDragonExtensions(
   candidates: CandidateGrid,
   filter: DragonChainFilter = 'any',
   minBaseCandidates = 0,
+  exhaustive = true,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -396,7 +343,7 @@ function computeStuckDragonExtensions(
     if (!stuck) {
       continue
     }
-    const result = dragonFinder.extend(chain, board, candidates)
+    const result = dragonFinder.extend(chain, board, candidates, { exhaustive })
     if (!result) {
       continue
     }
@@ -422,6 +369,7 @@ function computeStuckDynamicDragonExtensions(
   minBaseCandidates = 0,
   allowedRule3Techniques: ReadonlySet<Rule3Technique> = new Set(DEFAULT_RULE3_TECHNIQUES),
   aicLimitPerStep = true,
+  exhaustive = true,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -439,11 +387,19 @@ function computeStuckDynamicDragonExtensions(
     if (!stuck) {
       continue
     }
+    // Exhaustive is left off for this check: whether plain Dragon resolves a
+    // chain at all is decided by its first elimination, so running on past
+    // it would only cost time.
     if (dragonFinder.extend(chain, board, candidates)) {
       // Plain Dragon Colouring already handles this chain.
       continue
     }
-    const result = dragonFinder.extend(chain, board, candidates, { dynamic: true, allowedRule3Techniques, aicLimitPerStep })
+    const result = dragonFinder.extend(chain, board, candidates, {
+      dynamic: true,
+      allowedRule3Techniques,
+      aicLimitPerStep,
+      exhaustive,
+    })
     if (!result) {
       continue
     }
@@ -493,6 +449,7 @@ function buildTechniqueInstances(
   shortAicEnabled = true,
   shortSingleDigitAicEnabled = true,
   aicLimitPerDragonStep = true,
+  exhaustiveDragon = true,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -921,13 +878,29 @@ function buildTechniqueInstances(
   const buildDragonInstance = (idPrefix: string, name: string, chainKey: string, moves: DragonMove[]): TechniqueInstance => {
     const lastMove = moves[moves.length - 1]
     // A mass elimination's solves/eliminates are both just consequences of
-    // one fact - a side proved false, so the other side is proved true -
-    // so that's the fact worth showing, not the tally of what followed
-    // from it.
+    // one fact - a side proved false, so the other side is proved true - so
+    // that fact leads the summary. The tally still follows it, but as the
+    // number of candidates that actually disappear from the grid, not a
+    // count of what the move log lists: that covers the Dragon steps' own
+    // eliminations plus everything the now-true colour forces (the false
+    // colour's candidates, and the peers of every cell it solves), each
+    // candidate counted once.
     const summaryText =
       lastMove.kind === 'mass-elimination' && lastMove.provenTrueColor
-        ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} is true`
-        : (() => {
+        ? (() => {
+            const fact = `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} is true`
+            const eliminatedCount = countEffectiveEliminations(
+              board,
+              candidates,
+              foldDragonMoves(moves, moves.length - 1),
+            )
+            return eliminatedCount > 0
+              ? `${fact}; eliminates ${eliminatedCount} candidate${eliminatedCount === 1 ? '' : 's'}`
+              : fact
+          })()
+        : lastMove.kind === 'solution' && lastMove.provenTrueColor
+          ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} covers every empty cell, solving the puzzle`
+          : (() => {
             const eliminated = moves.flatMap((m) => m.eliminated)
             const solvedCount = moves.reduce((n, m) => n + m.solved.length, 0)
             const summary: string[] = []
@@ -953,7 +926,13 @@ function buildTechniqueInstances(
     }
   }
 
-  const dragonExtensions = computeStuckDragonExtensions(board, candidates, 'any', minBaseMedusaCandidates)
+  const dragonExtensions = computeStuckDragonExtensions(
+    board,
+    candidates,
+    'any',
+    minBaseMedusaCandidates,
+    exhaustiveDragon,
+  )
   dragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dragonExtensions) {
     instances.push(buildDragonInstance('dragon', 'Dragon Colouring', chainKey, moves))
@@ -965,6 +944,7 @@ function buildTechniqueInstances(
     minBaseMedusaCandidates,
     allowedRule3Techniques,
     aicLimitPerDragonStep,
+    exhaustiveDragon,
   )
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
@@ -1009,6 +989,39 @@ function fullTechniqueEffect(
     return { eliminatedCandidates: fold.eliminatedCandidates, solvedCandidates: fold.solvedCandidates }
   }
   return { eliminatedCandidates: instance.eliminatedCandidates, solvedCandidates: instance.solvedCandidates }
+}
+
+/** How many pencil marks a technique's full effect removes from the grid:
+ * every candidate that is marked before and gone after applying it,
+ * counting peers wiped by a solve and the other digits of a solved cell,
+ * but not the solved digit itself (that mark becomes the cell's value, it
+ * isn't eliminated). Each mark counts once however many times the effect
+ * lists it. */
+function countEffectiveEliminations(
+  board: Board,
+  candidates: CandidateGrid,
+  effect: { eliminatedCandidates: TechniqueCandidateRef[]; solvedCandidates: TechniqueCandidateRef[] },
+): number {
+  const after = applyTechniqueEffect(board, candidates, effect).candidates
+  const solvedDigitByCell = new Map<string, number>()
+  for (const { row, col, digit } of effect.solvedCandidates) {
+    solvedDigitByCell.set(`${row},${col}`, digit)
+  }
+  let count = 0
+  for (let row = 0; row < BOARD_SIZE; row++) {
+    for (let col = 0; col < BOARD_SIZE; col++) {
+      if (board[row][col] !== 0) {
+        continue
+      }
+      const solvedDigit = solvedDigitByCell.get(`${row},${col}`)
+      for (let digit = 1; digit <= 9; digit++) {
+        if (candidates[row][col][digit - 1] && !after[row][col][digit - 1] && digit !== solvedDigit) {
+          count++
+        }
+      }
+    }
+  }
+  return count
 }
 
 function applyTechniqueEffect(
@@ -1131,6 +1144,7 @@ function buildSolvePath(
   shortAicEnabled = true,
   shortSingleDigitAicEnabled = true,
   aicLimitPerDragonStep = true,
+  exhaustiveDragon = true,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1163,6 +1177,7 @@ function buildSolvePath(
       shortAicEnabled,
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
+      exhaustiveDragon,
     )
     const chosen = pickGreedyInstance(instances)
     const stepElapsed = Date.now() - stepStart
@@ -1204,7 +1219,7 @@ function buildSolvePath(
           : 'got stuck - no known technique applies from here; the rest would need brute force'
   log.push(`Total: ${steps.length} step${steps.length === 1 ? '' : 's'} found in ${elapsed}ms - ${stopSummary}.`)
   for (const line of log) {
-    console.log(`[Solve Path] ${line}`)
+    //console.log(`[Solve Path] ${line}`)
   }
 
   return { steps, solvedFully, stoppedReason, log }
@@ -1415,14 +1430,6 @@ function TechniquePanel({
             <button type="button" className="solve-path-generate-button" onClick={onGenerateSolvePath}>
               {solvePath ? 'Regenerate' : 'Generate'}
             </button>
-            <button
-              type="button"
-              className={['solve-path-log-toggle', showSolvePathLog ? 'active' : ''].filter(Boolean).join(' ')}
-              aria-pressed={showSolvePathLog}
-              onClick={onToggleSolvePathLog}
-            >
-              {showSolvePathLog ? 'Hide search log' : 'View search log'}
-            </button>
           </div>
           {showSolvePathLog && (
             <div className="solve-path-log" role="log">
@@ -1438,10 +1445,10 @@ function TechniquePanel({
               Puzzle is not solvable due to {UNSOLVABLE_REASON_TEXT[solvability.reason]}.
             </p>
           ) : !solvePath ? (
-            <p className="technique-empty">Click "Generate" to find a solve path from the current grid.</p>
+            <p className="technique-empty">Click "Generate" to find a solve path from the current grid.   See the Settings or Help section to customize what the solver finds. </p>
           ) : solvePath.steps.length === 0 ? (
             <p className="technique-empty">
-              {solvePath.solvedFully ? 'Already solved.' : 'Either there are no full candidates, or no known technique applies - the puzzle would need brute force from here.'}
+              {solvePath.solvedFully ? 'Already solved.' : "Either there are no full candidates (Click 'Autofill All'), or the solver doesn't know a technique to solve it - brute force is required from here."}
             </p>
           ) : (
             <>
@@ -1641,7 +1648,7 @@ export default function App() {
   // it, so it survives switching tabs and applying its own steps for free.
   const [solvePath, setSolvePath] = useState<SolvePathResult | null>(null)
   const [showSolvePathLog, setShowSolvePathLog] = useState(false)
-  const [keyboardMode, setKeyboardMode] = useState<'solution' | 'candidate'>('solution')
+  const [keyboardMode, setKeyboardMode] = useState<'solution' | 'candidate'>(DEFAULT_SETTINGS.keyboardMode)
   const [paintColor, setPaintColor] = useState<CandidateColor | null>(null)
   const [swatchColors, setSwatchColors] = useState<Record<CandidateColor, string>>(loadCustomSwatchColors)
 
@@ -1660,26 +1667,42 @@ export default function App() {
     () => DEFAULT_CANDIDATE_COLOR_SWATCHES.map((swatch) => ({ ...swatch, hex: swatchColors[swatch.id] })),
     [swatchColors],
   )
-  const [showStrongLinks, setShowStrongLinks] = useState(false)
-  const [showBivalueCells, setShowBivalueCells] = useState(false)
-  const [gridWhiteMode, setGridWhiteMode] = useState(true)
-  const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(false)
+  // Every setting below starts from DEFAULT_SETTINGS (settingsDefaults.ts),
+  // the same object resetSettingsToDefaults() and the help page read - so
+  // change a default there, not here.
+  const [showStrongLinks, setShowStrongLinks] = useState(DEFAULT_SETTINGS.showStrongLinks)
+  const [showBivalueCells, setShowBivalueCells] = useState(DEFAULT_SETTINGS.showBivalueCells)
+  const [gridWhiteMode, setGridWhiteMode] = useState(DEFAULT_SETTINGS.gridWhiteMode)
+  const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(DEFAULT_SETTINGS.minBaseMedusaFilter)
   const [allowedRule3Techniques, setAllowedRule3Techniques] = useState<Set<Rule3Technique>>(
-    () => new Set(DEFAULT_RULE3_TECHNIQUES),
+    () => new Set(DEFAULT_SETTINGS.allowedRule3Techniques),
   )
-  const [shortAicEnabled, setShortAicEnabled] = useState(false)
-  const [shortSingleDigitAicEnabled, setShortSingleDigitAicEnabled] = useState(false)
+  const [shortAicEnabled, setShortAicEnabled] = useState(DEFAULT_SETTINGS.shortAicEnabled)
+  const [shortSingleDigitAicEnabled, setShortSingleDigitAicEnabled] = useState(
+    DEFAULT_SETTINGS.shortSingleDigitAicEnabled,
+  )
   // Invariants, kept by the toggle handlers rather than derived at read
   // time (so the stored state never says something the checkboxes can't):
   //  - shortAicEnabled implies shortSingleDigitAicEnabled
   //  - a disregard flag can only be false while its technique is enabled
   //  - dragonGenerationDisregardsAic can only be false while
   //    dragonGenerationDisregardsSingleDigitAic is also false
-  const [dragonGenerationDisregardsSingleDigitAic, setDragonGenerationDisregardsSingleDigitAic] = useState(true)
-  const [dragonGenerationDisregardsAic, setDragonGenerationDisregardsAic] = useState(true)
-  const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(true)
-  const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(false)
-  const [dragonGenerationTimeoutMs, setDragonGenerationTimeoutMs] = useState(DEFAULT_DRAGON_GENERATION_TIMEOUT_MS)
+  const [dragonGenerationDisregardsSingleDigitAic, setDragonGenerationDisregardsSingleDigitAic] = useState(
+    DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic,
+  )
+  const [dragonGenerationDisregardsAic, setDragonGenerationDisregardsAic] = useState(
+    DEFAULT_SETTINGS.dragonGenerationDisregardsAic,
+  )
+  const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
+  const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
+  const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
+    DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics,
+  )
+  const [dragonGenerationTimeoutMs, setDragonGenerationTimeoutMs] = useState(
+    DEFAULT_SETTINGS.dragonGenerationTimeoutMs,
+  )
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [tutorialOpen, setTutorialOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [solving, setSolving] = useState(false)
@@ -1808,6 +1831,7 @@ export default function App() {
         shortAicEnabled,
         shortSingleDigitAicEnabled,
         aicLimitPerDragonStep,
+        exhaustiveDragonColouring,
       ),
     [
       board,
@@ -1817,6 +1841,7 @@ export default function App() {
       shortAicEnabled,
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
+      exhaustiveDragonColouring,
     ],
   )
   // Looked up by id (rather than kept as its own state) so that if the
@@ -1928,6 +1953,7 @@ export default function App() {
       shortAicEnabled,
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
+      exhaustiveDragonColouring,
     )
   }, [
     board,
@@ -1937,6 +1963,7 @@ export default function App() {
     shortAicEnabled,
     shortSingleDigitAicEnabled,
     aicLimitPerDragonStep,
+    exhaustiveDragonColouring,
   ])
   const solvability = useMemo(
     () => derivePuzzleSolvability(puzzleSolveResult.status, candidatesAccurate, bruteSolvePath?.solvedFully ?? false),
@@ -2530,11 +2557,19 @@ export default function App() {
   }
 
   function onDragonColouringBivalueSeeded() {
-    runDragonColouring(computeStuckDragonExtensions, 'bivalue-seeded', 'Dragon Colouring (bivalue-seeded)')
+    runDragonColouring(
+      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring),
+      'bivalue-seeded',
+      'Dragon Colouring (bivalue-seeded)',
+    )
   }
 
   function onDragonColouringAny() {
-    runDragonColouring(computeStuckDragonExtensions, 'any', 'Dragon Colouring (any Medusa)')
+    runDragonColouring(
+      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring),
+      'any',
+      'Dragon Colouring (any Medusa)',
+    )
   }
 
   function onDynamicDragonColouring() {
@@ -2547,6 +2582,7 @@ export default function App() {
           0,
           effectiveAllowedRule3Techniques,
           aicLimitPerDragonStep,
+          exhaustiveDragonColouring,
         )
         if (dynamicDragonAutoSolveIncludesAics) {
           return results
@@ -2677,6 +2713,35 @@ export default function App() {
     setAicLimitPerDragonStep((current) => !current)
   }
 
+  /** Puts every user-adjustable setting back to its default: everything in
+   * DEFAULT_SETTINGS plus the custom candidate paint colours (which are
+   * saved to localStorage by the effect above, so this overwrites what was
+   * saved too). Deliberately leaves the puzzle, undo history, the current
+   * selection, and the technique currently being viewed alone - those are
+   * work in progress, not settings. */
+  function resetSettingsToDefaults() {
+    setKeyboardMode(DEFAULT_SETTINGS.keyboardMode)
+    setShowStrongLinks(DEFAULT_SETTINGS.showStrongLinks)
+    setShowBivalueCells(DEFAULT_SETTINGS.showBivalueCells)
+    setGridWhiteMode(DEFAULT_SETTINGS.gridWhiteMode)
+    setMinBaseMedusaFilter(DEFAULT_SETTINGS.minBaseMedusaFilter)
+    setShortSingleDigitAicEnabled(DEFAULT_SETTINGS.shortSingleDigitAicEnabled)
+    setShortAicEnabled(DEFAULT_SETTINGS.shortAicEnabled)
+    setAllowedRule3Techniques(new Set(DEFAULT_SETTINGS.allowedRule3Techniques))
+    setExhaustiveDragonColouring(DEFAULT_SETTINGS.exhaustiveDragonColouring)
+    setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
+    setDynamicDragonAutoSolveIncludesAics(DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics)
+    setDragonGenerationDisregardsSingleDigitAic(DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic)
+    setDragonGenerationDisregardsAic(DEFAULT_SETTINGS.dragonGenerationDisregardsAic)
+    setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
+    setSwatchColors(defaultSwatchColors())
+    showToast('Settings reset to defaults.')
+  }
+
+  function toggleExhaustiveDragonColouring() {
+    setExhaustiveDragonColouring((current) => !current)
+  }
+
   function toggleDynamicDragonAutoSolveIncludesAics() {
     setDynamicDragonAutoSolveIncludesAics((current) => !current)
   }
@@ -2793,6 +2858,7 @@ export default function App() {
           shortAicEnabled,
           shortSingleDigitAicEnabled,
           aicLimitPerDragonStep,
+          exhaustiveDragonColouring,
         )
         commitGrid({ board, givens, candidates }, nextSolvePath)
         setActiveSolvePathIndex(null)
@@ -3156,6 +3222,24 @@ export default function App() {
         </div>
 
         <div className="toolbar-group toolbar-group-end">
+          <button
+            type="button"
+            className="how-it-works-trigger"
+            title="Learn the colouring techniques, step by step"
+            onClick={() => setTutorialOpen(true)}
+          >
+            Techniques overview
+          </button>
+          <button
+            type="button"
+            className="help-button"
+            aria-label="Open the settings guide"
+            aria-haspopup="dialog"
+            title="What do the settings do?"
+            onClick={() => setHelpOpen(true)}
+          >
+            ?
+          </button>
           <DropdownMenu
             label={
               <>
@@ -3254,6 +3338,17 @@ export default function App() {
           </DropdownMenu>
 
           <DropdownMenu label="⚙ Settings" buttonClassName="settings-trigger" panelClassName="settings-panel">
+            <div className="dropdown-section">
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={resetSettingsToDefaults}
+                title="Puts every setting, including your custom paint colours, back to its default. Your puzzle is not touched."
+              >
+                Reset to defaults
+              </button>
+            </div>
+            <div className="dropdown-divider" />
             <div className="dropdown-section">
               <h3 className="dropdown-section-title">Keyboard input</h3>
               <button
@@ -3361,6 +3456,17 @@ export default function App() {
             <div className="dropdown-divider" />
             <div className="dropdown-section">
               <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
+              <label
+                className="menu-checkbox"
+                title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
+              >
+                <input
+                  type="checkbox"
+                  checked={exhaustiveDragonColouring}
+                  onChange={toggleExhaustiveDragonColouring}
+                />
+                Exhaustive Dragon Colouring
+              </label>
               <label
                 className="menu-checkbox"
                 title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
@@ -3965,6 +4071,17 @@ export default function App() {
           {toastMessage}
         </div>
       )}
+
+      {helpOpen && (
+        <HelpModal
+          onClose={() => setHelpOpen(false)}
+          onOpenTutorial={() => {
+            setHelpOpen(false)
+            setTutorialOpen(true)
+          }}
+        />
+      )}
+      {tutorialOpen && <TutorialPage onClose={() => setTutorialOpen(false)} />}
     </main>
   )
 }
