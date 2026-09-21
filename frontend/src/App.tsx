@@ -1453,7 +1453,7 @@ function TechniquePanel({
           ) : (
             <>
               <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
-                Click on a step and click on the "Apply" button to execute up to and including the step.
+                Click on a step and click on the <b>"Apply"</b> button to execute up to and including the step. <br></br> <b>Note</b>: "Exhaustive Dragon Colouring" setting value has a huge impact on the solve path (default is ON).
               </p>
               {solvePathStale && (
                 <p className="solve-path-stale-warning">

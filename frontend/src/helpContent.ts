@@ -103,7 +103,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         settingKey: 'exhaustiveDragonColouring',
         description:
           'When ON, Dragon Colouring does not stop at the first elimination; it will continue to colour, only stopping when one colour is proven false or no more eliminations can be found. ' +
-          'Turn this ON to mimic human-friendly solving approach and to see promotions.\n\n' +
+          'Turn this ON to mimic human-friendly solving approach and to see promotions. \n\n' +
           'When OFF, it stops at the first elimination it finds, mimicing AIC-like behaviour.',
       },
       {
