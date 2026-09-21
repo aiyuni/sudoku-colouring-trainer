@@ -62,14 +62,14 @@ export const HELP_SECTIONS: HelpSection[] = [
         name: 'Enable Short Single-Digit AIC',
         settingKey: 'shortSingleDigitAicEnabled',
         description:
-          'When OFF, the solver never looks for short single-digit AIC chains. Leave it off ' +
-          'for a pure Colouring experience. Turning it off also turns off Short AIC, which depends on it.',
+          'When OFF, the solver never looks for short single-digit AIC chains (length <= 3). Leave it OFF ' +
+          'for a pure Colouring experience.',
       },
       {
         name: 'Enable Short AIC',
         settingKey: 'shortAicEnabled',
         description:
-          'When OFF, the solver never looks for the general short AIC chains. It can only be turned on while Short Single-Digit AIC is on.',
+          'When OFF, the solver never looks for the general short AIC chains (length <= 5). It can only be turned ON while Short Single-Digit AIC is ON.',
       },
       {
         name: `Dragon: require ${MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates`,
@@ -90,9 +90,8 @@ export const HELP_SECTIONS: HelpSection[] = [
         name: 'Select Dynamic Dragon Colouring techniques',
         //settingKey: 'allowedRule3Techniques',
         description:
-          'Tick the techniques you want it to lean on. Hidden Single, Locked Candidates and Naked Pair are always on ' +
-          'and cannot be unticked. The two AIC options are off by default, and stay greyed out until the matching ' +
-          '"Enable ... AIC" setting above is on.',
+          'Tick the techniques you want Dragon Colouring to use. Hidden Single, Locked Candidates and Naked Pair are always ON.  \n\n' +
+          'AIC options for Dragon Colouring cannot be turned ON unless AIC is enabled (see above).',
       },
     ],
   },
@@ -111,15 +110,15 @@ export const HELP_SECTIONS: HelpSection[] = [
         name: 'Limit to 1 AIC per step',
         settingKey: 'aicLimitPerDragonStep',
         description:
-          'Only matters when an AIC technique is allowed for Dynamic Dragon Colouring. When ON, a single Dragon Colouring step may ' +
-          'utlize at most one AIC. Turn it off to allow as many as the step needs, which makes the Dragon more powerful, but is unrealistic to find for a human player.',
+          'When ON and AIC is enabled for Dynamic Dragon Colouring, a single Dragon Colouring step may ' +
+          'utlize at most one AIC. \n\n Turn it OFF to allow as many as the step needs, which makes the Dragon more powerful, but makes the technique much more harder to find for a human player.',
       },
       {
         name: 'Auto-solve includes AICs',
         settingKey: 'dynamicDragonAutoSolveIncludesAics',
         description:
           'When OFF, the Dynamic Dragon Colouring auto-solve feature skips any Dragon whose steps needed an AIC, even ' +
-          'if AICs are enabled. Turn it on to let auto-solve use those too.',
+          'if AICs are enabled. Turn it ON to let auto-solve use those too.',
       },
     ],
   },
@@ -131,16 +130,16 @@ export const HELP_SECTIONS: HelpSection[] = [
         name: 'Dragon Generation disregards single digit AIC',
         settingKey: 'dragonGenerationDisregardsSingleDigitAic',
         description:
-          'When on, a generated puzzle may also have a short single-digit AIC available at the same time as the Dragon ' +
-          'technique. When off, generation rejects any position where one exists, so Dragon is the only way forward. ' +
-          'It can only be turned off while Short Single-Digit AIC is enabled.',
+          'When ON, a generated puzzle may also have a short single-digit AIC available at the same time as the Dragon ' +
+          'technique. When OFF, generation rejects any position where one exists, so Dragon is the only way forward. ' +
+          'It can only be turned OFF while Short Single-Digit AIC is enabled.',
       },
       {
         name: 'Dragon Generation disregards AIC',
         settingKey: 'dragonGenerationDisregardsAic',
         description:
-          'The same idea for the general short AIC. It can only be turned off when the setting above is also off and ' +
-          'Short AIC is enabled. \n\n  Turning this option ON makes Dragon puzzle generation slower.',
+          'The same functionality as above, except for short AICs (length <=5). It can only be turned OFF when the setting above is also OFF and ' +
+          'Short AIC is enabled. \n\n  Note that turning this option OFF makes it harder to generate a Dynamic Dragon Colouring puzzle.',
       },
       {
         name: 'Dragon puzzle generation max timeout',

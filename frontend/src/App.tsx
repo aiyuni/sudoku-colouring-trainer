@@ -1218,9 +1218,9 @@ function buildSolvePath(
           ? `stopped after hitting the ${SOLVE_PATH_MAX_STEPS}-step safety cap`
           : 'got stuck - no known technique applies from here; the rest would need brute force'
   log.push(`Total: ${steps.length} step${steps.length === 1 ? '' : 's'} found in ${elapsed}ms - ${stopSummary}.`)
-  for (const line of log) {
+  //for (const line of log) {
     //console.log(`[Solve Path] ${line}`)
-  }
+ // }
 
   return { steps, solvedFully, stoppedReason, log }
 }
@@ -1336,7 +1336,7 @@ function TechniquePanel({
   onGenerateSolvePath,
   solvePathStale,
   showSolvePathLog,
-  onToggleSolvePathLog,
+  //onToggleSolvePathLog,
   solvability,
 }: TechniquePanelProps) {
   return (
