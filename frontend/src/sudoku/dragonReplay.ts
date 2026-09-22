@@ -6,13 +6,21 @@ import type { DragonCandidateRef, DragonColor, DragonMove } from './SudokuDragon
  * Eliminated/solved candidates just accumulate.
  *
  * Shared by the Techniques panel's Dragon stepper (App.tsx) and the How It
- * Works tutorial, so both replay a move log identically. */
-export function foldDragonMoves(moves: DragonMove[], stepIndex: number) {
+ * Works tutorial, so both replay a move log identically.
+ *
+ * `includeCurrentMove` (default true, what every caller but the live
+ * substep player wants) controls whether the move *at* `stepIndex` itself
+ * counts, or only the moves before it. A Dynamic Dragon Colouring step's
+ * own "substep" player (see App.tsx's DragonStepper) reveals that one
+ * move's chained reasoning one technique at a time; until it reaches the
+ * last technique, the move's own conclusion (the cell it colours) hasn't
+ * been "revealed" yet, so this withholds it from the fold. */
+export function foldDragonMoves(moves: DragonMove[], stepIndex: number, includeCurrentMove = true) {
   const colorByKey = new Map<string, { row: number; col: number; digit: number; color: DragonColor }>()
   const eliminatedCandidates: DragonCandidateRef[] = []
   const solvedCandidates: DragonCandidateRef[] = []
 
-  const lastIndex = Math.min(stepIndex, moves.length - 1)
+  const lastIndex = Math.min(stepIndex, moves.length - 1) - (includeCurrentMove ? 0 : 1)
   for (let i = 0; i <= lastIndex; i++) {
     const move = moves[i]
     for (const n of move.colored) {

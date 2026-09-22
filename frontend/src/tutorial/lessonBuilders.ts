@@ -642,8 +642,11 @@ const TECHNIQUE_PHRASE: Record<string, string> = {
   'naked quad': 'a naked quad',
   'hidden pair': 'a hidden pair',
   UR: 'a Unique Rectangle',
+  'bivalue oddagon': 'a Bivalue Oddagon',
+  'bug plus one': 'a BUG+1',
   'short single-digit aic': 'a single-digit AIC',
   'short aic': 'a short AIC',
+  'generic aic': 'a generic AIC',
 }
 
 function joinPhrases(items: string[]): string {

@@ -1,4 +1,6 @@
 import { cloneBoard, cloneCandidates, markedCandidateDigits } from './boardUtils'
+import { SudokuBivalueOddagonFinder, type BivalueOddagonInstance } from './SudokuBivalueOddagonFinder'
+import { SudokuBugPlusOneFinder, type BugPlusOneInstance } from './SudokuBugPlusOneFinder'
 import { SudokuHiddenPairFinder, type HiddenPairInstance } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder, type LockedCandidateInstance } from './SudokuLockedCandidateFinder'
 import {
@@ -11,9 +13,15 @@ import {
 import { SudokuNakedSubsetFinder, type NakedSubsetInstance } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder, type NakedPairInstance } from './SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE, SudokuRules } from './SudokuRules'
-import { classifyShortAic, SudokuShortAicFinder, type ShortAicInstance } from './SudokuShortAicFinder'
+import { SudokuGenericAicFinder } from './SudokuGenericAicFinder'
+import {
+  buildLinkGraphs,
+  classifyShortAic,
+  SudokuShortAicFinder,
+  type ShortAicInstance,
+} from './SudokuShortAicFinder'
 import { sudokuUnits } from './SudokuUnits'
-import { SudokuUniqueRectangleFinder, type UniqueRectangleType1Instance } from './SudokuUniqueRectangleFinder'
+import { SudokuUniqueRectangleFinder, type UniqueRectangleInstance } from './SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './types'
 
 export type PrimaryColor = 'blue' | 'yellow'
@@ -127,12 +135,60 @@ export interface DragonMove {
    * deduction. That internal elimination isn't a real board elimination
    * this move claims (it's consumed within the chain's own reasoning), so
    * it's rendered as a hollow circle + faint cross rather than the usual
-   * red elimination pip - see App.tsx's technique-aic-hypothetical class. */
+   * red elimination pip - see App.tsx's technique-hypothetical-elimination
+   * class. Kept (rather than folded into `substeps` below) for backward
+   * compatibility with callers, like the tutorial, that want this move's
+   * whole AIC chain at once and don't care about substep-by-substep
+   * reveal. */
   aicChains?: Array<{
     candidates: DragonCandidateRef[]
     links: Array<{ from: DragonCandidateRef; to: DragonCandidateRef; kind: 'strong' | 'weak' }>
     hypotheticalEliminations: DragonCandidateRef[]
   }>
+  /** extension-rule3 only, present whenever its chain used at least one
+   * technique (so always, in practice) - the same reasoning `description`
+   * states as one flowing sentence, split into one entry per technique
+   * application instead, in the order they were chained. Lets the UI step
+   * through a multi-technique chain's substeps one at a time (a separate,
+   * optional control from the main move-by-move stepper) instead of always
+   * showing the whole chain's basis cells and internal eliminations at
+   * once - though showing them all at once (every substep "revealed") is
+   * still the default, unnavigated view. */
+  substeps?: DragonRule3Substep[]
+}
+
+/** One technique application within a Dynamic Dragon Colouring step's
+ * chained reasoning (see DragonMove.substeps) - either an antecedent that
+ * had to fire first to make the next one possible, or the final technique
+ * that actually forces the colouring. 'hidden single' never appears here,
+ * for the same reason it's excluded from `dynamicTechniques` - see that
+ * field's doc comment. */
+export interface DragonRule3Substep {
+  technique: Exclude<Rule3Technique, 'hidden single'>
+  /** This substep's own clause, exactly as it appears joined into the
+   * move's full `description` (e.g. "a Locked Candidate (Pointing) for 5
+   * in {r1c2, r1c3}, which eliminates 5r1c4"). */
+  clause: string
+  /** The cells this technique rests on - not cumulative; each substep
+   * supplies only its own, unlike DragonMove.dynamicTechniqueCells which
+   * is every substep's basis cells flattened together. */
+  basisCells: readonly (readonly [number, number])[]
+  /** The candidates this substep's technique eliminates - a hypothetical/
+   * internal deduction the chain's reasoning depends on, not a real board
+   * elimination this move claims (DragonMove.eliminated only ever holds
+   * the move's actual, final real-board effect, which for extension-rule3
+   * is always empty - a Dynamic Dragon Colouring step only ever colours a
+   * candidate, it never itself removes one from the board). Drawn with a
+   * hollow red circle + cross, the same marker an AIC's own hypothetical
+   * elimination has always had - see technique-hypothetical-elimination in
+   * App.css. */
+  eliminatedCandidates: readonly DragonCandidateRef[]
+  /** Present only when `technique` is an AIC (either kind) - its own chain
+   * for the purple/curved-line rendering the standalone technique gets. */
+  aic?: {
+    candidates: DragonCandidateRef[]
+    links: Array<{ from: DragonCandidateRef; to: DragonCandidateRef; kind: 'strong' | 'weak' }>
+  }
 }
 
 export interface DragonResult {
@@ -219,8 +275,14 @@ export type Rule3Technique =
   | 'naked quad'
   | 'hidden pair'
   | 'UR'
+  | 'bivalue oddagon'
+  | 'bug plus one'
   | 'short single-digit aic'
   | 'short aic'
+  | 'generic aic'
+
+/** The Rule3Techniques that are AIC chains (each one's own kind of chain). */
+export type AicTechnique = 'short single-digit aic' | 'short aic' | 'generic aic'
 
 /** Every Rule3Technique, in the order the settings checkboxes and
  * findExtensionRule3Move's own simulation loop present them. 'naked pair'
@@ -235,22 +297,31 @@ export const ALL_RULE3_TECHNIQUES: readonly Rule3Technique[] = [
   'naked quad',
   'hidden pair',
   'UR',
+  'bivalue oddagon',
+  'bug plus one',
   'short single-digit aic',
   'short aic',
+  'generic aic',
 ]
 
-/** ALL_RULE3_TECHNIQUES minus both AIC kinds - the default allowed set for
+/** ALL_RULE3_TECHNIQUES minus every AIC kind - the default allowed set for
  * both extend()'s own fallback and the app's initial settings state, since
- * either AIC is opt-in for Dynamic Dragon Colouring even though both are on
- * by default for the standalone solver. */
+ * the AIC kinds are all opt-in for Dynamic Dragon Colouring, while Bivalue
+ * Oddagon and BUG+1 (like every other non-AIC technique here) default to
+ * on. */
 export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TECHNIQUES.filter(
-  (t) => t !== 'short aic' && t !== 'short single-digit aic',
+  (t) => t !== 'short aic' && t !== 'short single-digit aic' && t !== 'generic aic',
 )
 
 interface Rule3ChainStep {
   technique: Rule3Technique
   basisCells: readonly (readonly [number, number])[]
   affectedCells: readonly (readonly [number, number])[]
+  /** The exact candidates (with digit) this step eliminates - the same
+   * information `affectedCells` gives as bare cells, kept alongside it
+   * because the resulting DragonMove.substeps entry (and the antecedent
+   * clause's own "which eliminates ..." wording) needs the digit too. */
+  eliminatedCandidates: readonly DragonCandidateRef[]
   /** The "we have a ..." fragment for this step, used only when it turns
    * out to be a dependency of the final technique. */
   antecedentClause: string
@@ -319,7 +390,10 @@ export class SudokuDragonFinder {
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
   private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
   private readonly shortAicFinder = new SudokuShortAicFinder()
+  private readonly genericAicFinder = new SudokuGenericAicFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
+  private readonly bugPlusOneFinder = new SudokuBugPlusOneFinder()
+  private readonly bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
 
   extend(
     medusaChain: MedusaChain,
@@ -384,6 +458,56 @@ export class SudokuDragonFinder {
     const allowedRule3Techniques = new Set(options.allowedRule3Techniques ?? DEFAULT_RULE3_TECHNIQUES)
     allowedRule3Techniques.add('naked pair')
     const aicLimitPerStep = options.aicLimitPerStep ?? true
+
+    // Extension Rules 1, 2, 3, and the plain hidden-single check are all
+    // that ever grows a side, and every one of them is a pure function of
+    // that side's own coloured cells (board/candidates too, but those are
+    // fixed for the whole call outside exhaustive mode) - Rule 1/2 look only
+    // at *this side's* visibility, and the hidden-single/Rule 3 hypothetical
+    // board is built from this side's own cells alone (buildHypotheticalBoard).
+    // So when a side's turn comes up with nothing from any of the four, it
+    // will keep coming up with nothing on every later turn until that side
+    // gains a cell, or (exhaustive mode) an elimination changes the working
+    // candidates - the other side colouring more cells in the meantime can
+    // only make these rules *less* likely to find something, since all of
+    // them skip a cell that's already coloured, never more. That "found
+    // nothing" answer is remembered per side rather than re-simulated on
+    // every alternating turn - Rule 3 in particular reruns every finder on a
+    // cloned board, so repeating all four for both sides every turn was most
+    // of this loop's cost. A side's exact node *set* only ever grows once a
+    // key is added (recolouring via promotion never adds/removes a key), so
+    // node *count* alone safely stands in for "have we added anything new".
+    let candidatesVersion = 0
+    const sideNothing: Record<Side, { sideNodes: number; version: number } | null> = { A: null, B: null }
+    const findExtensionForSide = (primary: PrimaryColor): DragonMove | null => {
+      const side = sideOfPrimary(primary)
+      let sideNodes = 0
+      for (const n of nodeMap.values()) {
+        if (sideOf(n.color) === side) {
+          sideNodes++
+        }
+      }
+      const known = sideNothing[side]
+      if (known && known.sideNodes === sideNodes && known.version === candidatesVersion) {
+        return null
+      }
+      const found =
+        this.findExtensionRule1Move(nodeMap, board, workingCandidates, primary) ??
+        this.findExtensionRule2Move(nodeMap, board, workingCandidates, primary) ??
+        this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, primary) ??
+        (options.dynamic
+          ? this.findExtensionRule3Move(
+              nodeMap,
+              board,
+              workingCandidates,
+              primary,
+              allowedRule3Techniques,
+              aicLimitPerStep,
+            )
+          : null)
+      sideNothing[side] = found ? null : { sideNodes, version: candidatesVersion }
+      return found
+    }
 
     let counter = 0
     // Whose turn it is to extend next - alternated after every extension
@@ -481,6 +605,7 @@ export class SudokuDragonFinder {
           }
         }
         strongLinkGraph = null
+        candidatesVersion++
         continuing = true
         continue
       }
@@ -489,37 +614,11 @@ export class SudokuDragonFinder {
         continue
       }
 
-      let move =
-        this.findExtensionRule1Move(nodeMap, board, workingCandidates, turnPrimary) ??
-        this.findExtensionRule2Move(nodeMap, board, workingCandidates, turnPrimary) ??
-        this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, turnPrimary) ??
-        (options.dynamic
-          ? this.findExtensionRule3Move(
-              nodeMap,
-              board,
-              workingCandidates,
-              turnPrimary,
-              allowedRule3Techniques,
-              aicLimitPerStep,
-            )
-          : null)
+      let move = findExtensionForSide(turnPrimary)
       let extendedPrimary = turnPrimary
       if (!move) {
         extendedPrimary = oppositePrimary(turnPrimary)
-        move =
-          this.findExtensionRule1Move(nodeMap, board, workingCandidates, extendedPrimary) ??
-          this.findExtensionRule2Move(nodeMap, board, workingCandidates, extendedPrimary) ??
-          this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, extendedPrimary) ??
-          (options.dynamic
-            ? this.findExtensionRule3Move(
-                nodeMap,
-                board,
-                workingCandidates,
-                extendedPrimary,
-                allowedRule3Techniques,
-                aicLimitPerStep,
-              )
-            : null)
+        move = findExtensionForSide(extendedPrimary)
       }
       if (!move) {
         // Nothing actionable came out of the extension. Not worth surfacing
@@ -592,27 +691,6 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     }
   }
 
-  private seesColor(
-    nodeMap: Map<string, DragonNode>,
-    row: number,
-    col: number,
-    digit: number,
-    color: DragonColor,
-  ): boolean {
-    for (const n of nodeMap.values()) {
-      if (n.color !== color || n.digit !== digit) {
-        continue
-      }
-      if (n.row === row && n.col === col) {
-        continue
-      }
-      if (sameUnit([row, col], [n.row, n.col])) {
-        return true
-      }
-    }
-    return false
-  }
-
   private seesSide(
     nodeMap: Map<string, DragonNode>,
     row: number,
@@ -647,13 +725,24 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     primary: PrimaryColor,
   ): DragonMove | null {
     const side = sideOfPrimary(primary)
+    // This colour's nodes grouped by digit, built once: seesColor would
+    // otherwise rescan the whole node map for every cell of every unit, and
+    // this runs on every simulated step of every stuck chain.
+    const primaryByDigit: DragonNode[][] = Array.from({ length: 9 }, () => [])
+    for (const n of nodeMap.values()) {
+      if (n.color === primary) {
+        primaryByDigit[n.digit - 1].push(n)
+      }
+    }
+    const seesPrimary = (r: number, c: number, digit: number) =>
+      primaryByDigit[digit - 1].some((n) => !(n.row === r && n.col === c) && sameUnit([r, c], [n.row, n.col]))
     for (const unit of sudokuUnits()) {
       for (let digit = 1; digit <= 9; digit++) {
         const cellsWithDigit = unit.filter(([r, c]) => board[r][c] === 0 && candidates[r][c][digit - 1])
         if (cellsWithDigit.length < 2) {
           continue
         }
-        const notSeeing = cellsWithDigit.filter(([r, c]) => !this.seesColor(nodeMap, r, c, digit, primary))
+        const notSeeing = cellsWithDigit.filter(([r, c]) => !seesPrimary(r, c, digit))
         if (notSeeing.length !== 1) {
           continue
         }
@@ -860,7 +949,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             [[hiddenSingle.row, hiddenSingle.col]],
             finalClause,
             { row: hiddenSingle.row, col: hiddenSingle.col, digit: hiddenSingle.digit, color: secondary },
-            hiddenSingle.unit,
+            { dependencyCells: hiddenSingle.unit },
           )
         }
       }
@@ -876,17 +965,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
           if (forced) {
             const finalClause = this.lockedCandidateFinalClause(secondary, locked, forced)
-            return this.buildRule3CombinedMove(primary, steps, 'locked candidate', locked.basisCells, finalClause, {
-              row: forced.row,
-              col: forced.col,
-              digit: forced.digit,
-              color: secondary,
-            })
+            return this.buildRule3CombinedMove(
+              primary,
+              steps,
+              'locked candidate',
+              locked.basisCells,
+              finalClause,
+              { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+              { finalEliminatedCandidates: locked.eliminations },
+            )
           }
           steps.push({
             technique: 'locked candidate',
             basisCells: locked.basisCells,
             affectedCells: uniqueCells(locked.eliminations),
+            eliminatedCandidates: locked.eliminations,
             antecedentClause: this.lockedCandidateAntecedentClause(locked),
           })
           appliedSomething = true
@@ -909,17 +1002,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
         if (forced) {
           const finalClause = this.nakedPairFinalClause(secondary, pair, forced)
-          return this.buildRule3CombinedMove(primary, steps, 'naked pair', pair.cells, finalClause, {
-            row: forced.row,
-            col: forced.col,
-            digit: forced.digit,
-            color: secondary,
-          })
+          return this.buildRule3CombinedMove(
+            primary,
+            steps,
+            'naked pair',
+            pair.cells,
+            finalClause,
+            { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+            { finalEliminatedCandidates: pair.eliminations },
+          )
         }
         steps.push({
           technique: 'naked pair',
           basisCells: pair.cells,
           affectedCells: uniqueCells(pair.eliminations),
+          eliminatedCandidates: pair.eliminations,
           antecedentClause: this.nakedPairAntecedentClause(pair),
         })
         appliedSomething = true
@@ -929,8 +1026,19 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      if (allowedTechniques.has('naked triple')) {
-        for (const triple of this.nakedSubsetFinder.findNakedTriples(hypBoard, hypCandidates)) {
+      // Triples and quads are found together (findNakedTriplesAndQuads
+      // shares its per-unit scan between the two sizes instead of each
+      // redoing it), but still applied in the same order as before - all
+      // triples get first refusal, quads are only tried once no triple
+      // eliminates anything.
+      const needsTriple = allowedTechniques.has('naked triple')
+      const needsQuad = allowedTechniques.has('naked quad')
+      const { triples, quads } = needsTriple || needsQuad
+        ? this.nakedSubsetFinder.findNakedTriplesAndQuads(hypBoard, hypCandidates)
+        : { triples: [], quads: [] }
+
+      if (needsTriple) {
+        for (const triple of triples) {
           if (triple.eliminations.length === 0) {
             continue
           }
@@ -940,17 +1048,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
           if (forced) {
             const finalClause = this.nakedSubsetFinalClause(secondary, triple, forced)
-            return this.buildRule3CombinedMove(primary, steps, 'naked triple', triple.cells, finalClause, {
-              row: forced.row,
-              col: forced.col,
-              digit: forced.digit,
-              color: secondary,
-            })
+            return this.buildRule3CombinedMove(
+              primary,
+              steps,
+              'naked triple',
+              triple.cells,
+              finalClause,
+              { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+              { finalEliminatedCandidates: triple.eliminations },
+            )
           }
           steps.push({
             technique: 'naked triple',
             basisCells: triple.cells,
             affectedCells: uniqueCells(triple.eliminations),
+            eliminatedCandidates: triple.eliminations,
             antecedentClause: this.nakedSubsetAntecedentClause(triple),
           })
           appliedSomething = true
@@ -961,8 +1073,8 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      if (allowedTechniques.has('naked quad')) {
-        for (const quad of this.nakedSubsetFinder.findNakedQuads(hypBoard, hypCandidates)) {
+      if (needsQuad) {
+        for (const quad of quads) {
           if (quad.eliminations.length === 0) {
             continue
           }
@@ -972,17 +1084,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
           if (forced) {
             const finalClause = this.nakedSubsetFinalClause(secondary, quad, forced)
-            return this.buildRule3CombinedMove(primary, steps, 'naked quad', quad.cells, finalClause, {
-              row: forced.row,
-              col: forced.col,
-              digit: forced.digit,
-              color: secondary,
-            })
+            return this.buildRule3CombinedMove(
+              primary,
+              steps,
+              'naked quad',
+              quad.cells,
+              finalClause,
+              { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+              { finalEliminatedCandidates: quad.eliminations },
+            )
           }
           steps.push({
             technique: 'naked quad',
             basisCells: quad.cells,
             affectedCells: uniqueCells(quad.eliminations),
+            eliminatedCandidates: quad.eliminations,
             antecedentClause: this.nakedSubsetAntecedentClause(quad),
           })
           appliedSomething = true
@@ -1004,17 +1120,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
           if (forced) {
             const finalClause = this.hiddenPairFinalClause(secondary, pair, forced)
-            return this.buildRule3CombinedMove(primary, steps, 'hidden pair', pair.cells, finalClause, {
-              row: forced.row,
-              col: forced.col,
-              digit: forced.digit,
-              color: secondary,
-            })
+            return this.buildRule3CombinedMove(
+              primary,
+              steps,
+              'hidden pair',
+              pair.cells,
+              finalClause,
+              { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+              { finalEliminatedCandidates: pair.eliminations },
+            )
           }
           steps.push({
             technique: 'hidden pair',
             basisCells: pair.cells,
             affectedCells: uniqueCells(pair.eliminations),
+            eliminatedCandidates: pair.eliminations,
             antecedentClause: this.hiddenPairAntecedentClause(pair),
           })
           appliedSomething = true
@@ -1026,39 +1146,43 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       }
 
       if (allowedTechniques.has('UR')) {
-        for (const ur of this.uniqueRectangleFinder.findType1Instances(hypBoard, hypCandidates)) {
-          const [er, ec] = ur.extraCell
-          if (ur.solvedDigit !== null) {
-            // The Unique Rectangle's own conclusion *is* the move - no need
-            // to also check for a newly-single-candidate cell, and no
-            // reason to keep simulating past it first.
-            const digit = ur.solvedDigit
+        for (const ur of this.uniqueRectangleFinder.find(hypBoard, hypCandidates)) {
+          if (ur.solvedCandidates.length > 0) {
+            // The Unique Rectangle's own conclusion *is* the move (Type 1's
+            // single-extra-candidate case only) - no need to also check for
+            // a newly-single-candidate cell, and no reason to keep
+            // simulating past it first.
+            const { row, col, digit } = ur.solvedCandidates[0]
             const finalClause = this.uniqueRectangleSolveFinalClause(secondary, ur)
             return this.buildRule3CombinedMove(primary, steps, 'UR', ur.cells, finalClause, {
-              row: er,
-              col: ec,
+              row,
+              col,
               digit,
               color: secondary,
             })
           }
-          if (ur.eliminatedDigits.length > 0) {
-            for (const digit of ur.eliminatedDigits) {
-              hypCandidates[er][ec][digit - 1] = false
+          if (ur.eliminatedCandidates.length > 0) {
+            for (const { row, col, digit } of ur.eliminatedCandidates) {
+              hypCandidates[row][col][digit - 1] = false
             }
             const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
             if (forced) {
               const finalClause = this.uniqueRectangleEliminationFinalClause(secondary, ur, forced)
-              return this.buildRule3CombinedMove(primary, steps, 'UR', ur.cells, finalClause, {
-                row: forced.row,
-                col: forced.col,
-                digit: forced.digit,
-                color: secondary,
-              })
+              return this.buildRule3CombinedMove(
+                primary,
+                steps,
+                'UR',
+                ur.cells,
+                finalClause,
+                { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+                { finalEliminatedCandidates: ur.eliminatedCandidates },
+              )
             }
             steps.push({
               technique: 'UR',
               basisCells: ur.cells,
-              affectedCells: [ur.extraCell],
+              affectedCells: uniqueCells(ur.eliminatedCandidates),
+              eliminatedCandidates: ur.eliminatedCandidates,
               antecedentClause: this.uniqueRectangleAntecedentClause(ur),
             })
             appliedSomething = true
@@ -1070,13 +1194,95 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      if (allowedTechniques.has('short single-digit aic') || allowedTechniques.has('short aic')) {
-        for (const aic of this.shortAicFinder.findShortAics(hypBoard, hypCandidates)) {
-          const technique = classifyShortAic(aic) === 'single-digit' ? 'short single-digit aic' : 'short aic'
-          if (!allowedTechniques.has(technique)) {
-            continue
+      if (allowedTechniques.has('bug plus one')) {
+        // Never a mid-chain antecedent - a BUG+1 is either the whole
+        // grid's one escape-hatch cell (and directly forces its own
+        // solution) or it doesn't apply at all, unlike every other
+        // technique here which can also just narrow things down.
+        const bugPlusOne = this.bugPlusOneFinder.find(hypBoard, hypCandidates)
+        if (bugPlusOne) {
+          const finalClause = this.bugPlusOneFinalClause(secondary, bugPlusOne)
+          return this.buildRule3CombinedMove(primary, steps, 'bug plus one', [bugPlusOne.cell], finalClause, {
+            row: bugPlusOne.cell[0],
+            col: bugPlusOne.cell[1],
+            digit: bugPlusOne.solvedDigit,
+            color: secondary,
+          })
+        }
+      }
+
+      if (allowedTechniques.has('bivalue oddagon')) {
+        for (const oddagon of this.bivalueOddagonFinder.find(hypBoard, hypCandidates)) {
+          if (oddagon.solvedCell) {
+            const finalClause = this.bivalueOddagonSolveFinalClause(secondary, oddagon)
+            return this.buildRule3CombinedMove(primary, steps, 'bivalue oddagon', oddagon.cells, finalClause, {
+              row: oddagon.solvedCell[0],
+              col: oddagon.solvedCell[1],
+              digit: oddagon.guardianDigit,
+              color: secondary,
+            })
           }
-          if (aicLimitPerStep && aicStepsUsed >= 1) {
+          if (oddagon.eliminations.length > 0) {
+            for (const { row, col, digit } of oddagon.eliminations) {
+              hypCandidates[row][col][digit - 1] = false
+            }
+            const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
+            if (forced) {
+              const finalClause = this.bivalueOddagonEliminationFinalClause(secondary, oddagon, forced)
+              return this.buildRule3CombinedMove(
+                primary,
+                steps,
+                'bivalue oddagon',
+                oddagon.cells,
+                finalClause,
+                { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
+                { finalEliminatedCandidates: oddagon.eliminations },
+              )
+            }
+            steps.push({
+              technique: 'bivalue oddagon',
+              basisCells: oddagon.cells,
+              affectedCells: uniqueCells(oddagon.eliminations),
+              eliminatedCandidates: oddagon.eliminations,
+              antecedentClause: this.bivalueOddagonAntecedentClause(oddagon),
+            })
+            appliedSomething = true
+            break
+          }
+        }
+      }
+      if (appliedSomething) {
+        continue
+      }
+
+      // AIC chains, shortest kind first: single-digit, then short, then
+      // generic. The generic search only runs when nothing shorter applied
+      // (it's a generator, so it's never started otherwise), and not at
+      // all once the per-step AIC limit is used up.
+      if (!(aicLimitPerStep && aicStepsUsed >= 1)) {
+        // Built once and handed to both finders when both might run - short
+        // and generic AIC otherwise each rebuild the identical link graph
+        // for the same hypBoard/hypCandidates, and with the per-step limit
+        // off this whole block can run dozens of times per chain.
+        const needsGraph =
+          allowedTechniques.has('short single-digit aic') ||
+          allowedTechniques.has('short aic') ||
+          allowedTechniques.has('generic aic')
+        const sharedGraph = needsGraph ? buildLinkGraphs(hypBoard, hypCandidates) : undefined
+        const aicsInOrder = function* (finder: SudokuDragonFinder): Generator<{ aic: ShortAicInstance; technique: AicTechnique }> {
+          if (allowedTechniques.has('short single-digit aic') || allowedTechniques.has('short aic')) {
+            for (const aic of finder.shortAicFinder.findShortAics(hypBoard, hypCandidates, sharedGraph)) {
+              yield { aic, technique: classifyShortAic(aic) === 'single-digit' ? 'short single-digit aic' : 'short aic' }
+            }
+          }
+          if (allowedTechniques.has('generic aic')) {
+            for (const aic of finder.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, sharedGraph)) {
+              yield { aic, technique: 'generic aic' }
+            }
+          }
+        }
+        for (const { aic, technique } of aicsInOrder(this)) {
+          if (!allowedTechniques.has(technique)) {
             continue
           }
 
@@ -1095,14 +1301,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               basisCells,
               finalClause,
               { row: forced.row, col: forced.col, digit: forced.digit, color: secondary },
-              undefined,
-              aic,
+              { finalAic: aic, finalEliminatedCandidates: aic.eliminations },
             )
           }
           steps.push({
             technique,
             basisCells,
             affectedCells: uniqueCells(aic.eliminations),
+            eliminatedCandidates: aic.eliminations,
             antecedentClause: this.shortAicAntecedentClause(aic, technique),
             aic,
           })
@@ -1159,24 +1365,35 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     finalBasisCells: readonly (readonly [number, number])[],
     finalClause: string,
     colored: DragonNode,
-    /** What dependency-tracking checks prior steps against - defaults to
-     * `finalBasisCells`, but a hidden single's real dependency is its
-     * whole unit (see findNewlyHiddenSingleCell), not just the one cell it
-     * resolves, so that case passes the unit's 9 cells here instead while
-     * still highlighting only the resolved cell via `finalBasisCells`. */
-    dependencyCells: readonly (readonly [number, number])[] = finalBasisCells,
-    /** Set only when `finalTechnique` is an AIC (either kind) - its chain
-     * data, folded into `aicChains` alongside any antecedent step that was
-     * also an AIC. */
-    finalAic?: ShortAicInstance,
+    options: {
+      /** What dependency-tracking checks prior steps against - defaults to
+       * `finalBasisCells`, but a hidden single's real dependency is its
+       * whole unit (see findNewlyHiddenSingleCell), not just the one cell
+       * it resolves, so that case passes the unit's 9 cells here instead
+       * while still highlighting only the resolved cell via
+       * `finalBasisCells`. */
+      dependencyCells?: readonly (readonly [number, number])[]
+      /** Set only when `finalTechnique` is an AIC (either kind) - its
+       * chain data, folded into `aicChains`/`substeps` alongside any
+       * antecedent step that was also an AIC. */
+      finalAic?: ShortAicInstance
+      /** The final technique's own eliminations (hidden single and a
+       * solving UR have none - they place a digit directly) - becomes the
+       * last substep's `eliminatedCandidates` and, joined into
+       * `finalClause` by the caller already, its own "which eliminates
+       * ..." wording. */
+      finalEliminatedCandidates?: readonly DragonCandidateRef[]
+    } = {},
   ): DragonMove {
+    const { dependencyCells = finalBasisCells, finalAic, finalEliminatedCandidates = [] } = options
     const antecedents = this.selectRelevantChainSteps(steps, dependencyCells)
     const clauses = [...antecedents.map((s) => s.antecedentClause), finalClause]
     // 'hidden single' is never labeled - see the dynamicTechniques doc
     // comment on DragonMove. It can still show up as `finalTechnique` here
     // (a hidden single that only emerged mid-chain, after some genuinely
     // dynamic antecedent), but only that antecedent is what made this
-    // chain need Dynamic Dragon Colouring in the first place.
+    // chain need Dynamic Dragon Colouring in the first place. Substeps
+    // exclude it the same way, for the same reason - see DragonRule3Substep.
     const labeledTechniques = [...antecedents.map((s) => s.technique), finalTechnique].filter(
       (t): t is Exclude<Rule3Technique, 'hidden single'> => t !== 'hidden single',
     )
@@ -1196,6 +1413,39 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             hypotheticalEliminations: aic.eliminations.map((e) => ({ row: e.row, col: e.col, digit: e.digit })),
           }))
         : undefined
+    const substeps: DragonRule3Substep[] = [
+      ...antecedents.map((s) => ({
+        technique: s.technique,
+        clause: s.antecedentClause,
+        basisCells: s.basisCells,
+        eliminatedCandidates: s.eliminatedCandidates,
+        aic: s.aic,
+      })),
+      {
+        technique: finalTechnique,
+        clause: finalClause,
+        basisCells: finalBasisCells,
+        eliminatedCandidates: finalEliminatedCandidates,
+        aic: finalAic,
+      },
+    ]
+      .filter((s): s is typeof s & { technique: Exclude<Rule3Technique, 'hidden single'> } => s.technique !== 'hidden single')
+      .map((s) => ({
+        technique: s.technique,
+        clause: s.clause,
+        basisCells: s.basisCells,
+        eliminatedCandidates: s.eliminatedCandidates,
+        aic: s.aic
+          ? {
+              candidates: s.aic.nodes.map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
+              links: s.aic.links.map((link) => ({
+                from: { row: link.from.row, col: link.from.col, digit: link.from.digit },
+                to: { row: link.to.row, col: link.to.col, digit: link.to.digit },
+                kind: link.kind,
+              })),
+            }
+          : undefined,
+      }))
     return {
       id: '',
       kind: 'extension-rule3',
@@ -1206,6 +1456,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       eliminated: [],
       solved: [],
       aicChains,
+      // Only ever empty when finalTechnique is 'hidden single' with zero
+      // antecedents - proven impossible in findExtensionRule3Move's own
+      // doc comment (a plain hidden single is always ruled out by
+      // extend()'s own always-on check before Rule 3 ever runs, so Rule
+      // 3's *own* hidden-single check can only ever succeed after at
+      // least one antecedent already fired) - kept as a fallback anyway
+      // rather than relying on that invariant never changing.
+      substeps: substeps.length > 0 ? substeps : undefined,
     }
   }
 
@@ -1277,40 +1535,55 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
 
   // --- Extension Rule 3 antecedent clauses (used when a technique fired
   // but didn't itself force anything, and turned out to be a dependency of
-  // whichever technique later did): "a TECHNIQUE of DIGITS in {CELLS}",
-  // deliberately terse - no eliminations, no "Assuming ... is true" - since
-  // this only ever appears chained with "which reveals" into a bigger
-  // sentence whose final clause carries all of that.
+  // whichever technique later did): "a TECHNIQUE of DIGITS in {CELLS}, which
+  // eliminates ..." - no "Assuming ... is true", no "leaving ... so colour
+  // it ..." (that's the final clause's alone) - since this only ever
+  // appears chained with "which reveals" into a bigger sentence whose final
+  // clause carries the rest.
 
   private lockedCandidateAntecedentClause(instance: LockedCandidateInstance): string {
     const typeLabel = instance.type === 'pointing' ? 'Pointing' : 'Claiming'
     const basisLabel = instance.basisCells.map(([r, c]) => cellRef(r, c)).join(', ')
-    return `a Locked Candidate (${typeLabel}) for ${instance.digit} in {${basisLabel}}`
+    const eliminationsLabel = this.formatCandidateGroups(instance.eliminations)
+    return `a Locked Candidate (${typeLabel}) for ${instance.digit} in {${basisLabel}}, which eliminates ${eliminationsLabel}`
   }
 
   private nakedPairAntecedentClause(pair: NakedPairInstance): string {
     const [a, b] = pair.digits
     const cellsLabel = pair.cells.map(([r, c]) => cellRef(r, c)).join(', ')
-    return `a naked pair of {${a},${b}} in {${cellsLabel}}`
+    const eliminationsLabel = this.formatCandidateGroups(pair.eliminations)
+    return `a naked pair of {${a},${b}} in {${cellsLabel}}, which eliminates ${eliminationsLabel}`
   }
 
   private nakedSubsetAntecedentClause(subset: NakedSubsetInstance): string {
     const sizeWord = subset.size === 3 ? 'triple' : 'quad'
     const cellsLabel = subset.cells.map(([r, c]) => cellRef(r, c)).join(', ')
     const digitsLabel = subset.digits.join(',')
-    return `a naked ${sizeWord} of {${digitsLabel}} in {${cellsLabel}}`
+    const eliminationsLabel = this.formatCandidateGroups(subset.eliminations)
+    return `a naked ${sizeWord} of {${digitsLabel}} in {${cellsLabel}}, which eliminates ${eliminationsLabel}`
   }
 
   private hiddenPairAntecedentClause(pair: HiddenPairInstance): string {
     const [a, b] = pair.digits
     const cellsLabel = pair.cells.map(([r, c]) => cellRef(r, c)).join(', ')
-    return `a hidden pair of {${a},${b}} in {${cellsLabel}}`
+    const eliminationsLabel = this.formatCandidateGroups(pair.eliminations)
+    return `a hidden pair of {${a},${b}} in {${cellsLabel}}, which eliminates ${eliminationsLabel}`
   }
 
-  private uniqueRectangleAntecedentClause(ur: UniqueRectangleType1Instance): string {
-    const cellsLabel = ur.cells.map(([r, c]) => cellRef(r, c)).join(', ')
-    const [a, b] = ur.urDigits
-    return `an UR type 1 consisting of {${cellsLabel}} with UR candidates {${a},${b}}`
+  private uniqueRectangleAntecedentClause(ur: UniqueRectangleInstance): string {
+    const eliminationsLabel = this.formatCandidateGroups(ur.eliminatedCandidates)
+    return `${ur.reasonText}, which eliminates ${eliminationsLabel}`
+  }
+
+  private bivalueOddagonClauseIntro(oddagon: BivalueOddagonInstance): string {
+    const [a, b] = oddagon.loopDigits
+    const cellsLabel = oddagon.cells.map(([r, c]) => cellRef(r, c)).join(', ')
+    return `a ${oddagon.cells.length}-cell Bivalue Oddagon of {${a},${b}} at ${cellsLabel}`
+  }
+
+  private bivalueOddagonAntecedentClause(oddagon: BivalueOddagonInstance): string {
+    const eliminationsLabel = this.formatCandidateGroups(oddagon.eliminations)
+    return `${this.bivalueOddagonClauseIntro(oddagon)}, which eliminates ${eliminationsLabel}`
   }
 
   private formatAicChainText(aic: ShortAicInstance): string {
@@ -1322,12 +1595,17 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       .join('')
   }
 
-  private aicLabel(technique: 'short single-digit aic' | 'short aic'): string {
-    return technique === 'short single-digit aic' ? 'short single-digit AIC' : 'short AIC'
+  private aicLabel(technique: AicTechnique): string {
+    return technique === 'short single-digit aic'
+      ? 'short single-digit AIC'
+      : technique === 'generic aic'
+        ? 'generic AIC'
+        : 'short AIC'
   }
 
-  private shortAicAntecedentClause(aic: ShortAicInstance, technique: 'short single-digit aic' | 'short aic'): string {
-    return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType}) of ${this.formatAicChainText(aic)}`
+  private shortAicAntecedentClause(aic: ShortAicInstance, technique: AicTechnique): string {
+    const eliminationsLabel = this.formatCandidateGroups(aic.eliminations)
+    return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType}) of ${this.formatAicChainText(aic)}, which eliminates ${eliminationsLabel}`
   }
 
   // --- Extension Rule 3 final clauses (the technique that actually forces
@@ -1391,32 +1669,43 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     secondary: DragonColor,
     aic: ShortAicInstance,
     forced: { row: number; col: number; digit: number },
-    technique: 'short single-digit aic' | 'short aic',
+    technique: AicTechnique,
   ): string {
     const eliminationsLabel = this.formatCandidateGroups(aic.eliminations)
     return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType}) of ${this.formatAicChainText(aic)}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
   }
 
-  private uniqueRectangleSolveFinalClause(secondary: DragonColor, ur: UniqueRectangleType1Instance): string {
-    const cellsLabel = ur.cells.map(([r, c]) => cellRef(r, c)).join(', ')
-    const [a, b] = ur.urDigits
-    const [er, ec] = ur.extraCell
-    const digit = ur.solvedDigit!
-    return `an UR type 1 consisting of ${cellsLabel} with UR candidates {${a},${b}}, thus we can colour ${digit}${cellRef(er, ec)} in ${colorLabel(secondary)}`
+  private uniqueRectangleSolveFinalClause(secondary: DragonColor, ur: UniqueRectangleInstance): string {
+    const { row, col, digit } = ur.solvedCandidates[0]
+    return `${ur.reasonText}, thus we can colour ${digit}${cellRef(row, col)} in ${colorLabel(secondary)}`
   }
 
   private uniqueRectangleEliminationFinalClause(
     secondary: DragonColor,
-    ur: UniqueRectangleType1Instance,
+    ur: UniqueRectangleInstance,
     forced: { row: number; col: number; digit: number },
   ): string {
-    const cellsLabel = ur.cells.map(([r, c]) => cellRef(r, c)).join(', ')
-    const [a, b] = ur.urDigits
-    const [er, ec] = ur.extraCell
-    const eliminationsLabel = this.formatCandidateGroups(
-      ur.eliminatedDigits.map((digit) => ({ row: er, col: ec, digit })),
-    )
-    return `an UR type 1 consisting of ${cellsLabel} with UR candidates {${a},${b}}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
+    const eliminationsLabel = this.formatCandidateGroups(ur.eliminatedCandidates)
+    return `${ur.reasonText}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
+  }
+
+  private bugPlusOneFinalClause(secondary: DragonColor, bug: BugPlusOneInstance): string {
+    const [row, col] = bug.cell
+    return `a BUG+1 at ${cellRef(row, col)} (candidates {${bug.candidates.join(',')}}), where ${bug.solvedDigit} appears three times in its ${bug.unitKind}, so colour it ${colorLabel(secondary)}`
+  }
+
+  private bivalueOddagonSolveFinalClause(secondary: DragonColor, oddagon: BivalueOddagonInstance): string {
+    const [row, col] = oddagon.solvedCell!
+    return `${this.bivalueOddagonClauseIntro(oddagon)}, thus we can colour ${oddagon.guardianDigit}${cellRef(row, col)} in ${colorLabel(secondary)}`
+  }
+
+  private bivalueOddagonEliminationFinalClause(
+    secondary: DragonColor,
+    oddagon: BivalueOddagonInstance,
+    forced: { row: number; col: number; digit: number },
+  ): string {
+    const eliminationsLabel = this.formatCandidateGroups(oddagon.eliminations)
+    return `${this.bivalueOddagonClauseIntro(oddagon)}, which eliminates ${eliminationsLabel}, leaving ${cellRef(forced.row, forced.col)} with only ${forced.digit} as the sole candidate, so colour it ${colorLabel(secondary)}`
   }
 
   /** Formats a set of candidate eliminations as compact "digitscellref"

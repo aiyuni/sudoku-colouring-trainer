@@ -1,4 +1,6 @@
 import { cloneBoard, cloneCandidates, computeGivenMask, createEmptyCandidates } from './boardUtils'
+import { SudokuBivalueOddagonFinder } from './SudokuBivalueOddagonFinder'
+import { SudokuBugPlusOneFinder } from './SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from './SudokuColorFinder'
 import { SudokuDragonFinder } from './SudokuDragonFinder'
 import { SudokuHiddenPairFinder } from './SudokuHiddenPairFinder'
@@ -7,6 +9,7 @@ import { SudokuMedusaFinder } from './SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
+import { SudokuGenericAicFinder } from './SudokuGenericAicFinder'
 import { classifyShortAic, SudokuShortAicFinder } from './SudokuShortAicFinder'
 import { SudokuSingleFinder } from './SudokuSingleFinder'
 import { SudokuSolver } from './SudokuSolver'
@@ -48,6 +51,8 @@ type CellCoordinate = [row: number, col: number]
 interface DisregardedAicKinds {
   singleDigit: boolean
   general: boolean
+  /** Generic AIC: chains longer than Short AIC's 5 links. */
+  generic: boolean
 }
 
 export interface GeneratedDragonPuzzle {
@@ -78,6 +83,9 @@ export interface DragonPuzzleGenerateOptions {
    * here; the UI is what keeps "don't disregard general AIC" from being
    * combined with "disregard single-digit AIC". */
   disregardAic?: boolean
+  /** Same again for Generic AIC (see SudokuGenericAicFinder). The UI only
+   * lets this be false when disregardAic is too. */
+  disregardGenericAic?: boolean
 }
 
 /**
@@ -119,8 +127,11 @@ export class SudokuDragonPuzzleGenerator {
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
   private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
+  private readonly bugPlusOneFinder = new SudokuBugPlusOneFinder()
+  private readonly bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
   private readonly colorFinder = new SudokuColorFinder()
   private readonly shortAicFinder = new SudokuShortAicFinder()
+  private readonly genericAicFinder = new SudokuGenericAicFinder()
   private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly dragonFinder = new SudokuDragonFinder()
 
@@ -156,6 +167,7 @@ export class SudokuDragonPuzzleGenerator {
     const disregardKinds: DisregardedAicKinds = {
       singleDigit: options.disregardSingleDigitAic ?? true,
       general: options.disregardAic ?? true,
+      generic: options.disregardGenericAic ?? true,
     }
 
     for (const [row, col] of this.shuffled(this.allCoordinates())) {
@@ -253,7 +265,13 @@ export class SudokuDragonPuzzleGenerator {
     if (this.hiddenPairFinder.findHiddenPairEliminations(board, candidates).length > 0) {
       return null
     }
-    if (this.uniqueRectangleFinder.findType1Instances(board, candidates).length > 0) {
+    if (this.uniqueRectangleFinder.find(board, candidates).length > 0) {
+      return null
+    }
+    if (this.bugPlusOneFinder.find(board, candidates)) {
+      return null
+    }
+    if (this.bivalueOddagonFinder.find(board, candidates).length > 0) {
       return null
     }
     if (this.anySimpleColoringApplies(board, candidates)) {
@@ -301,20 +319,22 @@ export class SudokuDragonPuzzleGenerator {
     return { board, candidates }
   }
 
-  /** True when a short AIC of a kind the caller does *not* disregard has
-   * eliminations. Uses the same findShortAics + classifyShortAic split the
+  /** True when an AIC of a kind the caller does *not* disregard has
+   * eliminations. Uses the same finders and single-digit/general split the
    * app's Techniques panel does, so "a single-digit AIC exists" means the
-   * same thing here as what the player would see listed. Skips the (fairly
-   * costly) chain search entirely when both kinds are disregarded, which
-   * is the default. */
+   * same thing here as what the player would see listed. Skips each search
+   * entirely when its kinds are disregarded, which is the default. */
   private anyBlockingShortAic(board: Board, candidates: CandidateGrid, disregarded: DisregardedAicKinds): boolean {
-    if (disregarded.singleDigit && disregarded.general) {
-      return false
+    if (!(disregarded.singleDigit && disregarded.general)) {
+      const blockedByShort = this.shortAicFinder.findShortAics(board, candidates).some((aic) => {
+        const singleDigit = classifyShortAic(aic) === 'single-digit'
+        return singleDigit ? !disregarded.singleDigit : !disregarded.general
+      })
+      if (blockedByShort) {
+        return true
+      }
     }
-    return this.shortAicFinder.findShortAics(board, candidates).some((aic) => {
-      const singleDigit = classifyShortAic(aic) === 'single-digit'
-      return singleDigit ? !disregarded.singleDigit : !disregarded.general
-    })
+    return !disregarded.generic && this.genericAicFinder.findGenericAics(board, candidates).length > 0
   }
 
   private anySimpleColoringApplies(board: Board, candidates: CandidateGrid): boolean {
@@ -370,6 +390,8 @@ export class SudokuDragonPuzzleGenerator {
       if (this.applyNakedQuads(board, candidates)) continue
       if (this.applyHiddenPairs(board, candidates)) continue
       if (this.applyUniqueRectangleType1(board, candidates)) continue
+      if (this.applyBugPlusOne(board, candidates)) continue
+      if (this.applyBivalueOddagon(board, candidates)) continue
       if (this.applySimpleColoring(board, candidates)) continue
       if (this.applyShortAic(board, candidates)) continue
       if (this.applyMedusa(board, candidates)) continue
@@ -447,16 +469,51 @@ export class SudokuDragonPuzzleGenerator {
 
   private applyUniqueRectangleType1(board: Board, candidates: CandidateGrid): boolean {
     let changed = false
-    for (const ur of this.uniqueRectangleFinder.findType1Instances(board, candidates)) {
-      const [row, col] = ur.extraCell
-      if (ur.solvedDigit !== null) {
-        board[row][col] = ur.solvedDigit
-        candidates[row][col] = Array(9).fill(false)
-        SudokuRules.eliminatePeerCandidates(candidates, board, row, col, ur.solvedDigit)
-        changed = true
+    for (const ur of this.uniqueRectangleFinder.find(board, candidates)) {
+      for (const { row, col, digit } of ur.solvedCandidates) {
+        if (board[row][col] === 0) {
+          board[row][col] = digit
+          candidates[row][col] = Array(9).fill(false)
+          SudokuRules.eliminatePeerCandidates(candidates, board, row, col, digit)
+          changed = true
+        }
       }
-      for (const digit of ur.eliminatedDigits) {
-        if (candidates[row][col][digit - 1]) {
+      for (const { row, col, digit } of ur.eliminatedCandidates) {
+        if (board[row][col] === 0 && candidates[row][col][digit - 1]) {
+          candidates[row][col][digit - 1] = false
+          changed = true
+        }
+      }
+    }
+    return changed
+  }
+
+  private applyBugPlusOne(board: Board, candidates: CandidateGrid): boolean {
+    const bugPlusOne = this.bugPlusOneFinder.find(board, candidates)
+    if (!bugPlusOne) {
+      return false
+    }
+    const [row, col] = bugPlusOne.cell
+    board[row][col] = bugPlusOne.solvedDigit
+    candidates[row][col] = Array(9).fill(false)
+    SudokuRules.eliminatePeerCandidates(candidates, board, row, col, bugPlusOne.solvedDigit)
+    return true
+  }
+
+  private applyBivalueOddagon(board: Board, candidates: CandidateGrid): boolean {
+    let changed = false
+    for (const oddagon of this.bivalueOddagonFinder.find(board, candidates)) {
+      if (oddagon.solvedCell) {
+        const [row, col] = oddagon.solvedCell
+        if (board[row][col] === 0) {
+          board[row][col] = oddagon.guardianDigit
+          candidates[row][col] = Array(9).fill(false)
+          SudokuRules.eliminatePeerCandidates(candidates, board, row, col, oddagon.guardianDigit)
+          changed = true
+        }
+      }
+      for (const { row, col, digit } of oddagon.eliminations) {
+        if (board[row][col] === 0 && candidates[row][col][digit - 1]) {
           candidates[row][col][digit - 1] = false
           changed = true
         }

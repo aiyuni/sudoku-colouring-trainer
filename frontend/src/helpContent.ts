@@ -1,3 +1,4 @@
+import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
 import { MIN_BASE_MEDUSA_CANDIDATES, type AppSettings } from './settingsDefaults'
 
 /**
@@ -72,6 +73,12 @@ export const HELP_SECTIONS: HelpSection[] = [
           'When OFF, the solver never looks for the general short AIC chains (length <= 5). It can only be turned ON while Short Single-Digit AIC is ON.',
       },
       {
+        name: 'Enable Generic AIC',
+        settingKey: 'genericAicEnabled',
+        description:
+          `When OFF, the solver never looks for Generic AIC chains: alternating chains longer than a Short AIC, up to ${GENERIC_AIC_MAX_LENGTH} links.  It can only be turned ON while Short AIC is ON, and you are asked to confirm first because generating Dragon Colouring puzzles takes longer with it enabled.`,
+      },
+      {
         name: `Dragon: require ${MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates`,
         settingKey: 'minBaseMedusaFilter',
         description:
@@ -91,7 +98,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         //settingKey: 'allowedRule3Techniques',
         description:
           'Tick the techniques you want Dragon Colouring to use. Hidden Single, Locked Candidates and Naked Pair are always ON.  \n\n' +
-          'AIC options for Dragon Colouring cannot be turned ON unless AIC is enabled (see above).',
+          'AIC options for Dragon Colouring (including Generic AIC) cannot be turned ON unless the matching AIC is enabled (see above).',
       },
     ],
   },
@@ -123,6 +130,25 @@ export const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
+    title: 'Solve Path',
+    intro: 'This is the checkbox next to the Generate/Regenerate button on the Solve Path tab.',
+    items: [
+      {
+        name: 'Easy Solve',
+        settingKey: 'easySolveEnabled',
+        description:
+          'When OFF (the default), each step of the Solve Path picks whichever applicable technique makes the ' +
+          'most progress right now - most cells solved, then most candidates eliminated, then (if still tied) ' +
+          'the simplest technique. \n\n' +
+          'When ON, each step instead picks whichever applicable technique is simplest, regardless of how many ' +
+          'cells it solves or candidates it eliminates - a Naked Single is always taken over a Dragon Colouring ' +
+          'chain that would solve half the grid, the way a person working through the puzzle by hand would. Ties ' +
+          '(usually several instances of the same technique) go to the shortest Dragon Colouring chain, then the ' +
+          'most candidates eliminated.',
+      },
+    ],
+  },
+  {
     title: 'Puzzle generation',
     intro: 'These are in the Generate Puzzle menu and only affect the Dragon and Dynamic Dragon practice puzzles.',
     items: [
@@ -140,6 +166,12 @@ export const HELP_SECTIONS: HelpSection[] = [
         description:
           'The same functionality as above, except for short AICs (length <=5). It can only be turned OFF when the setting above is also OFF and ' +
           'Short AIC is enabled. \n\n  Note that turning this option OFF makes it harder to generate a Dynamic Dragon Colouring puzzle.',
+      },
+      {
+        name: 'Dragon Generation disregards Generic AIC',
+        settingKey: 'dragonGenerationDisregardsGenericAic',
+        description:
+          'The same again for Generic AICs (chains longer than a Short AIC). It can only be turned OFF when the setting above is also OFF and Generic AIC is enabled.',
       },
       {
         name: 'Dragon puzzle generation max timeout',

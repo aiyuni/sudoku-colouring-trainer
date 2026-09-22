@@ -30,6 +30,44 @@ export class SudokuNakedSubsetFinder {
     return this.findNakedSubsets(board, candidates, 4)
   }
 
+  /** Triples and quads computed together, sharing the per-unit scan for
+   * cells with 2-4 marked candidates (a triple's eligible cells are just
+   * that set narrowed to <=3) instead of each doing its own full pass over
+   * every unit. Dynamic Dragon's Extension Rule 3 simulation calls both
+   * back to back, unconditionally, on every step it reaches this far - with
+   * the per-step AIC limit off that can be hundreds of times per Dragon
+   * step, and the separate scans were a measurable chunk of it. Produces
+   * the exact same instances (in the exact same order) as calling
+   * findNakedTriples and findNakedQuads separately - kept as its own method
+   * rather than replacing them, since most callers (the Techniques panel)
+   * only ever need one size at a time and never benefit from the shared
+   * scan. */
+  findNakedTriplesAndQuads(
+    board: Board,
+    candidates: CandidateGrid,
+  ): { triples: NakedSubsetInstance[]; quads: NakedSubsetInstance[] } {
+    const triples: NakedSubsetInstance[] = []
+    const quads: NakedSubsetInstance[] = []
+    const seenTriples = new Set<string>()
+    const seenQuads = new Set<string>()
+
+    for (const unit of sudokuUnits()) {
+      const unsolvedCells = unit.filter(([row, col]) => board[row][col] === 0)
+      const eligibleFor4 = unsolvedCells.filter(([row, col]) => {
+        const count = markedCandidateDigits(candidates[row][col]).length
+        return count >= 2 && count <= 4
+      })
+      const eligibleFor3 = eligibleFor4.filter(
+        ([row, col]) => markedCandidateDigits(candidates[row][col]).length <= 3,
+      )
+
+      this.emitSubsets(3, eligibleFor3, unsolvedCells, candidates, seenTriples, triples)
+      this.emitSubsets(4, eligibleFor4, unsolvedCells, candidates, seenQuads, quads)
+    }
+
+    return { triples, quads }
+  }
+
   findNakedTripleEliminations(board: Board, candidates: CandidateGrid): CandidateElimination[] {
     return this.dedupeEliminations(this.findNakedTriples(board, candidates))
   }
@@ -59,50 +97,66 @@ export class SudokuNakedSubsetFinder {
         return count >= 2 && count <= size
       })
 
-      for (const combo of this.combinations(eligibleCells, size)) {
-        const digitSet = new Set<number>()
-        for (const [row, col] of combo) {
-          for (const digit of markedCandidateDigits(candidates[row][col])) {
-            digitSet.add(digit)
-          }
-        }
-        if (digitSet.size !== size) {
-          continue
-        }
-        const digits = Array.from(digitSet).sort((a, b) => a - b)
-
-        const eliminations: CandidateElimination[] = []
-        for (const [row, col] of unsolvedCells) {
-          if (combo.some(([cr, cc]) => cr === row && cc === col)) {
-            continue
-          }
-          for (const digit of digits) {
-            if (candidates[row][col][digit - 1]) {
-              eliminations.push({ row, col, digit })
-            }
-          }
-        }
-        if (eliminations.length === 0) {
-          continue
-        }
-
-        // The same N cells can turn up via more than one unit (e.g. three
-        // cells spanning one row and also all sitting in one box) - dedupe
-        // so the panel doesn't list the identical subset twice.
-        const key = `${combo
-          .map(([r, c]) => `${r}.${c}`)
-          .sort()
-          .join('-')}|${digits.join(',')}`
-        if (seen.has(key)) {
-          continue
-        }
-        seen.add(key)
-
-        instances.push({ size, cells: [...combo], digits, eliminations })
-      }
+      this.emitSubsets(size, eligibleCells, unsolvedCells, candidates, seen, instances)
     }
 
     return instances
+  }
+
+  /** The shared body of findNakedSubsets: every `size`-combination of
+   * `eligibleCells` that collectively uses exactly `size` digits becomes an
+   * instance (deduped against `seen`, appended to `out`) - factored out so
+   * findNakedTriplesAndQuads can run it against a pre-computed eligible set
+   * per size without repeating the per-unit scan above it. */
+  private emitSubsets(
+    size: 3 | 4,
+    eligibleCells: Cell[],
+    unsolvedCells: Cell[],
+    candidates: CandidateGrid,
+    seen: Set<string>,
+    out: NakedSubsetInstance[],
+  ): void {
+    for (const combo of this.combinations(eligibleCells, size)) {
+      const digitSet = new Set<number>()
+      for (const [row, col] of combo) {
+        for (const digit of markedCandidateDigits(candidates[row][col])) {
+          digitSet.add(digit)
+        }
+      }
+      if (digitSet.size !== size) {
+        continue
+      }
+      const digits = Array.from(digitSet).sort((a, b) => a - b)
+
+      const eliminations: CandidateElimination[] = []
+      for (const [row, col] of unsolvedCells) {
+        if (combo.some(([cr, cc]) => cr === row && cc === col)) {
+          continue
+        }
+        for (const digit of digits) {
+          if (candidates[row][col][digit - 1]) {
+            eliminations.push({ row, col, digit })
+          }
+        }
+      }
+      if (eliminations.length === 0) {
+        continue
+      }
+
+      // The same N cells can turn up via more than one unit (e.g. three
+      // cells spanning one row and also all sitting in one box) - dedupe
+      // so the panel doesn't list the identical subset twice.
+      const key = `${combo
+        .map(([r, c]) => `${r}.${c}`)
+        .sort()
+        .join('-')}|${digits.join(',')}`
+      if (seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+
+      out.push({ size, cells: [...combo], digits, eliminations })
+    }
   }
 
   private combinations(items: Cell[], size: number): Cell[][] {

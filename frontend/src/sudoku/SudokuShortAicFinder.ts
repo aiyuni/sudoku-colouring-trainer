@@ -23,6 +23,10 @@ export interface AicLink {
  * unbounded search. */
 export type ShortAicLength = 3 | 5
 
+/** The longest chain SudokuShortAicFinder looks for (in links). Anything
+ * longer is the Generic AIC finder's territory - see SudokuGenericAicFinder. */
+export const SHORT_AIC_MAX_LENGTH = 5
+
 export interface ShortAicInstance {
   /** The chain's candidates in order: X, the interior nodes, Y - 4 entries
    * for a length-3 chain, 6 for a length-5 chain. */
@@ -30,7 +34,10 @@ export interface ShortAicInstance {
   /** The links joining consecutive nodes - always alternating strong, weak,
    * strong[, weak, strong], one fewer entry than `nodes`. */
   links: AicLink[]
-  length: ShortAicLength
+  /** Number of links: 3 or 5 from SudokuShortAicFinder, longer (7, 9, ...)
+   * from SudokuGenericAicFinder, which returns this same shape so the
+   * panel and Dragon Colouring can treat both alike. */
+  length: number
   /** Every node shares one digit - only possible at length 3 (a pure
    * X-chain built entirely from bilocal strong links and same-digit weak
    * links); a length-5 chain always crosses digits at least once, and even
@@ -56,7 +63,7 @@ export function classifyShortAic(instance: ShortAicInstance): ShortAicKind {
   return instance.length === 3 && instance.isSingleDigit ? 'single-digit' : 'general'
 }
 
-function candidateKey(row: number, col: number, digit: number): string {
+export function candidateKey(row: number, col: number, digit: number): string {
   return `${row},${col},${digit}`
 }
 
@@ -69,7 +76,7 @@ function sameUnit(a: readonly [number, number], b: readonly [number, number]): b
   return Math.floor(ar / BOX_SIZE) === Math.floor(br / BOX_SIZE) && Math.floor(ac / BOX_SIZE) === Math.floor(bc / BOX_SIZE)
 }
 
-interface LinkGraphs {
+export interface LinkGraphs {
   /** Conjugate-pair edges only: a digit candidate to exactly one other
    * candidate of the same digit in a shared unit, or a cell's own two
    * candidates when it has exactly two. */
@@ -82,7 +89,7 @@ interface LinkGraphs {
   nodeByKey: Map<string, AicCandidate>
 }
 
-function buildLinkGraphs(board: Board, candidates: CandidateGrid): LinkGraphs {
+export function buildLinkGraphs(board: Board, candidates: CandidateGrid): LinkGraphs {
   const strongAdjacency = new Map<string, string[]>()
   const weakAdjacency = new Map<string, string[]>()
   const nodeByKey = new Map<string, AicCandidate>()
@@ -152,7 +159,7 @@ function buildLinkGraphs(board: Board, candidates: CandidateGrid): LinkGraphs {
 
 /** What a chain ending in candidates x and y (in that order) can eliminate -
  * null if x/y don't yield anything (or are degenerate, e.g. the same cell). */
-function computeEliminations(
+export function computeEliminations(
   board: Board,
   candidates: CandidateGrid,
   x: AicCandidate,
@@ -239,7 +246,7 @@ function eliminationSetKey(eliminations: readonly CandidateElimination[]): strin
  * most "elegant" explanation: the shortest chain, and among equally short
  * ones, whichever leans on more bilocal (conjugate-pair) strong links
  * rather than bivalue (same-cell) ones. */
-function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]): ShortAicInstance[] {
+export function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]): ShortAicInstance[] {
   const bestBySet = new Map<string, ShortAicInstance>()
   for (const instance of instances) {
     const key = eliminationSetKey(instance.eliminations)
@@ -273,8 +280,13 @@ function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]): Shor
  * neither end's cell can hold the other end's digit).
  */
 export class SudokuShortAicFinder {
-  findShortAics(board: Board, candidates: CandidateGrid): ShortAicInstance[] {
-    const { strongAdjacency, weakAdjacency, nodeByKey } = buildLinkGraphs(board, candidates)
+  /** `graphs` lets a caller that's about to also run Generic AIC on the same
+   * board/candidates (Dynamic Dragon's Extension Rule 3 - see aicsInOrder in
+   * SudokuDragonFinder) build the link graph once and pass it to both,
+   * instead of it being rebuilt twice for identical input. Defaults to
+   * building it here, so every other caller is unaffected. */
+  findShortAics(board: Board, candidates: CandidateGrid, graphs?: LinkGraphs): ShortAicInstance[] {
+    const { strongAdjacency, weakAdjacency, nodeByKey } = graphs ?? buildLinkGraphs(board, candidates)
     const seen = new Set<string>()
     const instances: ShortAicInstance[] = []
 
@@ -302,7 +314,7 @@ export class SudokuShortAicFinder {
       instances.push({
         nodes,
         links,
-        length: (nodes.length - 1) as ShortAicLength,
+        length: nodes.length - 1,
         isSingleDigit: nodes.every((n) => n.digit === nodes[0].digit),
         eliminationType: outcome.type,
         eliminations: outcome.eliminations,

@@ -1,4 +1,5 @@
 import { DEFAULT_RULE3_TECHNIQUES, type Rule3Technique } from './sudoku/SudokuDragonFinder'
+import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
 
 /** Every user-adjustable setting, with its default. This is the single
  * source of truth for three things at once: what App's `useState` calls start
@@ -17,13 +18,16 @@ export interface AppSettings {
   minBaseMedusaFilter: boolean
   shortSingleDigitAicEnabled: boolean
   shortAicEnabled: boolean
+  genericAicEnabled: boolean
   allowedRule3Techniques: readonly Rule3Technique[]
   exhaustiveDragonColouring: boolean
   aicLimitPerDragonStep: boolean
   dynamicDragonAutoSolveIncludesAics: boolean
   dragonGenerationDisregardsSingleDigitAic: boolean
   dragonGenerationDisregardsAic: boolean
+  dragonGenerationDisregardsGenericAic: boolean
   dragonGenerationTimeoutMs: number
+  easySolveEnabled: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -34,13 +38,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   minBaseMedusaFilter: false,
   shortSingleDigitAicEnabled: false,
   shortAicEnabled: false,
+  genericAicEnabled: false,
   allowedRule3Techniques: DEFAULT_RULE3_TECHNIQUES,
   exhaustiveDragonColouring: true,
   aicLimitPerDragonStep: true,
   dynamicDragonAutoSolveIncludesAics: false,
   dragonGenerationDisregardsSingleDigitAic: true,
   dragonGenerationDisregardsAic: true,
+  dragonGenerationDisregardsGenericAic: true,
   dragonGenerationTimeoutMs: 30_000,
+  easySolveEnabled: false,
 }
 
 /** Threshold for the "Require a bigger base Medusa" toggle - the minimum
@@ -73,8 +80,12 @@ export const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
   'naked quad': 'Naked Quad',
   'hidden pair': 'Hidden Pair',
   UR: 'Unique Rectangle',
+  'bivalue oddagon': 'Bivalue Oddagon',
+  'bug plus one': 'BUG+1',
   'short single-digit aic': 'Short Single-Digit AIC',
   'short aic': 'Short AIC (links <= 5)',
+  // The longest chain is set in one place - see GENERIC_AIC_MAX_LENGTH.
+  'generic aic': `Generic AIC (links <= ${GENERIC_AIC_MAX_LENGTH})`,
 }
 
 /** A setting's default as a human-readable string, for the help page:

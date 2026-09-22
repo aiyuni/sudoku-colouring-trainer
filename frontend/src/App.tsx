@@ -24,15 +24,26 @@ import { CanvasGridImage } from './sudoku/CanvasGridImage'
 import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
+import { SudokuBivalueOddagonFinder } from './sudoku/SudokuBivalueOddagonFinder'
+import { SudokuBugPlusOneFinder } from './sudoku/SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
 import {
   SudokuDragonFinder,
   ALL_RULE3_TECHNIQUES,
   DEFAULT_RULE3_TECHNIQUES,
   type DragonMove,
+  type DragonRule3Substep,
   type Rule3Technique,
 } from './sudoku/SudokuDragonFinder'
 import { foldDragonMoves } from './sudoku/dragonReplay'
+import {
+  SudokuDragonTargetFinder,
+  checkEliminationTargets,
+  formatCandidate,
+  listEffectiveEliminations,
+  parseEliminationTargets,
+  type TargetProblem,
+} from './sudoku/SudokuDragonTargetFinder'
 import { SudokuDragonPuzzleGenerator } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
@@ -42,7 +53,8 @@ import { SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
-import { classifyShortAic, SudokuShortAicFinder, type ShortAicKind } from './sudoku/SudokuShortAicFinder'
+import { GENERIC_AIC_MAX_LENGTH, SudokuGenericAicFinder } from './sudoku/SudokuGenericAicFinder'
+import { classifyShortAic, SudokuShortAicFinder, type ShortAicInstance, type ShortAicKind } from './sudoku/SudokuShortAicFinder'
 import { SudokuSingleFinder, type SingleAssignment } from './sudoku/SudokuSingleFinder'
 import { SudokuSolver } from './sudoku/SudokuSolver'
 import { SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
@@ -60,6 +72,7 @@ import './App.css'
 const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonPuzzleGenerator = new SudokuDragonPuzzleGenerator()
+const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
 const singleFinder = new SudokuSingleFinder()
 const lockedCandidateFinder = new SudokuLockedCandidateFinder()
@@ -67,7 +80,10 @@ const pairFinder = new SudokuPairFinder()
 const nakedSubsetFinder = new SudokuNakedSubsetFinder()
 const hiddenPairFinder = new SudokuHiddenPairFinder()
 const shortAicFinder = new SudokuShortAicFinder()
+const genericAicFinder = new SudokuGenericAicFinder()
 const uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
+const bugPlusOneFinder = new SudokuBugPlusOneFinder()
+const bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
 const colorFinder = new SudokuColorFinder()
 const medusaFinder = new SudokuMedusaFinder()
 const dragonFinder = new SudokuDragonFinder()
@@ -301,6 +317,49 @@ interface TechniqueInstance {
    * highlighting statically - the colors/eliminations/solves shown come
    * from folding moves[0..step] together, not from the fields above. */
   moves?: DragonMove[]
+  /** This instance's difficulty tier - see the RANK_* constants below. Used
+   * by the Solve Path search: the default search tie-breaks an equal-
+   * eliminations choice on it, and "Easy Solve" sorts on it directly. */
+  techniqueRank: number
+}
+
+/** Numeric difficulty tier for every technique, lowest = easiest - the exact
+ * order buildTechniqueInstances below pushes its blocks in (see CLAUDE.md's
+ * documented difficulty order: Single -> LockedCandidate ->
+ * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+1 -> BivalueOddagon
+ * -> Color -> ShortAic -> GenericAic -> Medusa -> Dragon -> Dynamic Dragon).
+ * Techniques sharing a tier are equally "simple" as far as this goes - a
+ * naked pair is no simpler than a naked quad here, since a solver who can
+ * spot one can spot the other; what matters is the category, not which
+ * specific instance of it happened to be found. Adding a new technique?
+ * Give its instances a rank here too, in its place in the difficulty order -
+ * see CLAUDE.md's "Adding a technique" note. */
+const RANK_SINGLE = 0
+const RANK_LOCKED_CANDIDATE = 1
+const RANK_SUBSET = 2 // naked pair/triple/quad, hidden pair
+const RANK_UR = 3
+const RANK_BUG_PLUS_ONE = 4
+const RANK_BIVALUE_ODDAGON = 5
+const RANK_SIMPLE_COLOR = 6
+const RANK_SHORT_SINGLE_DIGIT_AIC = 7
+const RANK_SHORT_AIC = 8
+const RANK_GENERIC_AIC = 9
+const RANK_MEDUSA = 10
+const RANK_DRAGON = 11
+const RANK_DYNAMIC_DRAGON = 12
+
+/** A rejected entry in plain words, for the Find tab. */
+function describeTargetProblem(problem: TargetProblem): string {
+  const entry = formatCandidate(problem.ref)
+  const cell = cellRef(problem.ref.row, problem.ref.col)
+  switch (problem.kind) {
+    case 'filled':
+      return `${entry}: ${cell} is already filled in (${problem.value}).`
+    case 'not-a-candidate':
+      return `${entry}: ${problem.ref.digit} isn't a candidate in ${cell} right now (it may already be eliminated).`
+    case 'is-the-answer':
+      return `${entry}: ${problem.ref.digit} is the real answer for ${cell}, so it can't be eliminated - please double-check your entry.`
+  }
 }
 
 function cellRef(row: number, col: number): string {
@@ -358,7 +417,7 @@ function computeStuckDragonExtensions(
 
 /** Dynamic Dragon Colouring: the same stuck-chain search as plain Dragon
  * Colouring, but only surfacing chains where the *dynamic* extension
- * (Extension Rule 3 - naked pairs and Unique Rectangle Type 1 propagated
+ * (Extension Rule 3 - naked pairs and Unique Rectangle (any type) propagated
  * through a side's assumption) was actually necessary. A chain plain
  * Dragon Colouring can already resolve is left to that technique instead,
  * so the two never both claim the same chain. */
@@ -436,6 +495,59 @@ function computeShortAicEliminationsByKind(
   return Array.from(eliminations.values())
 }
 
+/** Every distinct candidate eliminated by a Generic AIC (chains longer than
+ * Short AIC's, up to GENERIC_AIC_MAX_LENGTH links) - what the Generic AIC
+ * auto-solve button applies. */
+function computeGenericAicEliminations(
+  board: Board,
+  candidates: CandidateGrid,
+): Array<{ row: number; col: number; digit: number }> {
+  const eliminations = new Map<string, { row: number; col: number; digit: number }>()
+  for (const aic of genericAicFinder.findGenericAics(board, candidates)) {
+    for (const e of aic.eliminations) {
+      eliminations.set(`${e.row},${e.col},${e.digit}`, e)
+    }
+  }
+  return Array.from(eliminations.values())
+}
+
+/** A Techniques-panel row for one AIC chain (any kind): the chain written out
+ * as `digit cell = digit cell - ...`, what it proves, and the chain's links
+ * for the purple/curved-line drawing on the grid. */
+function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: string): TechniqueInstance {
+  const x = aic.nodes[0]
+  const y = aic.nodes[aic.nodes.length - 1]
+  const chainText = aic.nodes
+    .map((n, i) => {
+      const connector = i === 0 ? '' : i % 2 === 1 ? ' = ' : ' - '
+      return `${connector}${n.digit}${cellRef(n.row, n.col)}`
+    })
+    .join('')
+  const eliminationText = aic.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
+  const techniqueRank =
+    idPrefix === 'short-single-digit-aic'
+      ? RANK_SHORT_SINGLE_DIGIT_AIC
+      : idPrefix === 'short-aic'
+        ? RANK_SHORT_AIC
+        : RANK_GENERIC_AIC
+  return {
+    id: `${idPrefix}-${aic.eliminationType}-${aic.nodes.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
+    name,
+    notation: `${chainText} states that either ${x.digit}${cellRef(x.row, x.col)} or ${y.digit}${cellRef(y.row, y.col)} must be true, so ${eliminationText}.`,
+    usedCells: [],
+    usedCandidates: [],
+    eliminatedCandidates: aic.eliminations,
+    solvedCandidates: [],
+    aicCandidates: aic.nodes.map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
+    aicLinks: aic.links.map((link) => ({
+      from: { row: link.from.row, col: link.from.col, digit: link.from.digit },
+      to: { row: link.to.row, col: link.to.col, digit: link.to.digit },
+      kind: link.kind,
+    })),
+    techniqueRank,
+  }
+}
+
 /** Builds the live list of technique instances the current board/candidates
  * support - recomputed from scratch whenever either changes, so it always
  * reflects exactly what's happening on the grid right now.
@@ -450,6 +562,7 @@ function buildTechniqueInstances(
   shortSingleDigitAicEnabled = true,
   aicLimitPerDragonStep = true,
   exhaustiveDragon = true,
+  genericAicEnabled = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -462,6 +575,7 @@ function buildTechniqueInstances(
       usedCandidates: [],
       eliminatedCandidates: [],
       solvedCandidates: [{ row, col, digit }],
+      techniqueRank: RANK_SINGLE,
     })
   }
 
@@ -480,6 +594,7 @@ function buildTechniqueInstances(
       usedCandidates: [],
       eliminatedCandidates: [],
       solvedCandidates: [{ row, col, digit }],
+      techniqueRank: RANK_SINGLE,
     })
   }
 
@@ -498,6 +613,7 @@ function buildTechniqueInstances(
       usedCandidates: locked.basisCells.map(([row, col]) => ({ row, col, digit: locked.digit })),
       eliminatedCandidates: locked.eliminations,
       solvedCandidates: [],
+      techniqueRank: RANK_LOCKED_CANDIDATE,
     })
   }
 
@@ -539,6 +655,7 @@ function buildTechniqueInstances(
       ],
       eliminatedCandidates: pair.eliminations,
       solvedCandidates: [],
+      techniqueRank: RANK_SUBSET,
     })
   }
 
@@ -574,6 +691,7 @@ function buildTechniqueInstances(
         ),
         eliminatedCandidates: subset.eliminations,
         solvedCandidates: [],
+        techniqueRank: RANK_SUBSET,
       })
     }
   }
@@ -613,27 +731,84 @@ function buildTechniqueInstances(
       ],
       eliminatedCandidates: pair.eliminations,
       solvedCandidates: [],
+      techniqueRank: RANK_SUBSET,
     })
   }
 
-  for (const ur of uniqueRectangleFinder.findType1Instances(board, candidates)) {
-    const [extraRow, extraCol] = ur.extraCell
-    const urDigitsLabel = ur.urDigits.join(',')
-    const cellsLabel = ur.cells.map(([row, col]) => cellRef(row, col)).join(', ')
+  for (const ur of uniqueRectangleFinder.find(board, candidates)) {
     const conclusion =
-      ur.solvedDigit !== null
-        ? `${cellRef(extraRow, extraCol)} is ${ur.solvedDigit}`
-        : `${cellRef(extraRow, extraCol)} is not ${ur.eliminatedDigits.join(',')}`
+      ur.solvedCandidates.length > 0
+        ? ur.solvedCandidates.map((s) => `${cellRef(s.row, s.col)} is ${s.digit}`).join(', ')
+        : ur.eliminatedCandidates.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
+    const idSuffix = ur.cells.map(([row, col]) => `${row}.${col}`).join('-')
 
     instances.push({
-      id: `ur-type1-${ur.cells.map(([row, col]) => `${row}.${col}`).join('-')}-${urDigitsLabel}`,
-      name: 'Unique Rectangle Type 1',
-      notation: `${cellsLabel} (${urDigitsLabel}) => ${conclusion}`,
+      id: `ur-${ur.type.replace(/\s+/g, '').toLowerCase()}-${idSuffix}-${ur.urDigits.join(',')}`,
+      name: `Unique Rectangle (${ur.type})`,
+      notation: `${ur.reasonText} => ${conclusion}`,
       usedCells: [...ur.cells],
       usedCandidates: ur.cells.flatMap(([row, col]) => ur.urDigits.map((digit) => ({ row, col, digit }))),
-      eliminatedCandidates: ur.eliminatedDigits.map((digit) => ({ row: extraRow, col: extraCol, digit })),
-      solvedCandidates: ur.solvedDigit !== null ? [{ row: extraRow, col: extraCol, digit: ur.solvedDigit }] : [],
+      eliminatedCandidates: ur.eliminatedCandidates,
+      solvedCandidates: ur.solvedCandidates,
+      medusaHighlightCells: [...ur.reasonCells],
+      techniqueRank: RANK_UR,
     })
+  }
+
+  const bugPlusOne = bugPlusOneFinder.find(board, candidates)
+  if (bugPlusOne) {
+    const [row, col] = bugPlusOne.cell
+    const candidatesLabel = bugPlusOne.candidates.join(',')
+    instances.push({
+      id: `bug-plus-one-${row}.${col}`,
+      name: 'BUG+1',
+      notation: `${cellRef(row, col)} (candidates ${candidatesLabel}) is the only cell with more than two candidates; ${bugPlusOne.solvedDigit} appears 3 times in its ${bugPlusOne.unitKind}, so ${cellRef(row, col)} is ${bugPlusOne.solvedDigit}`,
+      usedCells: [...bugPlusOne.unit],
+      usedCandidates: bugPlusOne.unit
+        .filter(([r, c]) => board[r][c] === 0 && candidates[r][c][bugPlusOne.solvedDigit - 1])
+        .map(([r, c]) => ({ row: r, col: c, digit: bugPlusOne.solvedDigit })),
+      eliminatedCandidates: [],
+      solvedCandidates: [{ row, col, digit: bugPlusOne.solvedDigit }],
+      techniqueRank: RANK_BUG_PLUS_ONE,
+    })
+  }
+
+  for (const oddagon of bivalueOddagonFinder.find(board, candidates)) {
+    const [a, b] = oddagon.loopDigits
+    const cellsLabel = oddagon.cells.map(([row, col]) => cellRef(row, col)).join(', ')
+    const guardianCellsLabel = oddagon.guardianCells.map(([row, col]) => cellRef(row, col)).join(', ')
+    const guardianKeys = new Set(oddagon.guardianCells.map(([row, col]) => `${row},${col}`))
+    const usedCandidates = oddagon.cells.flatMap(([row, col]) => {
+      const digits = guardianKeys.has(`${row},${col}`) ? [a, b, oddagon.guardianDigit] : [a, b]
+      return digits.map((digit) => ({ row, col, digit }))
+    })
+    const idSuffix = oddagon.cells.map(([row, col]) => `${row}.${col}`).join('-')
+
+    if (oddagon.type === 1) {
+      const [row, col] = oddagon.solvedCell!
+      instances.push({
+        id: `bivalue-oddagon-1-${idSuffix}`,
+        name: 'Bivalue Oddagon (Type 1)',
+        notation: `${oddagon.cells.length}-cell bivalue oddagon of {${a},${b}} at ${cellsLabel} => ${cellRef(row, col)} is ${oddagon.guardianDigit}`,
+        usedCells: oddagon.cells,
+        usedCandidates,
+        eliminatedCandidates: [],
+        solvedCandidates: [{ row, col, digit: oddagon.guardianDigit }],
+        techniqueRank: RANK_BIVALUE_ODDAGON,
+      })
+    } else {
+      const eliminationText = oddagon.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
+      instances.push({
+        id: `bivalue-oddagon-2-${idSuffix}`,
+        name: 'Bivalue Oddagon (Type 2)',
+        notation: `${oddagon.cells.length}-cell bivalue oddagon of {${a},${b}} at ${cellsLabel}, guardians ${guardianCellsLabel} holding ${oddagon.guardianDigit} => ${eliminationText}`,
+        usedCells: oddagon.cells,
+        usedCandidates,
+        eliminatedCandidates: oddagon.eliminations,
+        solvedCandidates: [],
+        techniqueRank: RANK_BIVALUE_ODDAGON,
+      })
+    }
   }
 
   // Simple Coloring: two passes so every Rule 1 instance is listed before
@@ -667,6 +842,7 @@ function buildTechniqueInstances(
           solvedCandidates: [],
           blueCandidates,
           yellowCandidates,
+          techniqueRank: RANK_SIMPLE_COLOR,
         })
       }
 
@@ -685,6 +861,7 @@ function buildTechniqueInstances(
           solvedCandidates: [],
           blueCandidates,
           yellowCandidates,
+          techniqueRank: RANK_SIMPLE_COLOR,
         })
       }
     }
@@ -693,76 +870,72 @@ function buildTechniqueInstances(
   instances.push(...rule1Instances, ...rule2Instances)
 
   // Short Single-Digit AIC (length 3, one digit throughout - a classic
-  // X-chain) and Short AIC (everything else this finder can find: length
+  // X-chain), Short AIC (everything else this finder can find: length
   // 5, or the rare length-3 chain that switches digits via a same-cell
-  // link) are two separate techniques, ranked Simple Colouring < Short
-  // Single-Digit AIC < Short AIC < 3D Medusa, each with its own settings
-  // toggle. The search still runs when either is on - a length-5 chain is
+  // link) and Generic AIC (chains longer than that, up to
+  // GENERIC_AIC_MAX_LENGTH links) are three separate techniques, ranked
+  // Simple Colouring < Short Single-Digit AIC < Short AIC < Generic AIC <
+  // 3D Medusa, each with its own settings toggle. The search still runs when either is on - a length-5 chain is
   // found by continuing through the same length-3 intermediate states
   // regardless of whether length-3 itself is being surfaced - but nothing
   // is added to the panel for a kind whose toggle is off.
-  if (shortAicEnabled || shortSingleDigitAicEnabled) {
-    // Every technique instance already found (naked/hidden singles,
-    // locked candidates, naked/hidden pairs and triples/quads, UR, Simple
-    // Colouring) is "easier" than either AIC kind by virtue of running
-    // first - a chain that eliminates nothing beyond what one of those
-    // already covers isn't worth surfacing as its own entry.
+  if (shortAicEnabled || shortSingleDigitAicEnabled || genericAicEnabled) {
+    // Every technique instance already found (naked/hidden singles, locked
+    // candidates, naked/hidden pairs and triples/quads, UR, Simple
+    // Colouring) is "easier" than any AIC kind by virtue of running first -
+    // a chain that eliminates nothing beyond what one of those already
+    // covers isn't worth surfacing as its own entry.
     const easierEliminationKeys = new Set(
       instances.flatMap((instance) => instance.eliminatedCandidates.map((e) => `${e.row},${e.col},${e.digit}`)),
     )
+    const isCovered = (aic: ShortAicInstance) =>
+      aic.eliminations.every((e) => easierEliminationKeys.has(`${e.row},${e.col},${e.digit}`))
 
     const singleDigitInstances: TechniqueInstance[] = []
     const generalInstances: TechniqueInstance[] = []
+    const genericInstances: TechniqueInstance[] = []
 
-    for (const aic of shortAicFinder.findShortAics(board, candidates)) {
-      const isFullyCoveredByEasierTechnique = aic.eliminations.every((e) =>
-        easierEliminationKeys.has(`${e.row},${e.col},${e.digit}`),
-      )
-      if (isFullyCoveredByEasierTechnique) {
-        continue
-      }
-
-      const isSingleDigit = classifyShortAic(aic) === 'single-digit'
-      if (isSingleDigit ? !shortSingleDigitAicEnabled : !shortAicEnabled) {
-        continue
-      }
-
-      const x = aic.nodes[0]
-      const y = aic.nodes[aic.nodes.length - 1]
-      const chainText = aic.nodes
-        .map((n, i) => {
-          const connector = i === 0 ? '' : i % 2 === 1 ? ' = ' : ' - '
-          return `${connector}${n.digit}${cellRef(n.row, n.col)}`
-        })
-        .join('')
-      const eliminationText = aic.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
-      const idPrefix = isSingleDigit ? 'short-single-digit-aic' : 'short-aic'
-      const name = isSingleDigit ? 'Short Single-Digit AIC' : `Short AIC (Type ${aic.eliminationType})`
-
-      const instance: TechniqueInstance = {
-        id: `${idPrefix}-${aic.eliminationType}-${aic.nodes.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
-        name,
-        notation: `${chainText} states that either ${x.digit}${cellRef(x.row, x.col)} or ${y.digit}${cellRef(y.row, y.col)} must be true, so ${eliminationText}.`,
-        usedCells: [],
-        usedCandidates: [],
-        eliminatedCandidates: aic.eliminations,
-        solvedCandidates: [],
-        aicCandidates: aic.nodes.map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
-        aicLinks: aic.links.map((link) => ({
-          from: { row: link.from.row, col: link.from.col, digit: link.from.digit },
-          to: { row: link.to.row, col: link.to.col, digit: link.to.digit },
-          kind: link.kind,
-        })),
-      }
-
-      if (isSingleDigit) {
-        singleDigitInstances.push(instance)
-      } else {
-        generalInstances.push(instance)
+    if (shortAicEnabled || shortSingleDigitAicEnabled) {
+      for (const aic of shortAicFinder.findShortAics(board, candidates)) {
+        if (isCovered(aic)) {
+          continue
+        }
+        const isSingleDigit = classifyShortAic(aic) === 'single-digit'
+        if (isSingleDigit ? !shortSingleDigitAicEnabled : !shortAicEnabled) {
+          continue
+        }
+        const instance = buildAicInstance(
+          aic,
+          isSingleDigit ? 'short-single-digit-aic' : 'short-aic',
+          isSingleDigit ? 'Short Single-Digit AIC' : `Short AIC (Type ${aic.eliminationType})`,
+        )
+        if (isSingleDigit) {
+          singleDigitInstances.push(instance)
+        } else {
+          generalInstances.push(instance)
+        }
       }
     }
 
-    instances.push(...singleDigitInstances, ...generalInstances)
+    // Generic AIC ranks after the shorter kinds: a long chain that only
+    // reaches what a Short AIC already does isn't listed either.
+    if (genericAicEnabled) {
+      for (const instance of [...singleDigitInstances, ...generalInstances]) {
+        for (const e of instance.eliminatedCandidates) {
+          easierEliminationKeys.add(`${e.row},${e.col},${e.digit}`)
+        }
+      }
+      for (const aic of genericAicFinder.findGenericAics(board, candidates)) {
+        if (isCovered(aic)) {
+          continue
+        }
+        genericInstances.push(
+          buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}, ${aic.length} links)`),
+        )
+      }
+    }
+
+    instances.push(...singleDigitInstances, ...generalInstances, ...genericInstances)
   }
 
   // 3D Medusa: massInstances (rules 1-2) before the per-candidate
@@ -816,6 +989,7 @@ function buildTechniqueInstances(
         blueCandidates,
         yellowCandidates,
         medusaHighlightCells,
+        techniqueRank: RANK_MEDUSA,
       })
     }
 
@@ -831,6 +1005,7 @@ function buildTechniqueInstances(
         blueCandidates,
         yellowCandidates,
         medusaHighlightCells: [[r3.row, r3.col]],
+        techniqueRank: RANK_MEDUSA,
       })
     }
 
@@ -848,6 +1023,7 @@ function buildTechniqueInstances(
         blueCandidates,
         yellowCandidates,
         medusaHighlightCells: [[r4.row, r4.col]],
+        techniqueRank: RANK_MEDUSA,
       })
     }
 
@@ -864,6 +1040,7 @@ function buildTechniqueInstances(
         blueCandidates,
         yellowCandidates,
         medusaHighlightCells: [[r5.row, r5.col]],
+        techniqueRank: RANK_MEDUSA,
       })
     }
   }
@@ -875,57 +1052,6 @@ function buildTechniqueInstances(
   // carrying its own move log for the Techniques panel's step-by-step
   // player. A chain plain Dragon Colouring can already resolve is never
   // also listed under Dynamic - see computeStuckDynamicDragonExtensions.
-  const buildDragonInstance = (idPrefix: string, name: string, chainKey: string, moves: DragonMove[]): TechniqueInstance => {
-    const lastMove = moves[moves.length - 1]
-    // A mass elimination's solves/eliminates are both just consequences of
-    // one fact - a side proved false, so the other side is proved true - so
-    // that fact leads the summary. The tally still follows it, but as the
-    // number of candidates that actually disappear from the grid, not a
-    // count of what the move log lists: that covers the Dragon steps' own
-    // eliminations plus everything the now-true colour forces (the false
-    // colour's candidates, and the peers of every cell it solves), each
-    // candidate counted once.
-    const summaryText =
-      lastMove.kind === 'mass-elimination' && lastMove.provenTrueColor
-        ? (() => {
-            const fact = `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} is true`
-            const eliminatedCount = countEffectiveEliminations(
-              board,
-              candidates,
-              foldDragonMoves(moves, moves.length - 1),
-            )
-            return eliminatedCount > 0
-              ? `${fact}; eliminates ${eliminatedCount} candidate${eliminatedCount === 1 ? '' : 's'}`
-              : fact
-          })()
-        : lastMove.kind === 'solution' && lastMove.provenTrueColor
-          ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} covers every empty cell, solving the puzzle`
-          : (() => {
-            const eliminated = moves.flatMap((m) => m.eliminated)
-            const solvedCount = moves.reduce((n, m) => n + m.solved.length, 0)
-            const summary: string[] = []
-            if (solvedCount > 0) {
-              summary.push(`solves ${solvedCount} cell${solvedCount === 1 ? '' : 's'}`)
-            }
-            if (eliminated.length === 1) {
-              summary.push(`eliminates ${eliminated[0].digit}${cellRef(eliminated[0].row, eliminated[0].col)}`)
-            } else if (eliminated.length > 1) {
-              summary.push(`eliminates ${eliminated.length} candidates`)
-            }
-            return summary.join(', ')
-          })()
-    return {
-      id: `${idPrefix}-${chainKey}`,
-      name,
-      notation: `${moves.length} steps - ${summaryText}.`,
-      usedCells: [],
-      usedCandidates: [],
-      eliminatedCandidates: moves.flatMap((m) => m.eliminated),
-      solvedCandidates: moves.flatMap((m) => m.solved),
-      moves,
-    }
-  }
-
   const dragonExtensions = computeStuckDragonExtensions(
     board,
     candidates,
@@ -935,7 +1061,7 @@ function buildTechniqueInstances(
   )
   dragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dragonExtensions) {
-    instances.push(buildDragonInstance('dragon', 'Dragon Colouring', chainKey, moves))
+    instances.push(buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', chainKey, moves))
   }
   const dynamicDragonExtensions = computeStuckDynamicDragonExtensions(
     board,
@@ -948,31 +1074,95 @@ function buildTechniqueInstances(
   )
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
-    // Name the instance after whichever non-colouring technique(s) its
-    // Extension Rule 3 steps actually leaned on, so "Dynamic Dragon
-    // Colouring" alone never has to be taken on faith. Fixed order
-    // regardless of which happened to fire first.
-    const techniquesUsed = new Set(moves.flatMap((m) => m.dynamicTechniques ?? []))
-    const orderedTechniques = (
-      [
-        'locked candidate',
-        'naked pair',
-        'naked triple',
-        'naked quad',
-        'hidden pair',
-        'UR',
-        'short single-digit aic',
-        'short aic',
-      ] as const
-    ).filter((t) => techniquesUsed.has(t))
-    const label =
-      orderedTechniques.length > 0
-        ? `Dynamic Dragon Colouring (${orderedTechniques.join(', ')})`
-        : 'Dynamic Dragon Colouring'
-    instances.push(buildDragonInstance('dynamic-dragon', label, chainKey, moves))
+    instances.push(buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), chainKey, moves))
   }
 
   return instances
+}
+
+function buildDragonInstance(
+  board: Board,
+  candidates: CandidateGrid,
+  idPrefix: string,
+  name: string,
+  chainKey: string,
+  moves: DragonMove[],
+): TechniqueInstance {
+  const lastMove = moves[moves.length - 1]
+  // A mass elimination's solves/eliminates are both just consequences of
+  // one fact - a side proved false, so the other side is proved true - so
+  // that fact leads the summary. The tally still follows it, but as the
+  // number of candidates that actually disappear from the grid, not a
+  // count of what the move log lists: that covers the Dragon steps' own
+  // eliminations plus everything the now-true colour forces (the false
+  // colour's candidates, and the peers of every cell it solves), each
+  // candidate counted once.
+  const summaryText =
+    lastMove.kind === 'mass-elimination' && lastMove.provenTrueColor
+      ? (() => {
+          const fact = `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} is true`
+          const eliminatedCount = countEffectiveEliminations(
+            board,
+            candidates,
+            foldDragonMoves(moves, moves.length - 1),
+          )
+          return eliminatedCount > 0
+            ? `${fact}; eliminates ${eliminatedCount} candidate${eliminatedCount === 1 ? '' : 's'}`
+            : fact
+        })()
+      : lastMove.kind === 'solution' && lastMove.provenTrueColor
+        ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} covers every empty cell, solving the puzzle`
+        : (() => {
+          const eliminated = moves.flatMap((m) => m.eliminated)
+          const solvedCount = moves.reduce((n, m) => n + m.solved.length, 0)
+          const summary: string[] = []
+          if (solvedCount > 0) {
+            summary.push(`solves ${solvedCount} cell${solvedCount === 1 ? '' : 's'}`)
+          }
+          if (eliminated.length === 1) {
+            summary.push(`eliminates ${eliminated[0].digit}${cellRef(eliminated[0].row, eliminated[0].col)}`)
+          } else if (eliminated.length > 1) {
+            summary.push(`eliminates ${eliminated.length} candidates`)
+          }
+          return summary.join(', ')
+        })()
+  return {
+    id: `${idPrefix}-${chainKey}`,
+    name,
+    notation: `${moves.length} steps - ${summaryText}.`,
+    usedCells: [],
+    usedCandidates: [],
+    eliminatedCandidates: moves.flatMap((m) => m.eliminated),
+    solvedCandidates: moves.flatMap((m) => m.solved),
+    moves,
+    techniqueRank: idPrefix === 'dragon' ? RANK_DRAGON : RANK_DYNAMIC_DRAGON,
+  }
+}
+
+/** "Dynamic Dragon Colouring (naked pair, UR)" - named after whichever
+ * non-colouring technique(s) its Extension Rule 3 steps actually leaned on,
+ * so "Dynamic Dragon Colouring" alone never has to be taken on faith. Fixed
+ * order regardless of which happened to fire first. */
+function dynamicDragonLabel(moves: DragonMove[]): string {
+  const techniquesUsed = new Set(moves.flatMap((m) => m.dynamicTechniques ?? []))
+  const orderedTechniques = (
+    [
+      'locked candidate',
+      'naked pair',
+      'naked triple',
+      'naked quad',
+      'hidden pair',
+      'UR',
+      'bug plus one',
+      'bivalue oddagon',
+      'short single-digit aic',
+      'short aic',
+      'generic aic',
+    ] as const
+  ).filter((t) => techniquesUsed.has(t))
+  return orderedTechniques.length > 0
+    ? `Dynamic Dragon Colouring (${orderedTechniques.join(', ')})`
+    : 'Dynamic Dragon Colouring'
 }
 
 /** The full effect of a technique instance, including - for a Dragon
@@ -1002,26 +1192,7 @@ function countEffectiveEliminations(
   candidates: CandidateGrid,
   effect: { eliminatedCandidates: TechniqueCandidateRef[]; solvedCandidates: TechniqueCandidateRef[] },
 ): number {
-  const after = applyTechniqueEffect(board, candidates, effect).candidates
-  const solvedDigitByCell = new Map<string, number>()
-  for (const { row, col, digit } of effect.solvedCandidates) {
-    solvedDigitByCell.set(`${row},${col}`, digit)
-  }
-  let count = 0
-  for (let row = 0; row < BOARD_SIZE; row++) {
-    for (let col = 0; col < BOARD_SIZE; col++) {
-      if (board[row][col] !== 0) {
-        continue
-      }
-      const solvedDigit = solvedDigitByCell.get(`${row},${col}`)
-      for (let digit = 1; digit <= 9; digit++) {
-        if (candidates[row][col][digit - 1] && !after[row][col][digit - 1] && digit !== solvedDigit) {
-          count++
-        }
-      }
-    }
-  }
-  return count
+  return listEffectiveEliminations(board, candidates, effect).length
 }
 
 function applyTechniqueEffect(
@@ -1057,10 +1228,61 @@ function pickGreedyInstance(instances: TechniqueInstance[]): TechniqueInstance |
     const effect = fullTechniqueEffect(instance)
     const solved = effect.solvedCandidates.length
     const eliminated = effect.eliminatedCandidates.length
-    if (solved > bestSolved || (solved === bestSolved && eliminated > bestEliminated)) {
+    if (
+      !best ||
+      solved > bestSolved ||
+      (solved === bestSolved && eliminated > bestEliminated) ||
+      // Most progress is still the deciding factor; only once that's an
+      // exact tie does the simpler technique (lower techniqueRank) win,
+      // rather than whichever happened to be found/listed first.
+      (solved === bestSolved && eliminated === bestEliminated && instance.techniqueRank < best.techniqueRank)
+    ) {
       best = instance
       bestSolved = solved
       bestEliminated = eliminated
+    }
+  }
+  return best
+}
+
+/** How many Dragon Colouring steps an instance takes to apply - 0 for every
+ * non-Dragon technique, so comparing this between two instances is a no-op
+ * unless both are Dragon/Dynamic Dragon. */
+function dragonStepCount(instance: TechniqueInstance): number {
+  return instance.moves?.length ?? 0
+}
+
+/** Solve Path search, "Easy Solve" setting: picks whichever applicable
+ * technique is simplest (lowest techniqueRank) right now, ignoring how much
+ * progress it makes - unlike the default (pickGreedyInstance), a Naked
+ * Single that only fills one cell is always preferred here over a Dragon
+ * Colouring chain that would solve half the grid, since a human working
+ * through the puzzle by hand would reach for the single first regardless of
+ * payoff. Ties - usually several instances of the exact same technique -
+ * are broken by fewest Dragon Colouring steps (a shorter chain is a simpler
+ * one; always a tie, at 0, between two non-Dragon instances) and then by
+ * most candidates eliminated, the only differentiator left once technique
+ * and chain length no longer distinguish two instances. */
+function pickEasiestInstance(instances: TechniqueInstance[]): TechniqueInstance | null {
+  let best: TechniqueInstance | null = null
+  let bestSteps = Infinity
+  let bestEliminated = -1
+  for (const instance of instances) {
+    const rank = instance.techniqueRank
+    const steps = dragonStepCount(instance)
+    if (!best || rank < best.techniqueRank || (rank === best.techniqueRank && steps < bestSteps)) {
+      best = instance
+      bestSteps = steps
+      bestEliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
+      continue
+    }
+    if (rank === best.techniqueRank && steps === bestSteps) {
+      const eliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
+      if (eliminated > bestEliminated) {
+        best = instance
+        bestSteps = steps
+        bestEliminated = eliminated
+      }
     }
   }
   return best
@@ -1089,7 +1311,14 @@ export interface SolvePathResult {
   log: string[]
 }
 
-const SOLVE_PATH_TIME_BUDGET_MS = 4000
+// Generous on purpose: this also decides the "Solvable" verdict under the grid, and
+// a search that merely runs out of time must not be mistaken for one that got
+// stuck (that used to happen - the more Dynamic Dragon techniques were ticked, the
+// slower each step, until a perfectly solvable puzzle was reported as needing brute
+// force). A search that genuinely gets stuck stops long before this; only a long,
+// still-progressing one (e.g. Exhaustive Dragon OFF, where every Dragon chain is its
+// own step) gets anywhere near it.
+const SOLVE_PATH_TIME_BUDGET_MS = 12000
 const SOLVE_PATH_MAX_STEPS = 200
 
 /**
@@ -1145,14 +1374,23 @@ function buildSolvePath(
   shortSingleDigitAicEnabled = true,
   aicLimitPerDragonStep = true,
   exhaustiveDragon = true,
+  genericAicEnabled = false,
+  easySolveEnabled = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
+  const pickInstance = easySolveEnabled ? pickEasiestInstance : pickGreedyInstance
   const log: string[] = [
-    'Method: greedy, single-candidate-per-step (no branching/backtracking) - at each step, every currently-applicable ' +
-      'technique is evaluated once and whichever solves the most cells right now is chosen (ties broken by most ' +
-      'candidates eliminated). This is not an exhaustive search for the true minimum step count, which is ' +
-      'combinatorially intractable for a full puzzle.',
+    easySolveEnabled
+      ? 'Method: "Easy Solve", single-candidate-per-step (no branching/backtracking) - at each step, every ' +
+        'currently-applicable technique is evaluated once and whichever is simplest is chosen, regardless of how ' +
+        'much progress it makes (ties broken by fewest Dragon Colouring steps, then most candidates eliminated). ' +
+        'This is not an exhaustive search for the true minimum step count, which is combinatorially intractable ' +
+        'for a full puzzle.'
+      : 'Method: greedy, single-candidate-per-step (no branching/backtracking) - at each step, every currently-applicable ' +
+        'technique is evaluated once and whichever solves the most cells right now is chosen (ties broken by most ' +
+        'candidates eliminated, then by simplest technique). This is not an exhaustive search for the true minimum ' +
+        'step count, which is combinatorially intractable for a full puzzle.',
   ]
   let curBoard = board
   let curCandidates = candidates
@@ -1178,8 +1416,9 @@ function buildSolvePath(
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
       exhaustiveDragon,
+      genericAicEnabled,
     )
-    const chosen = pickGreedyInstance(instances)
+    const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart
     if (!chosen) {
       log.push(`Step ${steps.length + 1}: no technique applies (evaluated 0 candidates in ${stepElapsed}ms) - stuck.`)
@@ -1228,6 +1467,10 @@ function buildSolvePath(
 export type PuzzleSolvability =
   | { kind: 'solvable' }
   | { kind: 'solvable-brute-force' }
+  /** The technique search ran out of time (or steps) while still making
+   * progress - it neither finished nor got stuck, so nothing can be claimed
+   * about whether brute force is needed. */
+  | { kind: 'solvable-unknown' }
   | {
       kind: 'unsolvable'
       reason: 'inaccurate-candidates' | 'multiple-solutions' | 'no-solutions' | 'inaccurate-placements'
@@ -1249,7 +1492,7 @@ export type PuzzleSolvability =
 function derivePuzzleSolvability(
   solveStatus: SolveStatus,
   candidatesAccurate: boolean,
-  solvedByTechniques: boolean,
+  techniqueSearch: SolvePathResult | null,
 ): PuzzleSolvability {
   if (solveStatus === 'invalid') {
     return { kind: 'unsolvable', reason: 'inaccurate-placements' }
@@ -1263,7 +1506,15 @@ function derivePuzzleSolvability(
   if (!candidatesAccurate) {
     return { kind: 'unsolvable', reason: 'inaccurate-candidates' }
   }
-  return solvedByTechniques ? { kind: 'solvable' } : { kind: 'solvable-brute-force' }
+  if (techniqueSearch?.solvedFully) {
+    return { kind: 'solvable' }
+  }
+  // Only a search that genuinely got stuck proves the techniques aren't enough;
+  // one that hit its time/step limit proves nothing either way.
+  if (techniqueSearch && (techniqueSearch.stoppedReason === 'time-budget' || techniqueSearch.stoppedReason === 'step-cap')) {
+    return { kind: 'solvable-unknown' }
+  }
+  return { kind: 'solvable-brute-force' }
 }
 
 const UNSOLVABLE_REASON_TEXT: Record<Extract<PuzzleSolvability, { kind: 'unsolvable' }>['reason'], string> = {
@@ -1279,12 +1530,209 @@ function solvabilityText(solvability: PuzzleSolvability): string {
       return 'Solvable'
     case 'solvable-brute-force':
       return 'Solvable with brute force'
+    case 'solvable-unknown':
+      return "Solvable (couldn't tell whether brute force is needed - the technique search timed out)"
     case 'unsolvable':
       return `Unsolvable (${UNSOLVABLE_REASON_TEXT[solvability.reason]})`
   }
 }
 
-type TechniquePanelTab = 'techniques' | 'solve-path'
+type TechniquePanelTab = 'techniques' | 'solve-path' | 'find'
+
+/** What the "Find by elims" tab is currently showing. `found` carries the
+ * technique itself plus the grid it was found against, so the tab can tell
+ * when the grid has since changed and the result no longer applies. */
+type FindResult =
+  | { kind: 'message'; tone: 'error' | 'info'; title: string; lines: string[] }
+  | {
+      kind: 'found'
+      instance: TechniqueInstance
+      /** Candidates the technique removes that the user did not enter: how
+       * many, and the first few written out. */
+      extraCount: number
+      extras: string[]
+      note?: string
+      boardBefore: Board
+      candidatesBefore: CandidateGrid
+    }
+
+interface FindPanelData {
+  input: string
+  onInput: (value: string) => void
+  onFind: () => void
+  result: FindResult | null
+  /** False once the grid has changed since a `found` result was computed. */
+  resultIsCurrent: boolean
+}
+
+/** The forward/rewind player under a Dragon Colouring row: steps through
+ * the move log one move at a time, with that move's own explanation.
+ *
+ * When the move on screen is a Dynamic Dragon Colouring step that chained
+ * more than one technique together, a second, separate forward/rewind
+ * control appears underneath it - "Reveal technique 1/1" etc. Revealing an
+ * extra technique brings its own basis cells (yellow) and internal,
+ * hypothetical eliminations (the hollow red circle+cross) onto the grid,
+ * one at a time, instead of the whole chain's reasoning appearing at once.
+ * `substepIndex` is the raw, shared piece of state: null means "not
+ * navigating - show every substep revealed", which this component resolves
+ * against the move currently on screen's own substep count (a different
+ * move, reached via the main stepper above, restarts at "fully revealed"
+ * without the parent needing to reset anything move-specific itself). */
+function DragonStepper({
+  moves,
+  stepIndex,
+  onDragonStep,
+  substepIndex,
+  onSubstep,
+}: {
+  moves: DragonMove[]
+  stepIndex: number
+  onDragonStep: (delta: number) => void
+  substepIndex: number | null
+  onSubstep: (delta: number) => void
+}) {
+  const move = moves[stepIndex]
+  const substeps = move.substeps
+  const resolvedSubstepIndex = substepIndex ?? (substeps ? substeps.length - 1 : 0)
+  return (
+    <div className="dragon-player">
+      <div className="dragon-player-controls">
+        <button type="button" className="dragon-player-button" disabled={stepIndex <= 0} onClick={() => onDragonStep(-1)}>
+          ◀ Rewind
+        </button>
+        <span className="dragon-player-step">
+          Step {stepIndex + 1} / {moves.length}
+        </span>
+        <button
+          type="button"
+          className="dragon-player-button"
+          disabled={stepIndex >= moves.length - 1}
+          onClick={() => onDragonStep(1)}
+        >
+          Forward ▶
+        </button>
+      </div>
+      <p className="dragon-player-description">{move.description}</p>
+      {substeps && substeps.length > 1 && (
+        <div className="dragon-substep-player">
+          <div className="dragon-player-controls dragon-substep-controls">
+            <button
+              type="button"
+              className="dragon-player-button"
+              disabled={resolvedSubstepIndex <= 0}
+              onClick={() => onSubstep(-1)}
+            >
+              ◀ Rewind
+            </button>
+            <span className="dragon-player-step">
+              Technique {resolvedSubstepIndex + 1} / {substeps.length}
+            </span>
+            <button
+              type="button"
+              className="dragon-player-button"
+              disabled={resolvedSubstepIndex >= substeps.length - 1}
+              onClick={() => onSubstep(1)}
+            >
+              Forward ▶
+            </button>
+          </div>
+          <p className="dragon-substep-description">{substeps[resolvedSubstepIndex].clause}.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** "Find by elims": type the candidates you want gone (8r2c3, 2r3c4) and get
+ * the Dragon or Dynamic Dragon Colouring that eliminates them, shown like a
+ * row of the Techniques list - same name, summary and step player - with the
+ * grid highlighting it the same way. */
+function FindPanel({
+  input,
+  onInput,
+  onFind,
+  result,
+  resultIsCurrent,
+  dragonStepIndex,
+  onDragonStep,
+  dragonSubstepIndex,
+  onDragonSubstep,
+}: FindPanelData & {
+  dragonStepIndex: number
+  onDragonStep: (delta: number) => void
+  dragonSubstepIndex: number | null
+  onDragonSubstep: (delta: number) => void
+}) {
+  return (
+    <div className="find-panel">
+      <p className="technique-empty">
+        Enter candidates to eliminate as <b>digit, row, column</b> - like <b>8r2c3, 2r3c4</b>. This finds the Dragon (or
+        Dynamic Dragon) Colouring that eliminates them.
+      </p>
+      <form
+        className="find-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onFind()
+        }}
+      >
+        <input
+          type="text"
+          className="find-input"
+          value={input}
+          placeholder="8r2c3, 2r3c4"
+          aria-label="Candidates to eliminate"
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => onInput(event.target.value)}
+        />
+        <button type="submit" className="find-button">
+          Find
+        </button>
+      </form>
+
+      {result?.kind === 'message' && (
+        <div className={`find-message find-message-${result.tone}`} role="status">
+          <strong>{result.title}</strong>
+          {result.lines.length > 0 && (
+            <ul>
+              {result.lines.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {result?.kind === 'found' &&
+        (resultIsCurrent && result.instance.moves ? (
+          <div className="find-result">
+            <p className="find-summary">
+              {result.extraCount === 0
+                ? 'Eliminates exactly the candidates you entered.'
+                : `Also eliminates ${result.extraCount} other candidate${result.extraCount === 1 ? '' : 's'}: ${result.extras.join(', ')}${result.extraCount > result.extras.length ? ', ...' : ''}.`}
+            </p>
+            <div className="technique-item active find-item">
+              <span className="technique-name">{result.instance.name}</span>
+              <span className="technique-notation">{result.instance.notation}</span>
+              <DragonStepper
+                moves={result.instance.moves}
+                stepIndex={Math.min(dragonStepIndex, result.instance.moves.length - 1)}
+                onDragonStep={onDragonStep}
+                substepIndex={dragonSubstepIndex}
+                onSubstep={onDragonSubstep}
+              />
+            </div>
+            {result.note && <p className="technique-empty">{result.note}</p>}
+            <p className="technique-empty">Click Apply to make these eliminations.</p>
+          </div>
+        ) : (
+          <p className="solve-path-stale-warning">The grid has changed since this was found - press Find again.</p>
+        ))}
+    </div>
+  )
+}
 
 interface TechniquePanelProps {
   tab: TechniquePanelTab
@@ -1294,6 +1742,8 @@ interface TechniquePanelProps {
   onSelect: (id: string) => void
   dragonStepIndex: number
   onDragonStep: (delta: number) => void
+  dragonSubstepIndex: number | null
+  onDragonSubstep: (delta: number) => void
   solvePath: SolvePathResult | null
   activeSolvePathIndex: number | null
   onSelectSolvePathStep: (index: number) => void
@@ -1304,10 +1754,16 @@ interface TechniquePanelProps {
   showSolvePathLog: boolean
   onToggleSolvePathLog: () => void
   solvability: PuzzleSolvability
+  find: FindPanelData
+  easySolveEnabled: boolean
+  onToggleEasySolve: () => void
 }
 
-/** The panel to the left of the grid, with two tabs sharing one "Apply"
+/** The panel to the left of the grid, with three tabs sharing one "Apply"
  * button:
+ *  - Find by elims: type candidates to eliminate (8r2c3, 2r3c4) and get the
+ *    Dragon / Dynamic Dragon Colouring that does it - see FindPanel and
+ *    SudokuDragonTargetFinder.
  *  - Techniques: every technique instance the current candidates support,
  *    in Sudoku notation. Clicking a row highlights what it uses/
  *    eliminates/solves on the grid; it doesn't change the board. A Dragon
@@ -1328,6 +1784,8 @@ function TechniquePanel({
   onSelect,
   dragonStepIndex,
   onDragonStep,
+  dragonSubstepIndex,
+  onDragonSubstep,
   solvePath,
   activeSolvePathIndex,
   onSelectSolvePathStep,
@@ -1338,6 +1796,9 @@ function TechniquePanel({
   showSolvePathLog,
   //onToggleSolvePathLog,
   solvability,
+  find,
+  easySolveEnabled,
+  onToggleEasySolve,
 }: TechniquePanelProps) {
   return (
     <div className="technique-panel">
@@ -1360,6 +1821,15 @@ function TechniquePanel({
             onClick={() => onTabChange('solve-path')}
           >
             Solve path <span className="experimental-label">experimental</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'find'}
+            className={['technique-tab', tab === 'find' ? 'active' : ''].filter(Boolean).join(' ')}
+            onClick={() => onTabChange('find')}
+          >
+            Find by elims
           </button>
         </div>
         <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
@@ -1393,30 +1863,13 @@ function TechniquePanel({
                     <span className="technique-notation">{instance.notation}</span>
                   </button>
                   {isActive && moves && (
-                    <div className="dragon-player">
-                      <div className="dragon-player-controls">
-                        <button
-                          type="button"
-                          className="dragon-player-button"
-                          disabled={stepIndex <= 0}
-                          onClick={() => onDragonStep(-1)}
-                        >
-                          ◀ Rewind
-                        </button>
-                        <span className="dragon-player-step">
-                          Step {stepIndex + 1} / {moves.length}
-                        </span>
-                        <button
-                          type="button"
-                          className="dragon-player-button"
-                          disabled={stepIndex >= moves.length - 1}
-                          onClick={() => onDragonStep(1)}
-                        >
-                          Forward ▶
-                        </button>
-                      </div>
-                      <p className="dragon-player-description">{moves[stepIndex].description}</p>
-                    </div>
+                    <DragonStepper
+                      moves={moves}
+                      stepIndex={stepIndex}
+                      onDragonStep={onDragonStep}
+                      substepIndex={dragonSubstepIndex}
+                      onSubstep={onDragonSubstep}
+                    />
                   )}
                 </li>
               )
@@ -1424,12 +1877,31 @@ function TechniquePanel({
           </ul>
         </>
         )
+      ) : tab === 'find' ? (
+        <FindPanel
+          {...find}
+          dragonStepIndex={dragonStepIndex}
+          onDragonStep={onDragonStep}
+          dragonSubstepIndex={dragonSubstepIndex}
+          onDragonSubstep={onDragonSubstep}
+        />
       ) : (
         <>
           <div className="solve-path-submenu">
             <button type="button" className="solve-path-generate-button" onClick={onGenerateSolvePath}>
               {solvePath ? 'Regenerate' : 'Generate'}
             </button>
+            <label
+              className="solve-path-easy-solve"
+              title={
+                easySolveEnabled
+                  ? 'Each step picks whichever applicable technique is simplest, regardless of how much progress it makes - ties go to the shortest Dragon Colouring chain, then the most eliminations.'
+                  : 'Each step picks whichever applicable technique makes the most progress right now (most cells solved, then most candidates eliminated, then the simplest technique).'
+              }
+            >
+              <input type="checkbox" checked={easySolveEnabled} onChange={onToggleEasySolve} />
+              Easy Solve
+            </label>
           </div>
           {showSolvePathLog && (
             <div className="solve-path-log" role="log">
@@ -1479,30 +1951,13 @@ function TechniquePanel({
                         <span className="technique-notation">{step.instance.notation}</span>
                       </button>
                       {isActive && moves && (
-                        <div className="dragon-player">
-                          <div className="dragon-player-controls">
-                            <button
-                              type="button"
-                              className="dragon-player-button"
-                              disabled={stepIndex <= 0}
-                              onClick={() => onDragonStep(-1)}
-                            >
-                              ◀ Rewind
-                            </button>
-                            <span className="dragon-player-step">
-                              Step {stepIndex + 1} / {moves.length}
-                            </span>
-                            <button
-                              type="button"
-                              className="dragon-player-button"
-                              disabled={stepIndex >= moves.length - 1}
-                              onClick={() => onDragonStep(1)}
-                            >
-                              Forward ▶
-                            </button>
-                          </div>
-                          <p className="dragon-player-description">{moves[stepIndex].description}</p>
-                        </div>
+                        <DragonStepper
+                          moves={moves}
+                          stepIndex={stepIndex}
+                          onDragonStep={onDragonStep}
+                          substepIndex={dragonSubstepIndex}
+                          onSubstep={onDragonSubstep}
+                        />
                       )}
                     </li>
                   )
@@ -1640,7 +2095,15 @@ export default function App() {
   const [highlightedDigit, setHighlightedDigit] = useState<number | null>(null)
   const [activeTechniqueId, setActiveTechniqueId] = useState<string | null>(null)
   const [dragonStepIndex, setDragonStepIndex] = useState(0)
+  // null = "not navigating - show every technique substep of the current
+  // Dynamic Dragon Colouring step revealed at once" (the default, and the
+  // only state a single-technique step or any other move kind ever has).
+  // Only becomes a concrete index once the substep player's forward/rewind
+  // is used - see DragonStepper's own resolvedSubstepIndex.
+  const [dragonSubstepIndex, setDragonSubstepIndex] = useState<number | null>(null)
   const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
+  const [findInput, setFindInput] = useState('')
+  const [findResult, setFindResult] = useState<FindResult | null>(null)
   const [activeSolvePathIndex, setActiveSolvePathIndex] = useState<number | null>(null)
   // Deliberately state, not a useMemo off [board, candidates]: the whole
   // point is this does NOT recompute on every grid change - only Generate/
@@ -1678,23 +2141,29 @@ export default function App() {
     () => new Set(DEFAULT_SETTINGS.allowedRule3Techniques),
   )
   const [shortAicEnabled, setShortAicEnabled] = useState(DEFAULT_SETTINGS.shortAicEnabled)
+  const [genericAicEnabled, setGenericAicEnabled] = useState(DEFAULT_SETTINGS.genericAicEnabled)
   const [shortSingleDigitAicEnabled, setShortSingleDigitAicEnabled] = useState(
     DEFAULT_SETTINGS.shortSingleDigitAicEnabled,
   )
   // Invariants, kept by the toggle handlers rather than derived at read
   // time (so the stored state never says something the checkboxes can't):
-  //  - shortAicEnabled implies shortSingleDigitAicEnabled
+  //  - genericAicEnabled implies shortAicEnabled implies shortSingleDigitAicEnabled
   //  - a disregard flag can only be false while its technique is enabled
   //  - dragonGenerationDisregardsAic can only be false while
-  //    dragonGenerationDisregardsSingleDigitAic is also false
+  //    dragonGenerationDisregardsSingleDigitAic is also false, and
+  //    dragonGenerationDisregardsGenericAic while dragonGenerationDisregardsAic is
   const [dragonGenerationDisregardsSingleDigitAic, setDragonGenerationDisregardsSingleDigitAic] = useState(
     DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic,
   )
   const [dragonGenerationDisregardsAic, setDragonGenerationDisregardsAic] = useState(
     DEFAULT_SETTINGS.dragonGenerationDisregardsAic,
   )
+  const [dragonGenerationDisregardsGenericAic, setDragonGenerationDisregardsGenericAic] = useState(
+    DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic,
+  )
   const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
   const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
+  const [easySolveEnabled, setEasySolveEnabled] = useState(DEFAULT_SETTINGS.easySolveEnabled)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
     DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics,
   )
@@ -1808,7 +2277,7 @@ export default function App() {
   // it off excludes 'short aic' regardless of that checkbox's own state,
   // rather than needing every Dynamic Dragon call site to check both.
   const effectiveAllowedRule3Techniques = useMemo(() => {
-    if (shortAicEnabled && shortSingleDigitAicEnabled) {
+    if (shortAicEnabled && shortSingleDigitAicEnabled && genericAicEnabled) {
       return allowedRule3Techniques
     }
     const next = new Set(allowedRule3Techniques)
@@ -1818,8 +2287,11 @@ export default function App() {
     if (!shortSingleDigitAicEnabled) {
       next.delete('short single-digit aic')
     }
+    if (!genericAicEnabled) {
+      next.delete('generic aic')
+    }
     return next
-  }, [allowedRule3Techniques, shortAicEnabled, shortSingleDigitAicEnabled])
+  }, [allowedRule3Techniques, shortAicEnabled, shortSingleDigitAicEnabled, genericAicEnabled])
 
   const techniqueInstances = useMemo(
     () =>
@@ -1832,6 +2304,7 @@ export default function App() {
         shortSingleDigitAicEnabled,
         aicLimitPerDragonStep,
         exhaustiveDragonColouring,
+        genericAicEnabled,
       ),
     [
       board,
@@ -1842,6 +2315,7 @@ export default function App() {
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
       exhaustiveDragonColouring,
+      genericAicEnabled,
     ],
   )
   // Looked up by id (rather than kept as its own state) so that if the
@@ -1854,35 +2328,87 @@ export default function App() {
   // the exact same highlight rendering a live Techniques click would,
   // rather than a separate path. Only one of the two tabs' selections is
   // ever "live" here, matching whichever tab is actually open.
+  // The Find tab's result is tied to the grid it was found against: once the
+  // board or candidates change it no longer applies, so it stops
+  // highlighting and can't be applied until Find is pressed again.
+  const findResultIsCurrent =
+    findResult?.kind === 'found' &&
+    boardsEqual(board, findResult.boardBefore) &&
+    candidatesEqual(candidates, findResult.candidatesBefore)
+  const findInstance = findResult?.kind === 'found' && findResultIsCurrent ? findResult.instance : null
   const highlightedTechnique =
     techniquePanelTab === 'solve-path'
       ? (activeSolvePathIndex !== null ? (solvePath?.steps[activeSolvePathIndex]?.instance ?? null) : null)
-      : activeTechnique
-  // Dragon Colouring's colors/eliminations/solves come from folding its
-  // move log up through the current step, not from static fields, since
-  // which candidate has which color changes as the playback advances.
-  const dragonHighlight = useMemo(
-    () => (highlightedTechnique?.moves ? foldDragonMoves(highlightedTechnique.moves, dragonStepIndex) : null),
-    [highlightedTechnique, dragonStepIndex],
-  )
-  // Dynamic Dragon Colouring's non-colouring technique (a naked pair, a
-  // Unique Rectangle) only applies at its own single step - unlike the
-  // colours/eliminations above, this isn't cumulative, so it comes from
-  // just the one move currently on screen, not the fold.
-  const dragonTechniqueCellKeys = useMemo(() => {
-    const move = highlightedTechnique?.moves?.[Math.min(dragonStepIndex, highlightedTechnique.moves.length - 1)]
-    if (!move?.dynamicTechniqueCells) {
+      : techniquePanelTab === 'find'
+        ? findInstance
+        : activeTechnique
+  // The move currently on screen (current main step, clamped) - everything
+  // below keys off this one move and, when it chained more than one
+  // technique together, how many of its substeps are currently revealed.
+  const currentDragonMove = useMemo(() => {
+    const moves = highlightedTechnique?.moves
+    if (!moves) {
       return null
     }
-    return new Set(move.dynamicTechniqueCells.map(([r, c]) => `${r},${c}`))
+    return moves[Math.min(dragonStepIndex, moves.length - 1)]
   }, [highlightedTechnique, dragonStepIndex])
+  // How many of currentDragonMove.substeps are currently revealed - null
+  // (not navigating) defaults to "every substep", exactly the whole-chain
+  // view this had before the substep player existed. A move with 0-1
+  // substeps (every kind but a multi-technique extension-rule3) has
+  // nothing to reveal incrementally, so these two are equivalent for it.
+  const substeps: DragonRule3Substep[] | null = currentDragonMove?.substeps ?? null
+  const maxSubstepIndex = substeps ? substeps.length - 1 : 0
+  const visibleSubstepIndex = dragonSubstepIndex ?? maxSubstepIndex
+  const atFinalSubstep = !substeps || substeps.length <= 1 || visibleSubstepIndex >= maxSubstepIndex
+  const visibleSubsteps = substeps?.slice(0, visibleSubstepIndex + 1) ?? null
+  // Dragon Colouring's colors/eliminations/solves come from folding its
+  // move log up through the current step, not from static fields, since
+  // which candidate has which color changes as the playback advances. The
+  // current move's own conclusion (the cell it colours) is withheld until
+  // its substep player (if it has one) reaches the final technique - see
+  // foldDragonMoves' includeCurrentMove.
+  const dragonHighlight = useMemo(
+    () =>
+      highlightedTechnique?.moves ? foldDragonMoves(highlightedTechnique.moves, dragonStepIndex, atFinalSubstep) : null,
+    [highlightedTechnique, dragonStepIndex, atFinalSubstep],
+  )
+  // Dynamic Dragon Colouring's non-colouring technique(s) (a naked pair, a
+  // Unique Rectangle, ...) only apply at their own single step - unlike the
+  // colours/eliminations above, this isn't cumulative across main steps, so
+  // it comes from just the one move currently on screen (and, within that
+  // move, only as many substeps as are currently revealed), not the fold.
+  const dragonTechniqueCellKeys = useMemo(() => {
+    if (visibleSubsteps) {
+      return new Set(visibleSubsteps.flatMap((s) => s.basisCells).map(([r, c]) => `${r},${c}`))
+    }
+    if (!currentDragonMove?.dynamicTechniqueCells) {
+      return null
+    }
+    return new Set(currentDragonMove.dynamicTechniqueCells.map(([r, c]) => `${r},${c}`))
+  }, [visibleSubsteps, currentDragonMove])
   // An AIC (either kind) used within this one Dynamic Dragon Colouring step
   // gets the same purple/curved-line treatment the standalone Short AIC
-  // technique shows - also just the current step's own move, not folded.
+  // technique shows - also just the currently-revealed substeps, not folded
+  // across main steps.
   const dragonAicChains = useMemo(() => {
-    const move = highlightedTechnique?.moves?.[Math.min(dragonStepIndex, highlightedTechnique.moves.length - 1)]
-    return move?.aicChains ?? null
-  }, [highlightedTechnique, dragonStepIndex])
+    if (visibleSubsteps) {
+      const chains = visibleSubsteps
+        .filter((s): s is typeof s & { aic: NonNullable<(typeof s)['aic']> } => !!s.aic)
+        .map((s) => ({ candidates: s.aic.candidates, links: s.aic.links, hypotheticalEliminations: s.eliminatedCandidates }))
+      return chains.length > 0 ? chains : null
+    }
+    return currentDragonMove?.aicChains ?? null
+  }, [visibleSubsteps, currentDragonMove])
+  // Every "assumed" elimination across the currently-revealed substeps -
+  // any Dynamic Dragon Colouring technique, not just an AIC: the same
+  // hollow red circle + cross an AIC's own internal elimination always
+  // got, generalized to every technique's own hypothetical deduction (a
+  // Locked Candidate's, a naked pair's, ...), not just an AIC's.
+  const dragonAssumedEliminations = useMemo(
+    () => (visibleSubsteps ? visibleSubsteps.flatMap((s) => s.eliminatedCandidates) : null),
+    [visibleSubsteps],
+  )
 
   // True once the live board/candidates have drifted from what the cached
   // solve path's own next step expects (someone applied it out of order,
@@ -1954,6 +2480,8 @@ export default function App() {
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
       exhaustiveDragonColouring,
+      genericAicEnabled,
+      easySolveEnabled,
     )
   }, [
     board,
@@ -1964,9 +2492,11 @@ export default function App() {
     shortSingleDigitAicEnabled,
     aicLimitPerDragonStep,
     exhaustiveDragonColouring,
+    genericAicEnabled,
+    easySolveEnabled,
   ])
   const solvability = useMemo(
-    () => derivePuzzleSolvability(puzzleSolveResult.status, candidatesAccurate, bruteSolvePath?.solvedFully ?? false),
+    () => derivePuzzleSolvability(puzzleSolveResult.status, candidatesAccurate, bruteSolvePath),
     [puzzleSolveResult, candidatesAccurate, bruteSolvePath],
   )
 
@@ -2270,27 +2800,24 @@ export default function App() {
 
   function onUniqueRectangleType1() {
     if (!pairFinder.hasFullCandidates(board, candidates)) {
-      setStatus(
-        'Unique Rectangle Type 1 needs every empty cell to have its candidates marked first — try Autofill all.',
-      )
+      setStatus('Unique Rectangle needs every empty cell to have its candidates marked first — try Autofill all.')
       return
     }
 
-    const instances = uniqueRectangleFinder.findType1Instances(board, candidates)
+    const instances = uniqueRectangleFinder.find(board, candidates)
     if (instances.length === 0) {
-      setStatus('No Unique Rectangle Type 1 deductions to apply.')
+      setStatus('No Unique Rectangle deductions to apply.')
       return
     }
 
     const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
     const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
     for (const ur of instances) {
-      const [extraRow, extraCol] = ur.extraCell
-      if (ur.solvedDigit !== null) {
-        solvedByCell.set(`${extraRow},${extraCol}`, { row: extraRow, col: extraCol, digit: ur.solvedDigit })
+      for (const { row, col, digit } of ur.solvedCandidates) {
+        solvedByCell.set(`${row},${col}`, { row, col, digit })
       }
-      for (const digit of ur.eliminatedDigits) {
-        eliminatedByCell.set(`${extraRow},${extraCol},${digit}`, { row: extraRow, col: extraCol, digit })
+      for (const { row, col, digit } of ur.eliminatedCandidates) {
+        eliminatedByCell.set(`${row},${col},${digit}`, { row, col, digit })
       }
     }
 
@@ -2322,7 +2849,85 @@ export default function App() {
     if (eliminations.length > 0) {
       parts.push(`eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'}`)
     }
-    setStatus(`Unique Rectangle Type 1 ${parts.join(' and ')}.`)
+    setStatus(`Unique Rectangle ${parts.join(' and ')}.`)
+  }
+
+  function onBugPlusOne() {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus('BUG+1 needs every empty cell to have its candidates marked first — try Autofill all.')
+      return
+    }
+
+    const bugPlusOne = bugPlusOneFinder.find(board, candidates)
+    if (!bugPlusOne) {
+      setStatus('No BUG+1 to apply - not every unsolved cell is bivalue except one.')
+      return
+    }
+
+    const [row, col] = bugPlusOne.cell
+    const nextBoard = cloneBoard(board)
+    nextBoard[row][col] = bugPlusOne.solvedDigit
+    const nextCandidates = cloneCandidates(candidates)
+    nextCandidates[row][col] = Array(9).fill(false)
+    SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, bugPlusOne.solvedDigit)
+
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
+    setStatus(`BUG+1 solved ${cellRef(row, col)} as ${bugPlusOne.solvedDigit}.`)
+  }
+
+  function onBivalueOddagon() {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus('Bivalue Oddagon needs every empty cell to have its candidates marked first — try Autofill all.')
+      return
+    }
+
+    const instances = bivalueOddagonFinder.find(board, candidates)
+    if (instances.length === 0) {
+      setStatus('No Bivalue Oddagon deductions to apply.')
+      return
+    }
+
+    const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    for (const oddagon of instances) {
+      if (oddagon.solvedCell) {
+        const [row, col] = oddagon.solvedCell
+        solvedByCell.set(`${row},${col}`, { row, col, digit: oddagon.guardianDigit })
+      }
+      for (const { row, col, digit } of oddagon.eliminations) {
+        eliminatedByCell.set(`${row},${col},${digit}`, { row, col, digit })
+      }
+    }
+
+    const solvedAssignments = Array.from(solvedByCell.values())
+    const eliminations = Array.from(eliminatedByCell.values())
+
+    const nextBoard = cloneBoard(board)
+    for (const { row, col, digit } of solvedAssignments) {
+      nextBoard[row][col] = digit
+    }
+
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of solvedAssignments) {
+      nextCandidates[row][col] = Array(9).fill(false)
+      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
+    }
+    for (const { row, col, digit } of eliminations) {
+      if (nextBoard[row][col] === 0) {
+        nextCandidates[row][col][digit - 1] = false
+      }
+    }
+
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
+
+    const parts: string[] = []
+    if (solvedAssignments.length > 0) {
+      parts.push(`solved ${solvedAssignments.length} cell${solvedAssignments.length === 1 ? '' : 's'}`)
+    }
+    if (eliminations.length > 0) {
+      parts.push(`eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'}`)
+    }
+    setStatus(`Bivalue Oddagon ${parts.join(' and ')}.`)
   }
 
   function onSimpleColoring() {
@@ -2432,6 +3037,33 @@ export default function App() {
     commitAutoSolve({ board, givens, candidates: nextCandidates })
     setStatus(
       `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via short AIC.`,
+    )
+  }
+
+  function onGenericAic() {
+    if (!genericAicEnabled) {
+      setStatus('Generic AIC is turned off in Settings.')
+      return
+    }
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus('Generic AIC needs every empty cell to have its candidates marked first — try Autofill all.')
+      return
+    }
+
+    const eliminations = computeGenericAicEliminations(board, candidates)
+    if (eliminations.length === 0) {
+      setStatus('No generic AIC eliminations to apply.')
+      return
+    }
+
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of eliminations) {
+      nextCandidates[row][col][digit - 1] = false
+    }
+
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
+    setStatus(
+      `Eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'} via generic AIC.`,
     )
   }
 
@@ -2595,7 +3227,9 @@ export default function App() {
         return results.filter(
           ({ moves }) =>
             !moves.some((move) =>
-              (move.dynamicTechniques ?? []).some((t) => t === 'short aic' || t === 'short single-digit aic'),
+              (move.dynamicTechniques ?? []).some(
+                (t) => t === 'short aic' || t === 'short single-digit aic' || t === 'generic aic',
+              ),
             ),
         )
       },
@@ -2656,9 +3290,12 @@ export default function App() {
 
   function toggleShortAicEnabled() {
     if (shortAicEnabled) {
+      // Generic AIC builds on Short AIC, so it can't outlive it either.
       setShortAicEnabled(false)
+      setGenericAicEnabled(false)
       // Nothing left to not-disregard.
       setDragonGenerationDisregardsAic(true)
+      setDragonGenerationDisregardsGenericAic(true)
       return
     }
     if (!shortSingleDigitAicEnabled) {
@@ -2679,11 +3316,32 @@ export default function App() {
       // Short AIC builds on Single-Digit AIC, so it can't outlive it.
       setShortSingleDigitAicEnabled(false)
       setShortAicEnabled(false)
+      setGenericAicEnabled(false)
       setDragonGenerationDisregardsSingleDigitAic(true)
       setDragonGenerationDisregardsAic(true)
+      setDragonGenerationDisregardsGenericAic(true)
       return
     }
     setShortSingleDigitAicEnabled(true)
+  }
+
+  function toggleGenericAicEnabled() {
+    if (genericAicEnabled) {
+      setGenericAicEnabled(false)
+      setDragonGenerationDisregardsGenericAic(true)
+      return
+    }
+    if (!shortAicEnabled) {
+      return
+    }
+    // Same rare, deliberate settings change as Short AIC's - and the same
+    // cost: with this on, every generated puzzle is also checked for long chains.
+    const confirmed = window.confirm(
+      `Generic AIC searches chains of up to ${GENERIC_AIC_MAX_LENGTH} links, and generating Dragon Colouring puzzles will take longer with this setting enabled.  Are you sure you want to turn this ON?`,
+    )
+    if (confirmed) {
+      setGenericAicEnabled(true)
+    }
   }
 
   function toggleDragonGenerationDisregardsSingleDigitAic() {
@@ -2695,8 +3353,10 @@ export default function App() {
     }
     setDragonGenerationDisregardsSingleDigitAic(true)
     // Disregarding general AIC is only valid on top of disregarding
-    // single-digit AIC, so switching this back on carries it along.
+    // single-digit AIC, so switching this back on carries it along (and,
+    // likewise, Generic AIC's on top of that).
     setDragonGenerationDisregardsAic(true)
+    setDragonGenerationDisregardsGenericAic(true)
   }
 
   function toggleDragonGenerationDisregardsAic() {
@@ -2707,6 +3367,17 @@ export default function App() {
       return
     }
     setDragonGenerationDisregardsAic(true)
+    setDragonGenerationDisregardsGenericAic(true)
+  }
+
+  function toggleDragonGenerationDisregardsGenericAic() {
+    if (dragonGenerationDisregardsGenericAic) {
+      if (!dragonGenerationDisregardsAic && genericAicEnabled) {
+        setDragonGenerationDisregardsGenericAic(false)
+      }
+      return
+    }
+    setDragonGenerationDisregardsGenericAic(true)
   }
 
   function toggleAicLimitPerDragonStep() {
@@ -2727,12 +3398,15 @@ export default function App() {
     setMinBaseMedusaFilter(DEFAULT_SETTINGS.minBaseMedusaFilter)
     setShortSingleDigitAicEnabled(DEFAULT_SETTINGS.shortSingleDigitAicEnabled)
     setShortAicEnabled(DEFAULT_SETTINGS.shortAicEnabled)
+    setGenericAicEnabled(DEFAULT_SETTINGS.genericAicEnabled)
     setAllowedRule3Techniques(new Set(DEFAULT_SETTINGS.allowedRule3Techniques))
     setExhaustiveDragonColouring(DEFAULT_SETTINGS.exhaustiveDragonColouring)
+    setEasySolveEnabled(DEFAULT_SETTINGS.easySolveEnabled)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
     setDynamicDragonAutoSolveIncludesAics(DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics)
     setDragonGenerationDisregardsSingleDigitAic(DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic)
     setDragonGenerationDisregardsAic(DEFAULT_SETTINGS.dragonGenerationDisregardsAic)
+    setDragonGenerationDisregardsGenericAic(DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic)
     setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
     setSwatchColors(defaultSwatchColors())
     showToast('Settings reset to defaults.')
@@ -2740,6 +3414,10 @@ export default function App() {
 
   function toggleExhaustiveDragonColouring() {
     setExhaustiveDragonColouring((current) => !current)
+  }
+
+  function toggleEasySolveEnabled() {
+    setEasySolveEnabled((current) => !current)
   }
 
   function toggleDynamicDragonAutoSolveIncludesAics() {
@@ -2753,20 +3431,40 @@ export default function App() {
   function onSelectTechnique(id: string) {
     setActiveTechniqueId((current) => (current === id ? null : id))
     setDragonStepIndex(0)
+    setDragonSubstepIndex(null)
   }
 
   function onTechniquePanelTabChange(tab: TechniquePanelTab) {
     setTechniquePanelTab(tab)
+    if (tab === 'find') {
+      setDragonStepIndex(0)
+      setDragonSubstepIndex(null)
+    }
   }
 
   function onSelectSolvePathStep(index: number) {
     setActiveSolvePathIndex((current) => (current === index ? null : index))
     setDragonStepIndex(0)
+    setDragonSubstepIndex(null)
   }
 
   function onDragonStep(delta: number) {
     const maxIndex = (highlightedTechnique?.moves?.length ?? 1) - 1
     setDragonStepIndex((current) => Math.min(maxIndex, Math.max(0, current + delta)))
+    // A different main step is a different move, with its own (possibly
+    // absent) substeps - always restart that move's substep player at
+    // "fully revealed" rather than carrying over an index from whichever
+    // move was on screen before.
+    setDragonSubstepIndex(null)
+  }
+
+  /** The substep player under the current move (see DragonStepper) -
+   * separate from, and independent of, onDragonStep above: it never moves
+   * the main step index, only how many of the current step's own chained
+   * techniques are revealed. */
+  function onDragonSubstep(delta: number) {
+    const maxIndex = (currentDragonMove?.substeps?.length ?? 1) - 1
+    setDragonSubstepIndex((current) => Math.min(maxIndex, Math.max(0, (current ?? maxIndex) + delta)))
   }
 
   /** Commits the selected technique's own full effect - for a plain
@@ -2825,9 +3523,134 @@ export default function App() {
     )
   }
 
+  /** Find by elims: turns the candidates typed into the Find tab into the
+   * Dragon or Dynamic Dragon Colouring that eliminates them (see
+   * SudokuDragonTargetFinder for how the best one is chosen), or - when the
+   * input can't be used, is wrong, or nothing finds it - says why in plain
+   * words. The entries are checked before any searching: readable, actually
+   * marked as candidates on the grid, and (when the puzzle has one solution)
+   * not the true digit of their cell. */
+  function onFindTargetedDragon() {
+    setDragonStepIndex(0)
+    setDragonSubstepIndex(null)
+    const say = (tone: 'error' | 'info', title: string, lines: string[] = []) =>
+      setFindResult({ kind: 'message', tone, title, lines })
+
+    if (!hasAnyCandidates) {
+      say('info', 'This needs candidates on the grid.', ['Click "Autofill all candidates" first, then try again.'])
+      return
+    }
+    const { targets, unreadable } = parseEliminationTargets(findInput)
+    if (unreadable.length > 0) {
+      say('error', "I couldn't read some of that.", [
+        `Not understood: ${unreadable.join(', ')}`,
+        'Each candidate should look like 8r2c3: the digit, then the row, then the column.',
+      ])
+      return
+    }
+    if (targets.length === 0) {
+      say('info', 'Type at least one candidate to eliminate.', ['For example: 8r2c3, 2r3c4'])
+      return
+    }
+    if (!candidatesAccurate) {
+      say('error', "The candidates on the grid don't look right.", [
+        "Some cell's correct digit isn't marked as a candidate, so a Dragon found from them couldn't be trusted.",
+        'Try "Autofill all candidates", then enter your eliminations again.',
+      ])
+      return
+    }
+
+    const solution = puzzleSolveResult.status === 'solved' ? puzzleSolveResult.board : null
+    const problems = checkEliminationTargets(board, candidates, targets, solution)
+    if (problems.length > 0) {
+      say(
+        'error',
+        problems.length === 1 ? "That one can't be eliminated as entered." : "Some of those can't be eliminated as entered.",
+        problems.map(describeTargetProblem),
+      )
+      return
+    }
+
+    const note = solution
+      ? undefined
+      : "This puzzle doesn't have exactly one solution, so your eliminations couldn't be double-checked - they were taken as correct."
+    const search = dragonTargetFinder.find(board, candidates, targets, {
+      allowedRule3Techniques: effectiveAllowedRule3Techniques,
+      aicLimitPerStep: aicLimitPerDragonStep,
+    })
+
+    const best = search.best
+    if (!best) {
+      const lines: string[] = []
+      if (search.chainsTried === 0) {
+        lines.push(
+          'A Dragon starts from a 3D Medusa that is stuck (finds nothing on its own), and there is none on this grid right now.',
+        )
+      } else if (targets.length > 1) {
+        targets.forEach((target, i) => {
+          lines.push(
+            `${formatCandidate(target)}: ${search.individually[i] ? 'a Dragon can find this one on its own' : 'no Dragon finds this one'}`,
+          )
+        })
+        if (search.individually.every(Boolean)) {
+          lines.push('Each can be found separately, but no single Dragon gets them all - try entering fewer at a time.')
+        }
+      } else {
+        lines.push('No Dragon reaches it - it probably needs a different technique.')
+      }
+      lines.push('Only the techniques enabled in Settings are used.')
+      if (note) lines.push(note)
+      say(
+        'info',
+        targets.length === 1
+          ? 'No Dragon or Dynamic Dragon Colouring finds that elimination.'
+          : 'No Dragon or Dynamic Dragon Colouring finds all of those eliminations.',
+        lines,
+      )
+      return
+    }
+
+    const name = best.kind === 'dragon' ? 'Dragon Colouring' : dynamicDragonLabel(best.moves)
+    const instance: TechniqueInstance = {
+      ...buildDragonInstance(board, candidates, best.kind === 'dragon' ? 'dragon' : 'dynamic-dragon', name, best.chainKey, best.moves),
+      // The cells you asked about get the same yellow border Medusa rules use,
+      // so they stay easy to find while the colouring builds up.
+      medusaHighlightCells: targets.map((t) => [t.row, t.col] as const),
+    }
+    const previewLimit = 10
+    setFindResult({
+      kind: 'found',
+      instance,
+      extraCount: best.extras.length,
+      extras: best.extras.slice(0, previewLimit).map(formatCandidate),
+      note,
+      boardBefore: board,
+      candidatesBefore: candidates,
+    })
+    setStatus(`Found ${name} (${best.moves.length} steps) for ${targets.length} elimination${targets.length === 1 ? '' : 's'}.`)
+  }
+
+  /** Commits the Find tab's technique - its full effect, like a Dragon row in
+   * the Techniques list - and clears the result, since the grid it was found
+   * against no longer exists. */
+  function onApplyFoundTechnique() {
+    if (!findInstance) {
+      return
+    }
+    const effect = fullTechniqueEffect(findInstance)
+    const removed = countEffectiveEliminations(board, candidates, effect)
+    const next = applyTechniqueEffect(board, candidates, effect)
+    commitGrid({ board: next.board, givens, candidates: next.candidates })
+    setFindResult(null)
+    setFindInput('')
+    setStatus(`Applied ${findInstance.name}: removed ${removed} candidate${removed === 1 ? '' : 's'}.`)
+  }
+
   function onApplyPanelSelection() {
     if (techniquePanelTab === 'solve-path') {
       onApplySolvePathStep()
+    } else if (techniquePanelTab === 'find') {
+      onApplyFoundTechnique()
     } else {
       onApplySelectedTechnique()
     }
@@ -2848,7 +3671,7 @@ export default function App() {
     setStatus('Calculating solve path…')
 
     // Defer to the next tick so the busy cursor paints before the
-    // (synchronous, up to the 4s time budget) search runs.
+    // (synchronous, up to the time budget) search runs.
     window.setTimeout(() => {
       try {
         const nextSolvePath = buildSolvePath(
@@ -2859,6 +3682,8 @@ export default function App() {
           shortSingleDigitAicEnabled,
           aicLimitPerDragonStep,
           exhaustiveDragonColouring,
+          genericAicEnabled,
+          easySolveEnabled,
         )
         commitGrid({ board, givens, candidates }, nextSolvePath)
         setActiveSolvePathIndex(null)
@@ -3138,6 +3963,7 @@ export default function App() {
           timeBudgetMs: dragonGenerationTimeoutMs,
           disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
           disregardAic: dragonGenerationDisregardsAic,
+          disregardGenericAic: dragonGenerationDisregardsGenericAic,
         })
         if (!result) {
           setStatus(
@@ -3171,6 +3997,7 @@ export default function App() {
           timeBudgetMs: dragonGenerationTimeoutMs,
           disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
           disregardAic: dragonGenerationDisregardsAic,
+          disregardGenericAic: dragonGenerationDisregardsGenericAic,
         })
         if (!result) {
           setStatus(
@@ -3322,6 +4149,24 @@ export default function App() {
                 Dragon Generation disregards AIC
               </label>
               <label
+                className="menu-checkbox"
+                title={
+                  !genericAicEnabled
+                    ? 'Always on while Generic AIC is disabled - enable it in Settings to turn this off.'
+                    : dragonGenerationDisregardsAic
+                      ? 'Always on while "Dragon Generation disregards AIC" is on - turn that off first.'
+                      : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Generic AIC available. When off, generation rejects any state where one exists.'
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={dragonGenerationDisregardsGenericAic}
+                  disabled={!genericAicEnabled || dragonGenerationDisregardsAic}
+                  onChange={toggleDragonGenerationDisregardsGenericAic}
+                />
+                Dragon Generation disregards Generic AIC
+              </label>
+              <label
                 className="menu-select"
                 title="Dynamic Dragon Puzzles are rare and might take anywhere from 5 seconds to 2 minutes to find one. This setting sets the timeout before giving up."
               >
@@ -3411,6 +4256,22 @@ export default function App() {
               </label>
               <label
                 className="menu-checkbox"
+                title={
+                  shortAicEnabled
+                    ? `When off, the solver will not look for Generic AIC chains (longer than Short AIC's, up to ${GENERIC_AIC_MAX_LENGTH} links) at all.`
+                    : 'Turn on Enable Short AIC first - Generic AIC can only be enabled with it.'
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={genericAicEnabled}
+                  disabled={!shortAicEnabled}
+                  onChange={toggleGenericAicEnabled}
+                />
+                Enable Generic AIC
+              </label>
+              <label
+                className="menu-checkbox"
                 title={`Only show Dragon Colouring techniques with a Medusa base of at least ${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates`}
               >
                 <input type="checkbox" checked={minBaseMedusaFilter} onChange={toggleMinBaseMedusaFilter} />
@@ -3426,6 +4287,7 @@ export default function App() {
               {ALL_RULE3_TECHNIQUES.map((technique) => {
                 const disabledByMasterSwitch =
                   (technique === 'short aic' && !shortAicEnabled) ||
+                  (technique === 'generic aic' && !genericAicEnabled) ||
                   (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
                 return (
                   <label
@@ -3499,16 +4361,33 @@ export default function App() {
           onSelect={onSelectTechnique}
           dragonStepIndex={dragonStepIndex}
           onDragonStep={onDragonStep}
+          dragonSubstepIndex={dragonSubstepIndex}
+          onDragonSubstep={onDragonSubstep}
           solvePath={solvePath}
           activeSolvePathIndex={activeSolvePathIndex}
           onSelectSolvePathStep={onSelectSolvePathStep}
           onApply={onApplyPanelSelection}
-          canApply={techniquePanelTab === 'solve-path' ? activeSolvePathIndex !== null : !!activeTechniqueId}
+          canApply={
+            techniquePanelTab === 'solve-path'
+              ? activeSolvePathIndex !== null
+              : techniquePanelTab === 'find'
+                ? !!findInstance
+                : !!activeTechniqueId
+          }
           onGenerateSolvePath={onGenerateSolvePath}
           solvePathStale={solvePathStale}
           showSolvePathLog={showSolvePathLog}
           onToggleSolvePathLog={onToggleSolvePathLog}
           solvability={solvability}
+          find={{
+            input: findInput,
+            onInput: setFindInput,
+            onFind: onFindTargetedDragon,
+            result: findResult,
+            resultIsCurrent: findResultIsCurrent,
+          }}
+          easySolveEnabled={easySolveEnabled}
+          onToggleEasySolve={toggleEasySolveEnabled}
         />
 
         <div
@@ -3624,20 +4503,22 @@ export default function App() {
                                 (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                               ) ??
                                 false)
-                            // A Dynamic Dragon Colouring step's own AIC
-                            // eliminates a candidate purely as an internal
-                            // deduction, not a real board elimination this
-                            // move claims - shown as a hollow circle+cross
-                            // instead of the usual red elimination pip (see
-                            // technique-aic-hypothetical in App.css).
-                            const isTechniqueAicHypothetical =
+                            // A Dynamic Dragon Colouring step's own
+                            // technique (any of them - a Locked Candidate,
+                            // a naked pair, an AIC, ...) eliminates a
+                            // candidate purely as an internal deduction its
+                            // reasoning depends on, not a real board
+                            // elimination this move claims - shown as a
+                            // hollow circle+cross instead of the usual red
+                            // elimination pip (see
+                            // technique-hypothetical-elimination in
+                            // App.css).
+                            const isTechniqueHypotheticalElimination =
                               active &&
-                              !!dragonAicChains &&
-                              dragonAicChains.some((chain) =>
-                                chain.hypotheticalEliminations.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ),
-                              )
+                              (dragonAssumedEliminations?.some(
+                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                              ) ??
+                                false)
                             const isTechniqueColored =
                               isTechniqueUsed ||
                               isTechniqueEliminated ||
@@ -3647,7 +4528,7 @@ export default function App() {
                               isTechniqueDarkBlue ||
                               isTechniqueOrange ||
                               isTechniqueAic ||
-                              isTechniqueAicHypothetical
+                              isTechniqueHypotheticalElimination
                             // A manually painted colour is a pure user
                             // annotation - it only shows through when no
                             // technique highlight is already claiming this
@@ -3671,7 +4552,7 @@ export default function App() {
                                   isTechniqueDarkBlue ? 'technique-darkblue' : '',
                                   isTechniqueOrange ? 'technique-orange' : '',
                                   isTechniqueAic ? 'technique-aic' : '',
-                                  isTechniqueAicHypothetical ? 'technique-aic-hypothetical' : '',
+                                  isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
                                   paintedHex ? 'candidate-painted' : '',
                                   active && paintColor ? 'paint-target' : '',
                                 ]
@@ -3933,9 +4814,27 @@ export default function App() {
               className="pad-button autosolve-button"
               disabled={busy || filled === 81}
               onClick={onUniqueRectangleType1}
-              title="Auto-solve all visible Unique Rectangles."
+              title="Auto-solve all visible Unique Rectangles (every type)."
             >
-              Unique Rectangle Type 1
+              Unique Rectangle
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onBugPlusOne}
+              title="Auto-solve BUG+1, if the grid is currently in that pattern."
+            >
+              BUG+1
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onBivalueOddagon}
+              title="Auto-solve all visible Bivalue Oddagons."
+            >
+              Bivalue Oddagon
             </button>
             <button
               type="button"
@@ -3963,6 +4862,19 @@ export default function App() {
               title={shortAicEnabled ? "Auto-solve all visible Short AICs (length <= 5)." : 'Enable Short AIC in Settings to use this'}
             >
               Short AIC
+            </button>
+            <button
+              type="button"
+              className="pad-button autosolve-button"
+              disabled={busy || !hasAnyCandidates || filled === 81 || !genericAicEnabled}
+              onClick={onGenericAic}
+              title={
+                genericAicEnabled
+                  ? `Auto-solve all visible Generic AICs (length 7 to ${GENERIC_AIC_MAX_LENGTH}).`
+                  : 'Enable Generic AIC in Settings to use this'
+              }
+            >
+              Generic AIC
             </button>
             <button
               type="button"
