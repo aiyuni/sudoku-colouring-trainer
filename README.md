@@ -6,7 +6,7 @@ Try it here: https://aiyuni.github.io/sudoku-colouring-trainer/
 
 ## Features
 
-* Step-by-step, human-readable **Colouring technique explanations**
+* **Step-by-step**, human-readable **Colouring technique explanations**
 * Every Colouring techniques implemented: 
 
   * **[Simple Colouring](https://www.sudokuwiki.org/Simple_Colouring)** — a widely documented single-digit Colouring technique.
@@ -14,5 +14,8 @@ Try it here: https://aiyuni.github.io/sudoku-colouring-trainer/
   * **Dragon Colouring** — a novel, previously undocumented Colouring technique developed and implemented for this solver. Dragon Colouring builds on 3D Medusa, and is designed to solve puzzles where even 3D Medusa cannot.
     * In testing against the hardest puzzles from Sudoku.Coach, Dragon Colouring solves all **Hell** and **Beyond Hell** puzzles, whereas 3D Medusa gets stuck at most **Hell** puzzles.
 * Generate puzzles that can only be solved by Simple Colouring, Medusa, or Dragon Colouring, for practice.
-* Customizable Solve Path: Find the easiest solve path, or the quickest solve path. 
+* Extremely strong Colouring solver:
+  * Shows **every** possible Colouring technique to progress a given Sudoku grid state, sorted by complexity.  
+  * Customizable Solve Path: Find the **easiest **solve path, or the **quickest** solve path.
+  * For advanced users/solvers:  implements all traditional AIC and Uniqueness techniques, which Colouring can utilize.  Does not contain Fish! 
 * Import puzzles via OCR or grid strings from by **[Sudoku.Coach](https://sudoku.coach/)** and **[SudokuWiki](https://www.sudokuwiki.org/)**
