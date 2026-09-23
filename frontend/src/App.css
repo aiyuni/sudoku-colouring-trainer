@@ -193,6 +193,11 @@
   top: calc(100% + 0.4rem);
   left: 0;
   z-index: 30;
+  /* The panel is position: fixed (placed by placeDropdownPanel in App.tsx).
+     min-content reproduces the width it had back when it was absolutely
+     positioned inside its narrow trigger's box: the content's narrowest
+     wrap, lifted to min-width. */
+  width: min-content;
   min-width: 15rem;
   max-width: 20rem;
   max-height: min(70vh, 32rem);
@@ -650,8 +655,13 @@
   color: #b91c1c;
 }
 
-.cell:hover:not(.given) {
-  background: var(--grid-bg-hover);
+/* Hover-capable pointers only: on a touchscreen :hover sticks to the last
+   tapped cell, and (being more specific than .selected) would paint over
+   the selection tint until the next tap somewhere else. */
+@media (hover: hover) {
+  .cell:hover:not(.given) {
+    background: var(--grid-bg-hover);
+  }
 }
 
 /* Pencil marks: a 3x3 grid inside the cell, 1-3 top row, 4-6 middle,
@@ -1854,5 +1864,570 @@ button.primary {
     border-color: #334155;
     color: #e2e8f0;
   }
-  
+
+}
+
+/* ======================================================================
+   Touch layout (phones and tablets) - App.tsx renders it instead of the
+   desktop layout above when useCompactLayout() says so, and every rule in
+   this section is scoped under .compact-layout, so none of it can reach the
+   desktop page.
+
+   Portrait: toolbar, then the grid (same width as before: the full column,
+   up to 32rem), then a dock showing one control group at a time, with the
+   dock's tabs pinned at the bottom within thumb reach. Landscape: the grid
+   on the left, sized to the screen height, and toolbar/dock/tabs in a
+   column beside it. Either way the page is exactly one screen tall and only
+   the dock scrolls, so the grid never leaves the screen.
+   ====================================================================== */
+
+.page.compact-layout {
+  --compact-gap: 0.5rem;
+  --compact-touch: 2.75rem;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  padding: calc(0.5rem + env(safe-area-inset-top)) calc(0.75rem + env(safe-area-inset-right))
+    calc(0.25rem + env(safe-area-inset-bottom)) calc(0.75rem + env(safe-area-inset-left));
+  overflow-x: clip;
+  /* No double-tap-to-zoom delay on rapid pad/cell taps; pinch zoom still works. */
+  touch-action: manipulation;
+}
+
+.page.compact-portrait {
+  max-width: 40rem;
+}
+
+/* ---- header (tablets only; on a phone the title lives in the "more" menu) ---- */
+
+.compact-layout .header h1 {
+  margin: 0 0 var(--compact-gap);
+  font-size: 1.3rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-layout .header p {
+  display: none;
+}
+
+/* ---- toolbar ---- */
+
+.compact-layout .main-toolbar {
+  flex: none;
+  gap: 0.4rem;
+  margin: 0 0 var(--compact-gap);
+}
+
+.compact-layout .toolbar-group {
+  gap: 0.4rem;
+}
+
+.compact-layout .main-toolbar button {
+  min-height: var(--compact-touch);
+  padding: 0.5rem 0.8rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.compact-layout .main-toolbar .help-button {
+  width: var(--compact-touch);
+  height: var(--compact-touch);
+  padding: 0;
+}
+
+/* Phone: always a single row. It fits a 320px-wide screen as is; the
+   sideways scroll is only a safety net for very large text settings. The
+   dropdown panels are position: fixed, so this scroller can't clip them. */
+.compact-phone .main-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.compact-phone .main-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.compact-phone .toolbar-group {
+  flex-wrap: nowrap;
+}
+
+.compact-phone .main-toolbar button {
+  padding: 0.5rem 0.7rem;
+}
+
+.compact-phone .main-toolbar .settings-trigger,
+.compact-phone .main-toolbar .more-trigger {
+  min-width: var(--compact-touch);
+  padding: 0.5rem;
+  font-size: 1.1rem;
+}
+
+/* ---- grid ---- */
+
+.compact-board {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  margin-bottom: var(--compact-gap);
+}
+
+.compact-board > .grid {
+  flex: none;
+  width: min(100%, 32rem);
+}
+
+/* The digits scale with the grid (cqi = 1% of its width) once it's smaller
+   than the desktop's 32rem - capped at their desktop sizes, so a full-size
+   grid looks exactly as before. Without this a grid sized to a phone's
+   landscape height (~290-370px) clips its bottom row of pencil marks: three
+   rows of 0.85rem pips no longer fit a 32-40px cell. */
+.compact-board > .grid {
+  container-type: inline-size;
+}
+
+.compact-board .cell {
+  font-size: min(1.9rem, 7.6cqi);
+}
+
+.compact-board .candidate {
+  font-size: min(0.85rem, 3.6cqi);
+}
+
+/* Only matters on a phone too short for the dock's min-height (below):
+   there the page scrolls a little, and this keeps the toolbar scrolling
+   away under the grid rather than the grid's top edge off the screen. */
+.compact-portrait .compact-board {
+  position: sticky;
+  top: env(safe-area-inset-top);
+  z-index: 4;
+  background: #f8fafc;
+}
+
+@media (prefers-color-scheme: dark) {
+  .compact-portrait .compact-board {
+    background: #020617;
+  }
+}
+
+/* ---- dock: the active tab's controls, the only thing that scrolls ---- */
+
+.compact-dock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--compact-gap);
+  flex: 1 1 auto;
+  /* On a very short phone (e.g. iPhone SE with Safari's bars showing) this
+     floor wins over "exactly one screen tall" and the page scrolls a
+     little instead of the dock becoming a sliver. */
+  min-height: 9rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.compact-dock > * {
+  flex: none;
+}
+
+/* ---- dock tabs ---- */
+
+.compact-tabs {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #cbd5e1;
+}
+
+.compact-tab {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-touch);
+  padding: 0.3rem 0.2rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #475569;
+  background: transparent;
+  border-color: transparent;
+}
+
+.compact-tab.active {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+/* ---- landscape: grid left, everything else in a column on the right ---- */
+
+.page.compact-landscape {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'board header'
+    'board toolbar'
+    'board dock'
+    'board tabs';
+  column-gap: 1rem;
+}
+
+.page.compact-landscape.compact-phone {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'board toolbar'
+    'board dock'
+    'board tabs';
+}
+
+.compact-landscape > .header {
+  grid-area: header;
+  min-width: 0;
+}
+
+.compact-landscape > .main-toolbar {
+  grid-area: toolbar;
+}
+
+.compact-landscape > .compact-board {
+  grid-area: board;
+  align-items: center;
+  margin: 0;
+}
+
+/* As tall as the screen allows (never more than the desktop's 32rem), and
+   never so wide that the control column beside it gets cramped. */
+.compact-landscape > .compact-board > .grid {
+  width: min(32rem, 58vw, calc(100dvh - 0.75rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+}
+
+.compact-landscape > .compact-dock {
+  grid-area: dock;
+  min-height: 0;
+}
+
+.compact-landscape > .compact-tabs {
+  grid-area: tabs;
+}
+
+/* ---- Techniques tab ---- */
+
+.compact-dock > .technique-panel {
+  width: 100%;
+}
+
+/* The dock scrolls the list, so the list itself no longer needs its own
+   fixed-height scroller (one scroll area instead of two nested ones)... */
+.compact-layout .technique-list {
+  max-height: none;
+}
+
+/* ...and the tabs + Apply row stays pinned at the top of the dock while it
+   does, so Apply is always one tap away from the selected technique. */
+.compact-layout .technique-panel-header {
+  position: sticky;
+  top: -0.75rem;
+  z-index: 3;
+  margin: -0.75rem -0.75rem 0.3rem;
+  padding: 0.75rem 0.75rem 0;
+  background: #fff;
+  border-radius: 0.75rem 0.75rem 0 0;
+  /* Apply stays beside the tabs rather than wrapping onto a row of its own
+     - on a phone that row costs a list item's worth of dock height. */
+  flex-wrap: nowrap;
+}
+
+.compact-layout .technique-tab {
+  min-height: 2.5rem;
+  padding-inline: 0.4rem;
+  font-size: 0.78rem;
+}
+
+.compact-layout .technique-apply-button {
+  min-height: 2.5rem;
+  padding: 0.4rem 1.1rem;
+  font-size: 0.85rem;
+}
+
+.compact-layout .technique-item {
+  padding: 0.6rem 0.7rem;
+}
+
+.compact-layout .dragon-player-button {
+  min-width: var(--compact-touch);
+  min-height: 2.5rem;
+}
+
+.compact-layout .solve-path-generate-button,
+.compact-layout .solve-path-log-toggle,
+.compact-layout .find-button {
+  min-height: 2.5rem;
+  font-size: 0.85rem;
+}
+
+.compact-layout .solve-path-easy-solve {
+  min-height: 2.5rem;
+  font-size: 0.85rem;
+}
+
+/* ---- Digits / Colour tabs: 3x3 pads become one row of 9 ---- */
+
+.compact-layout .control-group {
+  padding: 0.5rem 0.6rem;
+}
+
+.compact-layout .control-label {
+  margin: 0;
+  text-align: left;
+}
+
+.compact-layout .control-pad {
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 0.35rem 0;
+}
+
+.compact-layout .pad-button {
+  min-height: var(--compact-touch);
+}
+
+.compact-layout .erase-button,
+.compact-layout .candidate-bulk-actions .pad-button {
+  min-height: 2.5rem;
+  font-size: 0.85rem;
+}
+
+.compact-layout .solution-button {
+  padding: 0;
+  font-size: 1.35rem;
+}
+
+.compact-layout .candidate-button {
+  padding: 0.25rem 0.3rem;
+}
+
+/* Section title and its one extra action share a row. */
+.compact-layout .solution-group,
+.compact-layout .highlight-group,
+.compact-layout .paint-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+.compact-layout .solution-group > :not(.control-label, .erase-button),
+.compact-layout .highlight-group > :not(.control-label, .erase-button),
+.compact-layout .paint-group > :not(.control-label, .erase-button) {
+  grid-column: 1 / -1;
+}
+
+.compact-layout .solution-group > .control-label,
+.compact-layout .highlight-group > .control-label,
+.compact-layout .paint-group > .control-label {
+  grid-row: 1;
+}
+
+.compact-layout .solution-group > .erase-button,
+.compact-layout .highlight-group > .erase-button,
+.compact-layout .paint-group > .erase-button {
+  grid-row: 1;
+  grid-column: 2;
+  padding-inline: 0.9rem;
+}
+
+/* Clear cell / Autofill All / Clear all on one row under the pad. */
+.compact-layout .candidate-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 0.3rem;
+}
+
+.compact-layout .candidate-group > .control-label,
+.compact-layout .candidate-group > .control-pad {
+  grid-column: 1 / -1;
+}
+
+.compact-layout .candidate-group > .candidate-bulk-actions {
+  display: contents;
+}
+
+.compact-layout .paint-swatches {
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.compact-layout .paint-swatch-wrapper,
+.compact-layout .paint-swatch {
+  width: 100%;
+  height: var(--compact-touch);
+}
+
+.compact-layout .paint-swatch-color-input,
+.compact-layout .paint-swatch-edit-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.compact-layout .paint-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+}
+
+/* ---- Solve tab ---- */
+
+.compact-status .status,
+.compact-status .solvability {
+  font-size: 0.85rem;
+}
+
+.compact-layout .autosolve-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.35rem;
+}
+
+.compact-layout .autosolve-group > .control-label {
+  grid-column: 1 / -1;
+}
+
+.compact-layout .autosolve-button {
+  min-height: var(--compact-touch);
+}
+
+.compact-layout .autosolve-button + .autosolve-button {
+  margin-top: 0;
+}
+
+.compact-layout .actions {
+  margin: 0 0 0.25rem;
+}
+
+.compact-layout .actions button {
+  min-height: var(--compact-touch);
+}
+
+/* ---- Import tab ---- */
+
+.compact-layout .import-row,
+.compact-layout .import-secondary-row {
+  margin: 0;
+}
+
+.compact-layout .import-row button,
+.compact-layout .copy-sc-button {
+  min-height: var(--compact-touch);
+}
+
+.compact-layout .image-import-drop {
+  flex-basis: 100%;
+  min-height: var(--compact-touch);
+}
+
+.compact-layout .image-import-browse {
+  display: inline-block;
+  padding: 0.6rem 0.25rem;
+}
+
+/* iOS zooms the whole page into any focused field whose text is under
+   16px, and doesn't zoom back out - which leaves the layout scrolled
+   sideways. */
+.compact-layout .import-input,
+.compact-layout .find-input,
+.compact-layout .menu-select select {
+  font-size: 16px;
+}
+
+.compact-layout .import-input {
+  min-height: var(--compact-touch);
+}
+
+.compact-layout .find-input {
+  min-height: 2.5rem;
+}
+
+/* ---- dropdown menus (placement itself is placeDropdownPanel in App.tsx) ---- */
+
+/* Use whatever height the screen offers instead of the desktop's 32rem cap -
+   placeDropdownPanel still caps it to the space actually available. */
+.compact-layout .dropdown-panel {
+  width: max-content;
+  max-height: none;
+  max-width: 24rem;
+  overscroll-behavior: contain;
+}
+
+.compact-layout .dropdown-item {
+  min-height: var(--compact-touch);
+  font-size: 0.95rem;
+}
+
+.compact-layout .menu-checkbox {
+  min-height: var(--compact-touch);
+  padding: 0.35rem 0;
+  font-size: 0.9rem;
+}
+
+.compact-layout .menu-checkbox input {
+  flex: none;
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.compact-layout .menu-select select {
+  min-height: 2.5rem;
+}
+
+.compact-layout .dropdown-panel .mode-toggle {
+  min-height: var(--compact-touch);
+}
+
+/* ---- Settings guide modal ---- */
+
+.compact-layout .help-backdrop {
+  padding: calc(0.75rem + env(safe-area-inset-top)) calc(0.75rem + env(safe-area-inset-right))
+    calc(0.75rem + env(safe-area-inset-bottom)) calc(0.75rem + env(safe-area-inset-left));
+}
+
+.compact-layout .help-modal {
+  max-height: 100%;
+}
+
+.compact-layout .help-close {
+  width: var(--compact-touch);
+  height: var(--compact-touch);
+}
+
+.compact-layout .help-footer button {
+  min-height: var(--compact-touch);
+}
+
+@media (prefers-color-scheme: dark) {
+  .compact-tabs {
+    border-top-color: #334155;
+  }
+
+  .compact-tab {
+    color: #94a3b8;
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .compact-tab.active {
+    color: #93c5fd;
+    background: #16233a;
+    border-color: #1e3a5f;
+  }
+
+  .compact-layout .technique-panel-header {
+    background: #1e293b;
+  }
 }

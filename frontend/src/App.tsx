@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -63,6 +64,7 @@ import { SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinde
 import { SAMPLE_PUZZLE, type Board, type CandidateColor, type CandidateColorGrid, type CandidateGrid } from './sudoku/types'
 import HelpModal from './HelpModal'
 import TutorialPage from './tutorial/TutorialPage'
+import { useCompactLayout } from './useCompactLayout'
 import {
   DEFAULT_SETTINGS,
   DRAGON_GENERATION_TIMEOUT_OPTIONS,
@@ -1592,6 +1594,18 @@ function solvabilityText(solvability: PuzzleSolvability): string {
 
 type TechniquePanelTab = 'techniques' | 'solve-path' | 'find'
 
+/** The touch layout's dock tabs (see useCompactLayout) - each shows one or
+ * two of the desktop layout's side-column blocks under/beside the grid. */
+type CompactSection = 'techniques' | 'input' | 'colour' | 'solve' | 'import'
+
+const COMPACT_SECTIONS: Array<{ id: CompactSection; label: string }> = [
+  { id: 'techniques', label: 'Techniques' },
+  { id: 'input', label: 'Digits' },
+  { id: 'colour', label: 'Colour' },
+  { id: 'solve', label: 'Solve' },
+  { id: 'import', label: 'Import' },
+]
+
 /** What the "Find by elims" tab is currently showing. `found` carries the
  * technique itself plus the grid it was found against, so the tab can tell
  * when the grid has since changed and the result no longer applies. */
@@ -2081,17 +2095,121 @@ interface DropdownMenuProps {
   label: ReactNode
   buttonClassName?: string
   panelClassName?: string
+  /** Which edge of the trigger the panel lines up with when there's room. */
+  align?: 'left' | 'right'
+  /** For a trigger whose label is only an icon. */
+  ariaLabel?: string
+  /** Close as soon as one of the panel's `.dropdown-item` buttons is used -
+   * for a plain action menu, as opposed to a panel of toggles. */
+  closeOnItemClick?: boolean
   children: ReactNode
+}
+
+/** Gap kept between a dropdown panel and every viewport edge. */
+const DROPDOWN_VIEWPORT_MARGIN = 8
+
+/** Positions an open dropdown panel (position: fixed) against its trigger
+ * so the whole panel stays inside the viewport: lined up with the trigger's
+ * left or right edge when that fits, otherwise slid back in from whichever
+ * side it would cross; below the trigger when there's room (or at least
+ * more room than above), otherwise flipped above it; and capped to the
+ * height actually available on that side, scrolling internally past that.
+ * On a desktop-sized window none of the clamps bite, so the panel lands
+ * exactly where the old `position: absolute; top: calc(100% + 0.4rem)`
+ * rule put it. `cssMaxWidth`/`cssMaxHeight` are the stylesheet's own caps,
+ * read once on open, since the inline ones set here mask them afterwards. */
+function placeDropdownPanel(
+  anchor: HTMLElement,
+  panel: HTMLElement,
+  align: 'left' | 'right',
+  cssMaxWidth: number,
+  cssMaxHeight: number,
+) {
+  const margin = DROPDOWN_VIEWPORT_MARGIN
+  const gap = parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.4
+  const viewportWidth = document.documentElement.clientWidth
+  const viewportHeight = window.innerHeight
+  const anchorRect = anchor.getBoundingClientRect()
+
+  // Measure the natural width from the left edge, where nothing squeezes it.
+  panel.style.left = '0px'
+  panel.style.maxWidth = `${Math.min(cssMaxWidth, viewportWidth - 2 * margin)}px`
+  const width = panel.getBoundingClientRect().width
+  const preferredLeft = align === 'right' ? anchorRect.right - width : anchorRect.left
+  const left = Math.max(margin, Math.min(preferredLeft, viewportWidth - margin - width))
+
+  // scrollHeight rather than the rendered height: it doesn't depend on the
+  // max-height set by a previous placement, and re-measuring never has to
+  // clear that cap (which would reset the panel's own scroll position).
+  const panelStyle = getComputedStyle(panel)
+  const borderY = parseFloat(panelStyle.borderTopWidth) + parseFloat(panelStyle.borderBottomWidth)
+  const desiredHeight = Math.min(panel.scrollHeight + borderY, cssMaxHeight)
+  const spaceBelow = viewportHeight - anchorRect.bottom - gap - margin
+  const spaceAbove = anchorRect.top - gap - margin
+  let top: number
+  let maxHeight: number
+  if (desiredHeight <= spaceBelow || spaceBelow >= spaceAbove) {
+    top = Math.max(margin, anchorRect.bottom + gap)
+    maxHeight = viewportHeight - margin - top
+  } else {
+    maxHeight = spaceAbove
+    top = anchorRect.top - gap - Math.min(desiredHeight, spaceAbove)
+  }
+
+  panel.style.left = `${left}px`
+  panel.style.top = `${top}px`
+  panel.style.maxHeight = `${Math.floor(Math.max(0, Math.min(maxHeight, cssMaxHeight)))}px`
 }
 
 /** A button that reveals a small floating panel of controls on click -
  * closes on an outside click, on Escape, or after the panel itself calls
  * the close callback its render prop receives. Used to fold a cluster of
  * related buttons/toggles (puzzle generation, view settings) behind one
- * toolbar button instead of spreading them all out at all times. */
-function DropdownMenu({ label, buttonClassName, panelClassName, children }: DropdownMenuProps) {
+ * toolbar button instead of spreading them all out at all times. The panel
+ * is fixed-positioned and kept inside the viewport by placeDropdownPanel,
+ * re-placed on every resize/rotation and scroll, so it can't hang off the
+ * right or bottom edge on a phone or tablet (or clip inside the phone
+ * toolbar's horizontal scroller). */
+function DropdownMenu({
+  label,
+  buttonClassName,
+  panelClassName,
+  align = 'left',
+  ariaLabel,
+  closeOnItemClick = false,
+  children,
+}: DropdownMenuProps) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // Layout effect, so the panel is placed before it's ever painted.
+  useLayoutEffect(() => {
+    const anchor = containerRef.current
+    const panel = panelRef.current
+    if (!open || !anchor || !panel) {
+      return
+    }
+    // parseFloat('none') is NaN - no cap from the stylesheet.
+    const cssCap = (value: string) => (Number.isFinite(parseFloat(value)) ? parseFloat(value) : Infinity)
+    const panelStyle = getComputedStyle(panel)
+    const cssMaxWidth = cssCap(panelStyle.maxWidth)
+    const cssMaxHeight = cssCap(panelStyle.maxHeight)
+    const place = () => placeDropdownPanel(anchor, panel, align, cssMaxWidth, cssMaxHeight)
+    function onScroll(event: Event) {
+      // The panel's own scrolling doesn't move the trigger.
+      if (!(event.target instanceof Node && panel?.contains(event.target))) {
+        place()
+      }
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open, align])
 
   useEffect(() => {
     if (!open) {
@@ -2122,12 +2240,28 @@ function DropdownMenu({ label, buttonClassName, panelClassName, children }: Drop
         className={['dropdown-trigger', open ? 'active' : '', buttonClassName ?? ''].filter(Boolean).join(' ')}
         aria-haspopup="true"
         aria-expanded={open}
+        aria-label={ariaLabel}
+        title={ariaLabel}
         onClick={() => setOpen((current) => !current)}
       >
         {label}
       </button>
       {open && (
-        <div className={['dropdown-panel', panelClassName ?? ''].filter(Boolean).join(' ')} role="menu">
+        <div
+          ref={panelRef}
+          className={['dropdown-panel', panelClassName ?? ''].filter(Boolean).join(' ')}
+          style={{ position: 'fixed' }}
+          role="menu"
+          onClick={
+            closeOnItemClick
+              ? (event) => {
+                  if (event.target instanceof Element && event.target.closest('.dropdown-item')) {
+                    setOpen(false)
+                  }
+                }
+              : undefined
+          }
+        >
           {children}
         </div>
       )}
@@ -2228,6 +2362,8 @@ export default function App() {
   )
   const [helpOpen, setHelpOpen] = useState(false)
   const [tutorialOpen, setTutorialOpen] = useState(false)
+  const { compact, phone, landscape } = useCompactLayout()
+  const [compactSection, setCompactSection] = useState<CompactSection>('techniques')
   const [importText, setImportText] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [solving, setSolving] = useState(false)
@@ -4134,995 +4270,1066 @@ export default function App() {
     )
   }
 
-  return (
-    <main className={`page${busy ? ' is-busy' : ''}`} onKeyDown={onKeyDown}>
-      <header className="header">
-        <h1>
-          Sudoku Colouring Solver/Trainer <span className="app-version">{APP_VERSION}</span>
-        </h1>
-        <p>
-          Advanced Sudoku solver and trainer for Colouring techniques. <div></div>
-          For the Colouring enthusiasts :)
-        </p>
-      </header>
+  // The page is assembled from these pieces twice: the desktop layout
+  // below (unchanged - three columns around the grid), and the touch layout
+  // (useCompactLayout), which pins the grid and puts every control group
+  // behind one of the dock's tabs. Both reuse the exact same elements.
+  const header = (
+    <header className="header">
+      <h1>
+        Sudoku Colouring Solver/Trainer <span className="app-version">{APP_VERSION}</span>
+      </h1>
+      <p>
+        Advanced Sudoku solver and trainer for Colouring techniques. <div></div>
+        For the Colouring enthusiasts :)
+      </p>
+    </header>
+  )
 
-      <div className="main-toolbar">
-        <div className="toolbar-group">
-          <button type="button" onClick={undo} disabled={busy || !canUndo}>
-            Undo
-          </button>
-          <button type="button" onClick={redo} disabled={busy || !canRedo}>
-            Redo
-          </button>
+  const toolbar = (
+    <div className="main-toolbar">
+      <div className="toolbar-group">
+        <button type="button" onClick={undo} disabled={busy || !canUndo}>
+          Undo
+        </button>
+        <button type="button" onClick={redo} disabled={busy || !canRedo}>
+          Redo
+        </button>
+        {/* On a phone, Clear grid / Techniques overview / ? move into the
+            "⋯" menu at the end so the toolbar stays one row - every row
+            above the grid comes out of the dock's height. */}
+        {!phone && (
           <button type="button" onClick={onClear} disabled={busy}>
             Clear grid
           </button>
-        </div>
-
-        <div className="toolbar-group toolbar-group-end">
-          <button
-            type="button"
-            className="how-it-works-trigger"
-            title="Learn the colouring techniques, step by step"
-            onClick={() => setTutorialOpen(true)}
-          >
-            Techniques overview
-          </button>
-          <button
-            type="button"
-            className="help-button"
-            aria-label="Open the settings guide"
-            aria-haspopup="dialog"
-            title="What do the settings do?"
-            onClick={() => setHelpOpen(true)}
-          >
-            ?
-          </button>
-          <DropdownMenu
-            label={
-              <>
-              
-  {generating ? 'Generating…' : (
-  <>
-    Generate Puzzle
-    <span style={{
-      fontSize: '0.45em',
-      verticalAlign: 'top',
-      marginLeft: '4px',
-      opacity: 0.7
-    }}>
-      ALPHA
-    </span>
-  </>
-)} <span className="dropdown-caret">▾</span>              </>
-            }
-            buttonClassName="generate-puzzle-trigger"
-          >
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Puzzle type</h3>
-              <button type="button" className="dropdown-item" onClick={onNewPuzzle} disabled={busy}>
-                Random puzzle
-              </button>
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={() => onNewColouringPuzzle('simple-colouring')}
-                disabled={busy}
-                title="Generates a puzzle state where Simple Colouring is the easiest technique that can make progress (AICs are not considered)"
-              >
-                Simple Colouring practice puzzle
-              </button>
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={() => onNewColouringPuzzle('medusa')}
-                disabled={busy}
-                title="Generates a puzzle state where 3D Medusa is the easiest technique that can make progress (AICs are not considered)"
-              >
-                3D Medusa practice puzzle
-              </button>
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={onNewDragonPuzzle}
-                disabled={busy}
-                title="Generates a puzzle state where the next move requires Dragon Colouring"
-              >
-                Dragon Colouring practice puzzle
-              </button>
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={onNewDynamicDragonPuzzle}
-                disabled={busy}
-                title="Generates a puzzle state that includes dynamic Dragon Colouring"
-              >
-                Dynamic Dragon Colouring practice puzzle
-              </button>
-            </div>
-            <div className="dropdown-divider" />
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Puzzle generation</h3>
-              <label
-                className="menu-checkbox"
-                title={
-                  shortSingleDigitAicEnabled
-                    ? 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Short Single-Digit AIC available. When off, generation rejects any state where one exists.'
-                    : 'Always on while Short Single-Digit AIC is disabled - enable it in Settings to turn this off.'
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={dragonGenerationDisregardsSingleDigitAic}
-                  disabled={!shortSingleDigitAicEnabled}
-                  onChange={toggleDragonGenerationDisregardsSingleDigitAic}
-                />
-                Dragon Generation disregards single digit AIC
-              </label>
-              <label
-                className="menu-checkbox"
-                title={
-                  !shortAicEnabled
-                    ? 'Always on while Short AIC is disabled - enable it in Settings to turn this off.'
-                    : dragonGenerationDisregardsSingleDigitAic
-                      ? 'Always on while "Dragon Generation disregards single digit AIC" is on - turn that off first.'
-                      : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Short AIC available. When off, generation rejects any state where one exists.'
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={dragonGenerationDisregardsAic}
-                  disabled={!shortAicEnabled || dragonGenerationDisregardsSingleDigitAic}
-                  onChange={toggleDragonGenerationDisregardsAic}
-                />
-                Dragon Generation disregards AIC
-              </label>
-              <label
-                className="menu-checkbox"
-                title={
-                  !genericAicEnabled
-                    ? 'Always on while Generic AIC is disabled - enable it in Settings to turn this off.'
-                    : dragonGenerationDisregardsAic
-                      ? 'Always on while "Dragon Generation disregards AIC" is on - turn that off first.'
-                      : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Generic AIC available. When off, generation rejects any state where one exists.'
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={dragonGenerationDisregardsGenericAic}
-                  disabled={!genericAicEnabled || dragonGenerationDisregardsAic}
-                  onChange={toggleDragonGenerationDisregardsGenericAic}
-                />
-                Dragon Generation disregards Generic AIC
-              </label>
-              <label
-                className="menu-checkbox"
-                title="When on, a Dynamic Dragon puzzle is a state where plain Dragon Colouring is stuck on every chain, so Dynamic Dragon is the only way forward. These are too rare to generate live, so one is picked instantly from a built-in stock instead. When off, plain Dragon may still work on some other chain."
-              >
-                <input
-                  type="checkbox"
-                  checked={dynamicDragonPuzzleForbidsPlainDragon}
-                  onChange={() => setDynamicDragonPuzzleForbidsPlainDragon((value) => !value)}
-                />
-                Dynamic Dragon puzzles must not allow plain Dragon
-              </label>
-              <label
-                className="menu-select"
-                title="Dynamic Dragon Puzzles are rare and might take anywhere from 5 seconds to 2 minutes to find one. This setting sets the timeout before giving up."
-              >
-                Dragon puzzle generation max timeout
-                <select value={dragonGenerationTimeoutMs} onChange={onDragonGenerationTimeoutChange}>
-                  {DRAGON_GENERATION_TIMEOUT_OPTIONS.map(({ label, ms }) => (
-                    <option key={ms} value={ms}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </DropdownMenu>
-
-          <DropdownMenu label="⚙ Settings" buttonClassName="settings-trigger" panelClassName="settings-panel">
-            <div className="dropdown-section">
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={resetSettingsToDefaults}
-                title="Puts every setting, including your custom paint colours, back to its default. Your puzzle is not touched."
-              >
-                Reset to defaults
-              </button>
-            </div>
-            <div className="dropdown-divider" />
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Keyboard input</h3>
-              <button
-                type="button"
-                className={['mode-toggle', keyboardMode].join(' ')}
-                aria-pressed={keyboardMode === 'candidate'}
-                onClick={toggleKeyboardMode}
-              >
-                Toggle input: <strong>{keyboardMode === 'solution' ? 'Solution' : 'Candidates'}</strong>
-              </button>
-            </div>
-            <div className="dropdown-divider" />
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Display &amp; hints</h3>
-              <label className="menu-checkbox">
-                <input type="checkbox" checked={showStrongLinks} onChange={toggleStrongLinks} />
-                Show strong links
-              </label>
-              <label className="menu-checkbox">
-                <input type="checkbox" checked={showBivalueCells} onChange={toggleBivalueCells} />
-                Show bivalue cells
-              </label>
-              <label
-                className="menu-checkbox"
-                title="Toggle the grid's colour scheme between light and dark modes"
-              >
-                <input type="checkbox" checked={gridWhiteMode} onChange={toggleGridWhiteMode} />
-                Light mode for grid
-              </label>
-            </div>
-            <div className="dropdown-divider" />
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Techniques</h3>
-              <label
-                className="menu-checkbox"
-                title="When off, the solver will not look for Short Single-Digit AIC chains at all. Disable this for a true Colouring experience."
-              >
-                <input
-                  type="checkbox"
-                  checked={shortSingleDigitAicEnabled}
-                  onChange={toggleShortSingleDigitAicEnabled}
-                />
-                Enable Short Single-Digit AIC
-              </label>
-              <label
-                className="menu-checkbox"
-                title={
-                  shortSingleDigitAicEnabled
-                    ? 'When off, the solver will not look for Short AIC chains at all. Disable this for a true Colouring experience.'
-                    : 'Turn on Enable Short Single-Digit AIC first - Short AIC can only be enabled with it.'
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={shortAicEnabled}
-                  disabled={!shortSingleDigitAicEnabled}
-                  onChange={toggleShortAicEnabled}
-                />
-                Enable Short AIC
-              </label>
-              <label
-                className="menu-checkbox"
-                title={
-                  shortAicEnabled
-                    ? `When off, the solver will not look for Generic AIC chains (longer than Short AIC's, up to ${GENERIC_AIC_MAX_LENGTH} links) at all.`
-                    : 'Turn on Enable Short AIC first - Generic AIC can only be enabled with it.'
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={genericAicEnabled}
-                  disabled={!shortAicEnabled}
-                  onChange={toggleGenericAicEnabled}
-                />
-                Enable Generic AIC
-              </label>
-              <label
-                className="menu-checkbox"
-                title={`Only show Dragon Colouring techniques with a Medusa base of at least ${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates`}
-              >
-                <input type="checkbox" checked={minBaseMedusaFilter} onChange={toggleMinBaseMedusaFilter} />
-                Dragon: require {MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates
-              </label>
-            </div>
-            <div className="dropdown-divider" />
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Select Dynamic Dragon Colouring techniques</h3>
-              <p className="dropdown-hint">
-                Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
-              </p>
-              {ALL_RULE3_TECHNIQUES.map((technique) => {
-                const disabledByMasterSwitch =
-                  (technique === 'short aic' && !shortAicEnabled) ||
-                  (technique === 'generic aic' && !genericAicEnabled) ||
-                  (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
-                return (
-                  <label
-                    key={technique}
-                    className="menu-checkbox"
-                    title={
-                      disabledByMasterSwitch
-                        ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
-                        : undefined
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      checked={allowedRule3Techniques.has(technique)}
-                      disabled={
-                        technique === 'naked pair' ||
-                        technique === 'hidden single' ||
-                        technique === 'locked candidate' ||
-                        disabledByMasterSwitch
-                      }
-                      onChange={() => toggleRule3Technique(technique)}
-                    />
-                    {RULE3_TECHNIQUE_LABELS[technique]}
-                  </label>
-                )
-              })}
-            </div>
-            <div className="dropdown-divider" />
-            <div className="dropdown-section">
-              <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
-              <label
-                className="menu-checkbox"
-                title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
-              >
-                <input
-                  type="checkbox"
-                  checked={exhaustiveDragonColouring}
-                  onChange={toggleExhaustiveDragonColouring}
-                />
-                Exhaustive Dragon Colouring
-              </label>
-              <label
-                className="menu-checkbox"
-                title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
-              >
-                <input type="checkbox" checked={aicLimitPerDragonStep} onChange={toggleAicLimitPerDragonStep} />
-                Limit to 1 AIC per step
-              </label>
-              <label
-                className="menu-checkbox"
-                title="When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled above."
-              >
-                <input
-                  type="checkbox"
-                  checked={dynamicDragonAutoSolveIncludesAics}
-                  onChange={toggleDynamicDragonAutoSolveIncludesAics}
-                />
-                Auto-solve includes AICs
-              </label>
-            </div>
-          </DropdownMenu>
-        </div>
+        )}
       </div>
 
-      <div className="board-area">
-        <TechniquePanel
-          tab={techniquePanelTab}
-          onTabChange={onTechniquePanelTabChange}
-          instances={techniqueInstances}
-          activeId={activeTechniqueId}
-          onSelect={onSelectTechnique}
-          dragonStepIndex={dragonStepIndex}
-          onDragonStep={onDragonStep}
-          dragonSubstepIndex={dragonSubstepIndex}
-          onDragonSubstep={onDragonSubstep}
-          solvePath={solvePath}
-          activeSolvePathIndex={activeSolvePathIndex}
-          onSelectSolvePathStep={onSelectSolvePathStep}
-          onApply={onApplyPanelSelection}
-          canApply={
-            techniquePanelTab === 'solve-path'
-              ? activeSolvePathIndex !== null
-              : techniquePanelTab === 'find'
-                ? !!findInstance
-                : !!activeTechniqueId
+      <div className="toolbar-group toolbar-group-end">
+        {!phone && (
+          <>
+            <button
+              type="button"
+              className="how-it-works-trigger"
+              title="Learn the colouring techniques, step by step"
+              onClick={() => setTutorialOpen(true)}
+            >
+              Techniques overview
+            </button>
+            <button
+              type="button"
+              className="help-button"
+              aria-label="Open the settings guide"
+              aria-haspopup="dialog"
+              title="What do the settings do?"
+              onClick={() => setHelpOpen(true)}
+            >
+              ?
+            </button>
+          </>
+        )}
+        <DropdownMenu
+          label={
+            <>
+              {generating ? (
+                'Generating…'
+              ) : (
+                <>
+                  {phone ? 'Generate' : 'Generate Puzzle'}
+                  <span
+                    style={{
+                      fontSize: '0.45em',
+                      verticalAlign: 'top',
+                      marginLeft: '4px',
+                      opacity: 0.7,
+                    }}
+                  >
+                    ALPHA
+                  </span>
+                </>
+              )}{' '}
+              <span className="dropdown-caret">▾</span>
+            </>
           }
-          onGenerateSolvePath={onGenerateSolvePath}
-          solvePathStale={solvePathStale}
-          showSolvePathLog={showSolvePathLog}
-          onToggleSolvePathLog={onToggleSolvePathLog}
-          solvability={solvability}
-          find={{
-            input: findInput,
-            onInput: setFindInput,
-            onFind: onFindTargetedDragon,
-            result: findResult,
-            resultIsCurrent: findResultIsCurrent,
-          }}
-          easySolveEnabled={easySolveEnabled}
-          onToggleEasySolve={toggleEasySolveEnabled}
-        />
+          buttonClassName="generate-puzzle-trigger"
+        >
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Puzzle type</h3>
+            <button type="button" className="dropdown-item" onClick={onNewPuzzle} disabled={busy}>
+              Random puzzle
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => onNewColouringPuzzle('simple-colouring')}
+              disabled={busy}
+              title="Generates a puzzle state where Simple Colouring is the easiest technique that can make progress (AICs are not considered)"
+            >
+              Simple Colouring practice puzzle
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => onNewColouringPuzzle('medusa')}
+              disabled={busy}
+              title="Generates a puzzle state where 3D Medusa is the easiest technique that can make progress (AICs are not considered)"
+            >
+              3D Medusa practice puzzle
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={onNewDragonPuzzle}
+              disabled={busy}
+              title="Generates a puzzle state where the next move requires Dragon Colouring"
+            >
+              Dragon Colouring practice puzzle
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={onNewDynamicDragonPuzzle}
+              disabled={busy}
+              title="Generates a puzzle state that includes dynamic Dragon Colouring"
+            >
+              Dynamic Dragon Colouring practice puzzle
+            </button>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Puzzle generation</h3>
+            <label
+              className="menu-checkbox"
+              title={
+                shortSingleDigitAicEnabled
+                  ? 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Short Single-Digit AIC available. When off, generation rejects any state where one exists.'
+                  : 'Always on while Short Single-Digit AIC is disabled - enable it in Settings to turn this off.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={dragonGenerationDisregardsSingleDigitAic}
+                disabled={!shortSingleDigitAicEnabled}
+                onChange={toggleDragonGenerationDisregardsSingleDigitAic}
+              />
+              Dragon Generation disregards single digit AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                !shortAicEnabled
+                  ? 'Always on while Short AIC is disabled - enable it in Settings to turn this off.'
+                  : dragonGenerationDisregardsSingleDigitAic
+                    ? 'Always on while "Dragon Generation disregards single digit AIC" is on - turn that off first.'
+                    : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Short AIC available. When off, generation rejects any state where one exists.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={dragonGenerationDisregardsAic}
+                disabled={!shortAicEnabled || dragonGenerationDisregardsSingleDigitAic}
+                onChange={toggleDragonGenerationDisregardsAic}
+              />
+              Dragon Generation disregards AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                !genericAicEnabled
+                  ? 'Always on while Generic AIC is disabled - enable it in Settings to turn this off.'
+                  : dragonGenerationDisregardsAic
+                    ? 'Always on while "Dragon Generation disregards AIC" is on - turn that off first.'
+                    : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Generic AIC available. When off, generation rejects any state where one exists.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={dragonGenerationDisregardsGenericAic}
+                disabled={!genericAicEnabled || dragonGenerationDisregardsAic}
+                onChange={toggleDragonGenerationDisregardsGenericAic}
+              />
+              Dragon Generation disregards Generic AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When on, a Dynamic Dragon puzzle is a state where plain Dragon Colouring is stuck on every chain, so Dynamic Dragon is the only way forward. These are too rare to generate live, so one is picked instantly from a built-in stock instead. When off, plain Dragon may still work on some other chain."
+            >
+              <input
+                type="checkbox"
+                checked={dynamicDragonPuzzleForbidsPlainDragon}
+                onChange={() => setDynamicDragonPuzzleForbidsPlainDragon((value) => !value)}
+              />
+              Dynamic Dragon puzzles must not allow plain Dragon
+            </label>
+            <label
+              className="menu-select"
+              title="Dynamic Dragon Puzzles are rare and might take anywhere from 5 seconds to 2 minutes to find one. This setting sets the timeout before giving up."
+            >
+              Dragon puzzle generation max timeout
+              <select value={dragonGenerationTimeoutMs} onChange={onDragonGenerationTimeoutChange}>
+                {DRAGON_GENERATION_TIMEOUT_OPTIONS.map(({ label, ms }) => (
+                  <option key={ms} value={ms}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </DropdownMenu>
 
-        {/* The grid plus the import / screenshot / export rows, kept in one
-            column so they sit right under the grid instead of below
-            whichever side column (techniques panel, controls) is tallest. */}
-        <div className="grid-column">
-          <div
-            className={['grid', gridWhiteMode ? 'grid-white-mode' : ''].filter(Boolean).join(' ')}
-            role="grid"
-            aria-label="Sudoku board"
-            tabIndex={0}
-          >
-            {NINE.map((boxIndex) => {
-              const boxRow = Math.floor(boxIndex / 3)
-              const boxCol = boxIndex % 3
-
+        <DropdownMenu
+          label={phone ? '⚙' : '⚙ Settings'}
+          ariaLabel={phone ? 'Settings' : undefined}
+          buttonClassName="settings-trigger"
+          panelClassName="settings-panel"
+          align="right"
+        >
+          <div className="dropdown-section">
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={resetSettingsToDefaults}
+              title="Puts every setting, including your custom paint colours, back to its default. Your puzzle is not touched."
+            >
+              Reset to defaults
+            </button>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Keyboard input</h3>
+            <button
+              type="button"
+              className={['mode-toggle', keyboardMode].join(' ')}
+              aria-pressed={keyboardMode === 'candidate'}
+              onClick={toggleKeyboardMode}
+            >
+              Toggle input: <strong>{keyboardMode === 'solution' ? 'Solution' : 'Candidates'}</strong>
+            </button>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Display &amp; hints</h3>
+            <label className="menu-checkbox">
+              <input type="checkbox" checked={showStrongLinks} onChange={toggleStrongLinks} />
+              Show strong links
+            </label>
+            <label className="menu-checkbox">
+              <input type="checkbox" checked={showBivalueCells} onChange={toggleBivalueCells} />
+              Show bivalue cells
+            </label>
+            <label
+              className="menu-checkbox"
+              title="Toggle the grid's colour scheme between light and dark modes"
+            >
+              <input type="checkbox" checked={gridWhiteMode} onChange={toggleGridWhiteMode} />
+              Light mode for grid
+            </label>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Techniques</h3>
+            <label
+              className="menu-checkbox"
+              title="When off, the solver will not look for Short Single-Digit AIC chains at all. Disable this for a true Colouring experience."
+            >
+              <input
+                type="checkbox"
+                checked={shortSingleDigitAicEnabled}
+                onChange={toggleShortSingleDigitAicEnabled}
+              />
+              Enable Short Single-Digit AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                shortSingleDigitAicEnabled
+                  ? 'When off, the solver will not look for Short AIC chains at all. Disable this for a true Colouring experience.'
+                  : 'Turn on Enable Short Single-Digit AIC first - Short AIC can only be enabled with it.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={shortAicEnabled}
+                disabled={!shortSingleDigitAicEnabled}
+                onChange={toggleShortAicEnabled}
+              />
+              Enable Short AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                shortAicEnabled
+                  ? `When off, the solver will not look for Generic AIC chains (longer than Short AIC's, up to ${GENERIC_AIC_MAX_LENGTH} links) at all.`
+                  : 'Turn on Enable Short AIC first - Generic AIC can only be enabled with it.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={genericAicEnabled}
+                disabled={!shortAicEnabled}
+                onChange={toggleGenericAicEnabled}
+              />
+              Enable Generic AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={`Only show Dragon Colouring techniques with a Medusa base of at least ${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates`}
+            >
+              <input type="checkbox" checked={minBaseMedusaFilter} onChange={toggleMinBaseMedusaFilter} />
+              Dragon: require {MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates
+            </label>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Select Dynamic Dragon Colouring techniques</h3>
+            <p className="dropdown-hint">
+              Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
+            </p>
+            {ALL_RULE3_TECHNIQUES.map((technique) => {
+              const disabledByMasterSwitch =
+                (technique === 'short aic' && !shortAicEnabled) ||
+                (technique === 'generic aic' && !genericAicEnabled) ||
+                (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
               return (
-                <div key={boxIndex} className="box" role="rowgroup">
-                  {NINE.map((cellIndex) => {
-                    const r = boxRow * 3 + Math.floor(cellIndex / 3)
-                    const c = boxCol * 3 + (cellIndex % 3)
-                    const value = board[r][c]
-                    const isSelected = selected?.row === r && selected?.col === c
-                    const isDigitHighlighted = value !== 0 && highlightedDigit === value
-                    const cellHasCandidates = candidates[r][c].some(Boolean)
-                    const isTechniqueCell =
-                      highlightedTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
-                    const isBivalueCell = bivalueCells.has(`${r},${c}`)
-                    const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
-                    const isMedusaHighlightCell =
-                      highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false
-                    const isConflictCell = conflictedCells.has(`${r},${c}`)
-                    const classes = [
-                      'cell',
-                      givens[r][c] ? 'given' : value ? 'filled' : '',
-                      isSelected ? 'selected' : '',
-                      isDigitHighlighted ? 'digit-highlighted' : '',
-                      isBivalueCell ? 'bivalue-highlighted' : '',
-                      isTechniqueCell ? 'technique-used' : '',
-                      isMedusaHighlightCell ? 'medusa-highlight-cell' : '',
-                      isDragonTechniqueCell ? 'dragon-technique-cell' : '',
-                      isConflictCell ? 'conflict' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')
-
-                    return (
-                      <button
-                        key={`${r}-${c}`}
-                        type="button"
-                        role="gridcell"
-                        aria-selected={isSelected}
-                        aria-readonly={givens[r][c]}
-                        aria-label={cellAriaLabel(r, c, value)}
-                        className={classes}
-                        onClick={() => onCellClick(r, c)}
-                      >
-                        {value !== 0 ? (
-                          value
-                        ) : cellHasCandidates ? (
-                          <span className="candidates" aria-hidden="true">
-                            {DIGITS.map((digit) => {
-                              const active = candidates[r][c][digit - 1]
-                              const isHighlighted = active && highlightedDigit === digit
-                              const isTechniqueUsed =
-                                active &&
-                                (highlightedTechnique?.usedCandidates.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? highlightedTechnique?.eliminatedCandidates
-                              const isTechniqueEliminated =
-                                active &&
-                                (eliminatedSource?.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const solvedSource = dragonHighlight?.solvedCandidates ?? highlightedTechnique?.solvedCandidates
-                              const isTechniqueSolved =
-                                active &&
-                                (solvedSource?.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const blueSource = dragonHighlight?.blueCandidates ?? highlightedTechnique?.blueCandidates
-                              const isTechniqueBlue =
-                                active &&
-                                (blueSource?.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const yellowSource = dragonHighlight?.yellowCandidates ?? highlightedTechnique?.yellowCandidates
-                              const isTechniqueYellow =
-                                active &&
-                                (yellowSource?.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const isTechniqueDarkBlue =
-                                active &&
-                                (dragonHighlight?.darkBlueCandidates.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const isTechniqueOrange =
-                                active &&
-                                (dragonHighlight?.orangeCandidates.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const aicCandidateSource = dragonAicChains
-                                ? dragonAicChains.flatMap((chain) => chain.candidates)
-                                : highlightedTechnique?.aicCandidates
-                              const isTechniqueAic =
-                                active &&
-                                (aicCandidateSource?.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              // A Dynamic Dragon Colouring step's own
-                              // technique (any of them - a Locked Candidate,
-                              // a naked pair, an AIC, ...) eliminates a
-                              // candidate purely as an internal deduction its
-                              // reasoning depends on, not a real board
-                              // elimination this move claims - shown as a
-                              // hollow circle+cross instead of the usual red
-                              // elimination pip (see
-                              // technique-hypothetical-elimination in
-                              // App.css).
-                              const isTechniqueHypotheticalElimination =
-                                active &&
-                                (dragonAssumedEliminations?.some(
-                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                                ) ??
-                                  false)
-                              const isTechniqueColored =
-                                isTechniqueUsed ||
-                                isTechniqueEliminated ||
-                                isTechniqueSolved ||
-                                isTechniqueBlue ||
-                                isTechniqueYellow ||
-                                isTechniqueDarkBlue ||
-                                isTechniqueOrange ||
-                                isTechniqueAic ||
-                                isTechniqueHypotheticalElimination
-                              // A manually painted colour is a pure user
-                              // annotation - it only shows through when no
-                              // technique highlight is already claiming this
-                              // pip's background, so the two never fight.
-                              const paintedColorId = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
-                              const paintedHex = paintedColorId
-                                ? candidateColorSwatches.find((s) => s.id === paintedColorId)?.hex
-                                : undefined
-                              return (
-                                <span
-                                  key={digit}
-                                  className={[
-                                    'candidate',
-                                    active ? 'active' : '',
-                                    isHighlighted ? 'highlighted' : '',
-                                    isTechniqueUsed ? 'technique-used' : '',
-                                    isTechniqueEliminated ? 'technique-eliminated' : '',
-                                    isTechniqueSolved ? 'technique-solved' : '',
-                                    isTechniqueBlue ? 'technique-blue' : '',
-                                    isTechniqueYellow ? 'technique-yellow' : '',
-                                    isTechniqueDarkBlue ? 'technique-darkblue' : '',
-                                    isTechniqueOrange ? 'technique-orange' : '',
-                                    isTechniqueAic ? 'technique-aic' : '',
-                                    isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
-                                    paintedHex ? 'candidate-painted' : '',
-                                    active && paintColor ? 'paint-target' : '',
-                                  ]
-                                    .filter(Boolean)
-                                    .join(' ')}
-                                  style={paintedHex ? { backgroundColor: paintedHex } : undefined}
-                                  onClick={
-                                    active && paintColor
-                                      ? (event) => {
-                                          event.stopPropagation()
-                                          onCandidatePipClick(r, c, digit)
-                                        }
-                                      : undefined
-                                  }
-                                >
-                                  {active ? digit : ''}
-                                </span>
-                              )
-                            })}
-                          </span>
-                        ) : null}
-                      </button>
-                    )
-                  })}
-                </div>
+                <label
+                  key={technique}
+                  className="menu-checkbox"
+                  title={
+                    disabledByMasterSwitch
+                      ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
+                      : undefined
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowedRule3Techniques.has(technique)}
+                    disabled={
+                      technique === 'naked pair' ||
+                      technique === 'hidden single' ||
+                      technique === 'locked candidate' ||
+                      disabledByMasterSwitch
+                    }
+                    onChange={() => toggleRule3Technique(technique)}
+                  />
+                  {RULE3_TECHNIQUE_LABELS[technique]}
+                </label>
               )
             })}
-
-            {strongLinks.length > 0 && (
-              <svg className="strong-links" viewBox="0 0 900 900" aria-hidden="true">
-                {strongLinks.map((link, index) => {
-                  const p1 = pipCenter(link.a[0], link.a[1], link.digit)
-                  const p2 = pipCenter(link.b[0], link.b[1], link.digit)
-                  return (
-                    <line
-                      key={index}
-                      className="strong-link-line"
-                      x1={p1.x}
-                      y1={p1.y}
-                      x2={p2.x}
-                      y2={p2.y}
-                    />
-                  )
-                })}
-              </svg>
-            )}
-
-            {(() => {
-              const aicLinks = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedTechnique?.aicLinks
-              if (!aicLinks || aicLinks.length === 0) {
-                return null
-              }
-              return (
-                <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
-                  {aicLinks.map((link, index) => {
-                    const p1 = pipCenter(link.from.row, link.from.col, link.from.digit)
-                    const p2 = pipCenter(link.to.row, link.to.col, link.to.digit)
-                    return (
-                      <path
-                        key={index}
-                        className={link.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'}
-                        d={curvedPath(p1, p2)}
-                      />
-                    )
-                  })}
-                </svg>
-              )
-            })()}
-
           </div>
-
-          <div className="import-row">
-            <textarea
-              className="import-input"
-              placeholder="Paste a 81-char string, or Sudoku.Coach puzzle string, or SudokuWiki.org text format..."
-              rows={1}
-              value={importText}
-              disabled={busy}
-              onChange={(event) => setImportText(event.target.value)}
-            />
-            <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
-              Import
-            </button>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
+            <label
+              className="menu-checkbox"
+              title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
+            >
+              <input
+                type="checkbox"
+                checked={exhaustiveDragonColouring}
+                onChange={toggleExhaustiveDragonColouring}
+              />
+              Exhaustive Dragon Colouring
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
+            >
+              <input type="checkbox" checked={aicLimitPerDragonStep} onChange={toggleAicLimitPerDragonStep} />
+              Limit to 1 AIC per step
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled above."
+            >
+              <input
+                type="checkbox"
+                checked={dynamicDragonAutoSolveIncludesAics}
+                onChange={toggleDynamicDragonAutoSolveIncludesAics}
+              />
+              Auto-solve includes AICs
+            </label>
           </div>
-
-          <div className="import-secondary-row">
-            <div
-              className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
-              onDragOver={(event) => {
-                event.preventDefault()
-                setOcrDragActive(true)
-              }}
-              onDragLeave={() => setOcrDragActive(false)}
-              onDrop={onImageDrop}
-              onPaste={onImagePaste}
-              tabIndex={0}
-              role="button"
-              aria-label="Drop or paste a Sudoku grid screenshot to read it"
-            >
-              <span>
-                {ocrBusy
-                  ? 'Reading screenshot…'
-                  : 'Drag & drop or paste a Sudoku grid screenshot, or '}
-              </span>
-              {!ocrBusy && (
-                <label className="image-import-browse">
-                  browse for an image
-                  <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
-                </label>
-              )}
-            </div>
-            <button
-              type="button"
-              className="copy-sc-button"
-              onClick={onExportToSudokuCoach}
-              disabled={busy}
-              title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard"
-            >
-              Copy SC puzzle string
-            </button>
-          </div>
-        </div>
-
-        <div className="controls">
-          <section className="control-group solution-group">
-            <h2 className="control-label">Solution</h2>
-            <DigitPad
-              variant="solution"
-              isDisabled={() => !selected || selectedIsLocked}
-              onSelect={(digit) => selected && setCellValue(selected.row, selected.col, digit)}
-            />
-            <button
-              type="button"
-              className="pad-button erase-button"
-              disabled={!selected || selectedIsLocked}
-              onClick={() => selected && clearCell(selected.row, selected.col)}
-            >
-              Erase
-            </button>
-          </section>
-
-          <section className="control-group candidate-group">
-            <h2 className="control-label">Candidates</h2>
-            <DigitPad
-              variant="candidate"
-              isDisabled={() => !selected || selectedIsLocked || selectedIsSolved}
-              onSelect={(digit) => selected && toggleCandidate(selected.row, selected.col, digit)}
-            />
-            <button
-              type="button"
-              className="pad-button erase-button"
-              disabled={!selected || selectedIsLocked || selectedIsSolved}
-              onClick={() => selected && clearCandidates(selected.row, selected.col)}
-            >
-              Clear cell
-            </button>
-            <div className="candidate-bulk-actions">
-              <button
-                type="button"
-                className="pad-button"
-                disabled={busy || filled === 81}
-                onClick={onAutofillCandidates}
-              >
-                Autofill All
-              </button>
-              <button
-                type="button"
-                className="pad-button"
-                disabled={busy || !hasAnyCandidates}
-                onClick={onClearAllCandidates}
-              >
-                Clear all
-              </button>
-            </div>
-          </section>
-
-          <section className="control-group paint-group">
-            <h2 className="control-label">Candidate Colours</h2>
-            <div className="paint-swatches">
-              {candidateColorSwatches.map((swatch) => (
-                <div key={swatch.id} className="paint-swatch-wrapper">
-                  <button
-                    type="button"
-                    className={['paint-swatch', paintColor === swatch.id ? 'active' : ''].filter(Boolean).join(' ')}
-                    style={{ backgroundColor: swatch.hex }}
-                    aria-pressed={paintColor === swatch.id}
-                    aria-label={swatch.label}
-                    title={swatch.label}
-                    onClick={() => onSelectPaintColor(swatch.id)}
-                  />
-                  {/* A small "edit" badge pinned to the swatch's corner, rather
-                      than a separate strip below it - the previous layout read
-                      as a decorative sliver, not a control, so customizing a
-                      colour went undiscovered. The pencil icon is a
-                      pointer-events-none overlay purely for the visual cue;
-                      the actual native colour-picker input sits right beneath
-                      it, same size and position, and still owns the click. */}
-                  <span className="paint-swatch-edit-icon" aria-hidden="true">
-                    ✎
-                  </span>
-                  <input
-                    type="color"
-                    className="paint-swatch-color-input"
-                    value={swatch.hex}
-                    onChange={(event) => onSwatchColorChange(swatch.id, event.target.value)}
-                    aria-label={`Customize ${swatch.label} colour`}
-                    title={`Customize ${swatch.label} colour`}
-                  />
-                </div>
-              ))}
-            </div>
-            <p className="paint-hint">
-              {paintColor
-                ? 'Click a candidate to colour or uncolour it.'
-                : 'Pick a colour, then click candidates to colour them.'}
-            </p>
-            <button
-              type="button"
-              className="pad-button erase-button"
-              disabled={!hasAnyPaintedColor}
-              onClick={onClearAllCandidateColors}
-            >
-              Clear All
-            </button>
-          </section>
-
-           <section className="control-group highlight-group">
-            <h2 className="control-label">Highlight digit</h2>
-            <DigitPad
-              variant="highlight"
-              isActive={(digit) => highlightedDigit === digit}
-              onSelect={onHighlightDigit}
-            />
-            <button
-              type="button"
-              className="pad-button erase-button"
-              disabled={highlightedDigit === null}
-              onClick={() => setHighlightedDigit(null)}
-            >
-              Clear all highlights
-            </button>
-          </section>
-
-          <section className="control-group autosolve-group">
-            <h2 className="control-label">Auto-solve</h2>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onAutoNakedSingles}
-              title="Auto-solve all visible Naked Singles."
-            >
-              Naked singles
+        </DropdownMenu>
+        {phone && (
+          <DropdownMenu
+            label="⋯"
+            ariaLabel="More"
+            buttonClassName="more-trigger"
+            align="right"
+            closeOnItemClick
+          >
+            {/* The page title, hidden above the toolbar on a phone. */}
+            <h3 className="dropdown-section-title">
+              Sudoku Colouring Solver/Trainer {APP_VERSION}
+            </h3>
+            <button type="button" className="dropdown-item" onClick={onClear} disabled={busy}>
+              Clear grid
             </button>
             <button
               type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onAutoNakedAndHiddenSingles}
-              title="Auto-solve all visible Naked and Hidden Singles."
+              className="dropdown-item"
+              title="Learn the colouring techniques, step by step"
+              onClick={() => setTutorialOpen(true)}
             >
-              Naked + hidden singles
+              Techniques overview
             </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onLockedCandidates}
-              title="Auto-solve all visible Locked Candidates."
-            >
-              Locked candidates
+            <button type="button" className="dropdown-item" onClick={() => setHelpOpen(true)}>
+              Settings guide (?)
             </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onNakedPairs}
-              title="Auto-solve all visible Naked Pairs."
-            >
-              Naked pairs
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onNakedTriples}
-              title="Auto-solve all visible Naked Triples."
-            >
-              Naked triples
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onNakedQuads}
-              title="Auto-solve all visible Naked Quads."
-            >
-              Naked quads
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onHiddenPairs}
-              title="Auto-solve all visible Hidden Pairs."
-            >
-              Hidden pairs
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onUniqueRectangleType1}
-              title="Auto-solve all visible Unique Rectangles (every type)."
-            >
-              Unique Rectangle
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onBugPlusOne}
-              title="Auto-solve BUG+1, if the grid is currently in that pattern."
-            >
-              BUG+1
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || filled === 81}
-              onClick={onBivalueOddagon}
-              title="Auto-solve all visible Bivalue Oddagons."
-            >
-              Bivalue Oddagon
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onSimpleColoring}
-              title="Auto-solve all visible Simple Colouring finds."
-            >
-              Simple colouring
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81 || !shortSingleDigitAicEnabled}
-              onClick={onShortSingleDigitAic}
-              title={shortSingleDigitAicEnabled ? "Auto-solve all visible Short Single-Digit AICs (length 3)." : 'Enable Short Single-Digit AIC in Settings to use this'}
-            >
-              Short Single-Digit AIC
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81 || !shortAicEnabled}
-              onClick={onShortAic}
-              title={shortAicEnabled ? "Auto-solve all visible Short AICs (length <= 5)." : 'Enable Short AIC in Settings to use this'}
-            >
-              Short AIC
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81 || !genericAicEnabled}
-              onClick={onGenericAic}
-              title={
-                genericAicEnabled
-                  ? `Auto-solve all visible Generic AICs (length 7 to ${GENERIC_AIC_MAX_LENGTH}).`
-                  : 'Enable Generic AIC in Settings to use this'
-              }
-            >
-              Generic AIC
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onMedusa}
-              title="Auto-solve all visible 3D Medusa finds."
-            >
-              3D Medusa
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onDragonColouringBivalueSeeded}
-              title="Auto-solve Non-dynamic Dragons that uses a Medusa base that consists of at least 1 bivalue cell"
-            >
-              Dragon colouring (bivalue)
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onDragonColouringAny}
-              title="Auto-solve Non-dynamic Dragons that use any Medusa base"
-            >
-              Dragon colouring (any Medusa)
-            </button>
-            <button
-              type="button"
-              className="pad-button autosolve-button"
-              disabled={busy || !hasAnyCandidates || filled === 81}
-              onClick={onDynamicDragonColouring}
-              title="Auto-solve Dynamic Dragons.  Dynamic Dragons that use AIC will be solved based on the Setting."
-            >
-              Dynamic Dragon Colouring
-            </button>
-          </section>
-        </div>
+          </DropdownMenu>
+        )}
       </div>
+    </div>
+  )
 
-      <div className="actions">
-        <button type="button" className="primary" onClick={onSolve} disabled={busy}>
-          {solving ? 'Solving…' : 'Brute force solve'}
+  const techniquePanel = (
+    <TechniquePanel
+      tab={techniquePanelTab}
+      onTabChange={onTechniquePanelTabChange}
+      instances={techniqueInstances}
+      activeId={activeTechniqueId}
+      onSelect={onSelectTechnique}
+      dragonStepIndex={dragonStepIndex}
+      onDragonStep={onDragonStep}
+      dragonSubstepIndex={dragonSubstepIndex}
+      onDragonSubstep={onDragonSubstep}
+      solvePath={solvePath}
+      activeSolvePathIndex={activeSolvePathIndex}
+      onSelectSolvePathStep={onSelectSolvePathStep}
+      onApply={onApplyPanelSelection}
+      canApply={
+        techniquePanelTab === 'solve-path'
+          ? activeSolvePathIndex !== null
+          : techniquePanelTab === 'find'
+            ? !!findInstance
+            : !!activeTechniqueId
+      }
+      onGenerateSolvePath={onGenerateSolvePath}
+      solvePathStale={solvePathStale}
+      showSolvePathLog={showSolvePathLog}
+      onToggleSolvePathLog={onToggleSolvePathLog}
+      solvability={solvability}
+      find={{
+        input: findInput,
+        onInput: setFindInput,
+        onFind: onFindTargetedDragon,
+        result: findResult,
+        resultIsCurrent: findResultIsCurrent,
+      }}
+      easySolveEnabled={easySolveEnabled}
+      onToggleEasySolve={toggleEasySolveEnabled}
+    />
+  )
+
+  const gridElement = (
+    <div
+      className={['grid', gridWhiteMode ? 'grid-white-mode' : ''].filter(Boolean).join(' ')}
+      role="grid"
+      aria-label="Sudoku board"
+      tabIndex={0}
+    >
+      {NINE.map((boxIndex) => {
+        const boxRow = Math.floor(boxIndex / 3)
+        const boxCol = boxIndex % 3
+
+        return (
+          <div key={boxIndex} className="box" role="rowgroup">
+            {NINE.map((cellIndex) => {
+              const r = boxRow * 3 + Math.floor(cellIndex / 3)
+              const c = boxCol * 3 + (cellIndex % 3)
+              const value = board[r][c]
+              const isSelected = selected?.row === r && selected?.col === c
+              const isDigitHighlighted = value !== 0 && highlightedDigit === value
+              const cellHasCandidates = candidates[r][c].some(Boolean)
+              const isTechniqueCell =
+                highlightedTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
+              const isBivalueCell = bivalueCells.has(`${r},${c}`)
+              const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
+              const isMedusaHighlightCell =
+                highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false
+              const isConflictCell = conflictedCells.has(`${r},${c}`)
+              const classes = [
+                'cell',
+                givens[r][c] ? 'given' : value ? 'filled' : '',
+                isSelected ? 'selected' : '',
+                isDigitHighlighted ? 'digit-highlighted' : '',
+                isBivalueCell ? 'bivalue-highlighted' : '',
+                isTechniqueCell ? 'technique-used' : '',
+                isMedusaHighlightCell ? 'medusa-highlight-cell' : '',
+                isDragonTechniqueCell ? 'dragon-technique-cell' : '',
+                isConflictCell ? 'conflict' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')
+
+              return (
+                <button
+                  key={`${r}-${c}`}
+                  type="button"
+                  role="gridcell"
+                  aria-selected={isSelected}
+                  aria-readonly={givens[r][c]}
+                  aria-label={cellAriaLabel(r, c, value)}
+                  className={classes}
+                  onClick={() => onCellClick(r, c)}
+                >
+                  {value !== 0 ? (
+                    value
+                  ) : cellHasCandidates ? (
+                    <span className="candidates" aria-hidden="true">
+                      {DIGITS.map((digit) => {
+                        const active = candidates[r][c][digit - 1]
+                        const isHighlighted = active && highlightedDigit === digit
+                        const isTechniqueUsed =
+                          active &&
+                          (highlightedTechnique?.usedCandidates.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? highlightedTechnique?.eliminatedCandidates
+                        const isTechniqueEliminated =
+                          active &&
+                          (eliminatedSource?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const solvedSource = dragonHighlight?.solvedCandidates ?? highlightedTechnique?.solvedCandidates
+                        const isTechniqueSolved =
+                          active &&
+                          (solvedSource?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const blueSource = dragonHighlight?.blueCandidates ?? highlightedTechnique?.blueCandidates
+                        const isTechniqueBlue =
+                          active &&
+                          (blueSource?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const yellowSource = dragonHighlight?.yellowCandidates ?? highlightedTechnique?.yellowCandidates
+                        const isTechniqueYellow =
+                          active &&
+                          (yellowSource?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const isTechniqueDarkBlue =
+                          active &&
+                          (dragonHighlight?.darkBlueCandidates.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const isTechniqueOrange =
+                          active &&
+                          (dragonHighlight?.orangeCandidates.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const aicCandidateSource = dragonAicChains
+                          ? dragonAicChains.flatMap((chain) => chain.candidates)
+                          : highlightedTechnique?.aicCandidates
+                        const isTechniqueAic =
+                          active &&
+                          (aicCandidateSource?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        // A Dynamic Dragon Colouring step's own
+                        // technique (any of them - a Locked Candidate,
+                        // a naked pair, an AIC, ...) eliminates a
+                        // candidate purely as an internal deduction its
+                        // reasoning depends on, not a real board
+                        // elimination this move claims - shown as a
+                        // hollow circle+cross instead of the usual red
+                        // elimination pip (see
+                        // technique-hypothetical-elimination in
+                        // App.css).
+                        const isTechniqueHypotheticalElimination =
+                          active &&
+                          (dragonAssumedEliminations?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
+                        const isTechniqueColored =
+                          isTechniqueUsed ||
+                          isTechniqueEliminated ||
+                          isTechniqueSolved ||
+                          isTechniqueBlue ||
+                          isTechniqueYellow ||
+                          isTechniqueDarkBlue ||
+                          isTechniqueOrange ||
+                          isTechniqueAic ||
+                          isTechniqueHypotheticalElimination
+                        // A manually painted colour is a pure user
+                        // annotation - it only shows through when no
+                        // technique highlight is already claiming this
+                        // pip's background, so the two never fight.
+                        const paintedColorId = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
+                        const paintedHex = paintedColorId
+                          ? candidateColorSwatches.find((s) => s.id === paintedColorId)?.hex
+                          : undefined
+                        return (
+                          <span
+                            key={digit}
+                            className={[
+                              'candidate',
+                              active ? 'active' : '',
+                              isHighlighted ? 'highlighted' : '',
+                              isTechniqueUsed ? 'technique-used' : '',
+                              isTechniqueEliminated ? 'technique-eliminated' : '',
+                              isTechniqueSolved ? 'technique-solved' : '',
+                              isTechniqueBlue ? 'technique-blue' : '',
+                              isTechniqueYellow ? 'technique-yellow' : '',
+                              isTechniqueDarkBlue ? 'technique-darkblue' : '',
+                              isTechniqueOrange ? 'technique-orange' : '',
+                              isTechniqueAic ? 'technique-aic' : '',
+                              isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
+                              paintedHex ? 'candidate-painted' : '',
+                              active && paintColor ? 'paint-target' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            style={paintedHex ? { backgroundColor: paintedHex } : undefined}
+                            onClick={
+                              active && paintColor
+                                ? (event) => {
+                                    event.stopPropagation()
+                                    onCandidatePipClick(r, c, digit)
+                                  }
+                                : undefined
+                            }
+                          >
+                            {active ? digit : ''}
+                          </span>
+                        )
+                      })}
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+        )
+      })}
+
+      {strongLinks.length > 0 && (
+        <svg className="strong-links" viewBox="0 0 900 900" aria-hidden="true">
+          {strongLinks.map((link, index) => {
+            const p1 = pipCenter(link.a[0], link.a[1], link.digit)
+            const p2 = pipCenter(link.b[0], link.b[1], link.digit)
+            return (
+              <line
+                key={index}
+                className="strong-link-line"
+                x1={p1.x}
+                y1={p1.y}
+                x2={p2.x}
+                y2={p2.y}
+              />
+            )
+          })}
+        </svg>
+      )}
+
+      {(() => {
+        const aicLinks = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedTechnique?.aicLinks
+        if (!aicLinks || aicLinks.length === 0) {
+          return null
+        }
+        return (
+          <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
+            {aicLinks.map((link, index) => {
+              const p1 = pipCenter(link.from.row, link.from.col, link.from.digit)
+              const p2 = pipCenter(link.to.row, link.to.col, link.to.digit)
+              return (
+                <path
+                  key={index}
+                  className={link.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'}
+                  d={curvedPath(p1, p2)}
+                />
+              )
+            })}
+          </svg>
+        )
+      })()}
+
+    </div>
+  )
+
+  const importRows = (
+    <>
+      <div className="import-row">
+        <textarea
+          className="import-input"
+          placeholder="Paste a 81-char string, or Sudoku.Coach puzzle string, or SudokuWiki.org text format..."
+          rows={1}
+          value={importText}
+          disabled={busy}
+          onChange={(event) => setImportText(event.target.value)}
+        />
+        <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
+          Import
         </button>
       </div>
 
+      <div className="import-secondary-row">
+        <div
+          className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
+          onDragOver={(event) => {
+            event.preventDefault()
+            setOcrDragActive(true)
+          }}
+          onDragLeave={() => setOcrDragActive(false)}
+          onDrop={onImageDrop}
+          onPaste={onImagePaste}
+          tabIndex={0}
+          role="button"
+          aria-label="Drop or paste a Sudoku grid screenshot to read it"
+        >
+          <span>
+            {ocrBusy
+              ? 'Reading screenshot…'
+              : 'Drag & drop or paste a Sudoku grid screenshot, or '}
+          </span>
+          {!ocrBusy && (
+            <label className="image-import-browse">
+              browse for an image
+              <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
+            </label>
+          )}
+        </div>
+        <button
+          type="button"
+          className="copy-sc-button"
+          onClick={onExportToSudokuCoach}
+          disabled={busy}
+          title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard"
+        >
+          Copy SC puzzle string
+        </button>
+      </div>
+    </>
+  )
+
+  const solutionGroup = (
+    <section className="control-group solution-group">
+      <h2 className="control-label">Solution</h2>
+      <DigitPad
+        variant="solution"
+        isDisabled={() => !selected || selectedIsLocked}
+        onSelect={(digit) => selected && setCellValue(selected.row, selected.col, digit)}
+      />
+      <button
+        type="button"
+        className="pad-button erase-button"
+        disabled={!selected || selectedIsLocked}
+        onClick={() => selected && clearCell(selected.row, selected.col)}
+      >
+        Erase
+      </button>
+    </section>
+  )
+
+  const candidateGroup = (
+    <section className="control-group candidate-group">
+      <h2 className="control-label">Candidates</h2>
+      <DigitPad
+        variant="candidate"
+        isDisabled={() => !selected || selectedIsLocked || selectedIsSolved}
+        onSelect={(digit) => selected && toggleCandidate(selected.row, selected.col, digit)}
+      />
+      <button
+        type="button"
+        className="pad-button erase-button"
+        disabled={!selected || selectedIsLocked || selectedIsSolved}
+        onClick={() => selected && clearCandidates(selected.row, selected.col)}
+      >
+        Clear cell
+      </button>
+      <div className="candidate-bulk-actions">
+        <button
+          type="button"
+          className="pad-button"
+          disabled={busy || filled === 81}
+          onClick={onAutofillCandidates}
+        >
+          Autofill All
+        </button>
+        <button
+          type="button"
+          className="pad-button"
+          disabled={busy || !hasAnyCandidates}
+          onClick={onClearAllCandidates}
+        >
+          Clear all
+        </button>
+      </div>
+    </section>
+  )
+
+  const paintGroup = (
+    <section className="control-group paint-group">
+      <h2 className="control-label">Candidate Colours</h2>
+      <div className="paint-swatches">
+        {candidateColorSwatches.map((swatch) => (
+          <div key={swatch.id} className="paint-swatch-wrapper">
+            <button
+              type="button"
+              className={['paint-swatch', paintColor === swatch.id ? 'active' : ''].filter(Boolean).join(' ')}
+              style={{ backgroundColor: swatch.hex }}
+              aria-pressed={paintColor === swatch.id}
+              aria-label={swatch.label}
+              title={swatch.label}
+              onClick={() => onSelectPaintColor(swatch.id)}
+            />
+            {/* A small "edit" badge pinned to the swatch's corner, rather
+                than a separate strip below it - the previous layout read
+                as a decorative sliver, not a control, so customizing a
+                colour went undiscovered. The pencil icon is a
+                pointer-events-none overlay purely for the visual cue;
+                the actual native colour-picker input sits right beneath
+                it, same size and position, and still owns the click. */}
+            <span className="paint-swatch-edit-icon" aria-hidden="true">
+              ✎
+            </span>
+            <input
+              type="color"
+              className="paint-swatch-color-input"
+              value={swatch.hex}
+              onChange={(event) => onSwatchColorChange(swatch.id, event.target.value)}
+              aria-label={`Customize ${swatch.label} colour`}
+              title={`Customize ${swatch.label} colour`}
+            />
+          </div>
+        ))}
+      </div>
+      <p className="paint-hint">
+        {paintColor
+          ? 'Click a candidate to colour or uncolour it.'
+          : 'Pick a colour, then click candidates to colour them.'}
+      </p>
+      <button
+        type="button"
+        className="pad-button erase-button"
+        disabled={!hasAnyPaintedColor}
+        onClick={onClearAllCandidateColors}
+      >
+        Clear All
+      </button>
+    </section>
+  )
+
+  const highlightGroup = (
+    <section className="control-group highlight-group">
+      <h2 className="control-label">Highlight digit</h2>
+      <DigitPad
+        variant="highlight"
+        isActive={(digit) => highlightedDigit === digit}
+        onSelect={onHighlightDigit}
+      />
+      <button
+        type="button"
+        className="pad-button erase-button"
+        disabled={highlightedDigit === null}
+        onClick={() => setHighlightedDigit(null)}
+      >
+        Clear all highlights
+      </button>
+    </section>
+  )
+
+  const autosolveGroup = (
+    <section className="control-group autosolve-group">
+      <h2 className="control-label">Auto-solve</h2>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onAutoNakedSingles}
+        title="Auto-solve all visible Naked Singles."
+      >
+        Naked singles
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onAutoNakedAndHiddenSingles}
+        title="Auto-solve all visible Naked and Hidden Singles."
+      >
+        Naked + hidden singles
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onLockedCandidates}
+        title="Auto-solve all visible Locked Candidates."
+      >
+        Locked candidates
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onNakedPairs}
+        title="Auto-solve all visible Naked Pairs."
+      >
+        Naked pairs
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onNakedTriples}
+        title="Auto-solve all visible Naked Triples."
+      >
+        Naked triples
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onNakedQuads}
+        title="Auto-solve all visible Naked Quads."
+      >
+        Naked quads
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onHiddenPairs}
+        title="Auto-solve all visible Hidden Pairs."
+      >
+        Hidden pairs
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onUniqueRectangleType1}
+        title="Auto-solve all visible Unique Rectangles (every type)."
+      >
+        Unique Rectangle
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onBugPlusOne}
+        title="Auto-solve BUG+1, if the grid is currently in that pattern."
+      >
+        BUG+1
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || filled === 81}
+        onClick={onBivalueOddagon}
+        title="Auto-solve all visible Bivalue Oddagons."
+      >
+        Bivalue Oddagon
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onSimpleColoring}
+        title="Auto-solve all visible Simple Colouring finds."
+      >
+        Simple colouring
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81 || !shortSingleDigitAicEnabled}
+        onClick={onShortSingleDigitAic}
+        title={shortSingleDigitAicEnabled ? "Auto-solve all visible Short Single-Digit AICs (length 3)." : 'Enable Short Single-Digit AIC in Settings to use this'}
+      >
+        Short Single-Digit AIC
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81 || !shortAicEnabled}
+        onClick={onShortAic}
+        title={shortAicEnabled ? "Auto-solve all visible Short AICs (length <= 5)." : 'Enable Short AIC in Settings to use this'}
+      >
+        Short AIC
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81 || !genericAicEnabled}
+        onClick={onGenericAic}
+        title={
+          genericAicEnabled
+            ? `Auto-solve all visible Generic AICs (length 7 to ${GENERIC_AIC_MAX_LENGTH}).`
+            : 'Enable Generic AIC in Settings to use this'
+        }
+      >
+        Generic AIC
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onMedusa}
+        title="Auto-solve all visible 3D Medusa finds."
+      >
+        3D Medusa
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onDragonColouringBivalueSeeded}
+        title="Auto-solve Non-dynamic Dragons that uses a Medusa base that consists of at least 1 bivalue cell"
+      >
+        Dragon colouring (bivalue)
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onDragonColouringAny}
+        title="Auto-solve Non-dynamic Dragons that use any Medusa base"
+      >
+        Dragon colouring (any Medusa)
+      </button>
+      <button
+        type="button"
+        className="pad-button autosolve-button"
+        disabled={busy || !hasAnyCandidates || filled === 81}
+        onClick={onDynamicDragonColouring}
+        title="Auto-solve Dynamic Dragons.  Dynamic Dragons that use AIC will be solved based on the Setting."
+      >
+        Dynamic Dragon Colouring
+      </button>
+    </section>
+  )
+
+  const actionsRow = (
+    <div className="actions">
+      <button type="button" className="primary" onClick={onSolve} disabled={busy}>
+        {solving ? 'Solving…' : 'Brute force solve'}
+      </button>
+    </div>
+  )
+
+  const statusLines = (
+    <>
       <p className="status" role="status">
         {status} <span className="muted">(grid has {filled}/81 cells filled)</span>
       </p>
       <p className={['solvability', `solvability-${solvability.kind}`].join(' ')}>{solvabilityText(solvability)}</p>
+    </>
+  )
 
+  const overlays = (
+    <>
       {toastMessage && (
         <div className="toast" role="status">
           {toastMessage}
@@ -5139,6 +5346,117 @@ export default function App() {
         />
       )}
       {tutorialOpen && <TutorialPage onClose={() => setTutorialOpen(false)} />}
+    </>
+  )
+
+  if (compact) {
+    const dockContent: Record<CompactSection, ReactNode> = {
+      techniques: techniquePanel,
+      input: (
+        <>
+          {solutionGroup}
+          {candidateGroup}
+        </>
+      ),
+      colour: (
+        <>
+          {paintGroup}
+          {highlightGroup}
+        </>
+      ),
+      solve: (
+        <>
+          <div className="compact-status">{statusLines}</div>
+          {autosolveGroup}
+          {actionsRow}
+        </>
+      ),
+      import: importRows,
+    }
+    return (
+      <main
+        className={[
+          'page',
+          'compact-layout',
+          landscape ? 'compact-landscape' : 'compact-portrait',
+          phone ? 'compact-phone' : '',
+          busy ? 'is-busy' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onKeyDown={onKeyDown}
+      >
+        {!phone && header}
+        {toolbar}
+        <div className="compact-board">{gridElement}</div>
+        {/* Keyed on the tab so switching tabs starts the new one scrolled to
+            its top instead of wherever the previous tab was left. */}
+        <div
+          key={compactSection}
+          className={`compact-dock compact-dock-${compactSection}`}
+          role="tabpanel"
+          id="compact-dock"
+          aria-labelledby={`compact-tab-${compactSection}`}
+        >
+          {dockContent[compactSection]}
+        </div>
+        <nav className="compact-tabs" role="tablist" aria-label="Control panels">
+          {COMPACT_SECTIONS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`compact-tab-${id}`}
+              aria-selected={compactSection === id}
+              aria-controls="compact-dock"
+              className={['compact-tab', compactSection === id ? 'active' : ''].filter(Boolean).join(' ')}
+              onClick={() => setCompactSection(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        {overlays}
+      </main>
+    )
+  }
+
+  return (
+    <main className={`page${busy ? ' is-busy' : ''}`} onKeyDown={onKeyDown}>
+      {header}
+
+      {toolbar}
+
+      <div className="board-area">
+        {techniquePanel}
+
+        {/* The grid plus the import / screenshot / export rows, kept in one
+            column so they sit right under the grid instead of below
+            whichever side column (techniques panel, controls) is tallest. */}
+        <div className="grid-column">
+          {gridElement}
+
+          {importRows}
+        </div>
+
+        <div className="controls">
+          {solutionGroup}
+
+          {candidateGroup}
+
+          {paintGroup}
+
+          {highlightGroup}
+
+          {autosolveGroup}
+        </div>
+      </div>
+
+      {actionsRow}
+
+      {statusLines}
+
+      {overlays}
     </main>
   )
 }
