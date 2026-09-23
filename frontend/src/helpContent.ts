@@ -88,6 +88,33 @@ export const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
+    title: 'Dragon Colouring',
+    intro: 'These apply to both plain and Dynamic Dragon Colouring.',
+    items: [
+      {
+        name: 'Exhaustive Dragon Colouring',
+        settingKey: 'exhaustiveDragonColouring',
+        description:
+          'When ON, Dragon Colouring does not stop at the first elimination; it will continue to colour, only stopping when one colour is proven false or no more eliminations can be found. ' +
+          'Turn this ON to mimic human-friendly solving approach and to see promotions. \n\n' +
+          'When OFF, it stops at the first elimination it finds, mimicing AIC-like behaviour.',
+      },
+      {
+        name: 'Optimize Dragons',
+        settingKey: 'optimizeDragons',
+        description:
+          'When OFF, the two colours take turns to extend the Dragon, one extension each. \n\n' +
+          'When ON, the colours no longer have to take turns: for each Medusa base, Dragon Colouring searches for the ' +
+          'elimination(s) it can reach with the fewest Dragon colour extensions, extending whichever colour gets there ' +
+          'quickest. It never finds a Dragon that OFF would not find, and never uses more extensions than OFF would. ' +
+          'With Exhaustive Dragon Colouring ON, each later elimination is also reached with the fewest extensions from where the previous one left off. \n\n' +
+          'Each colour still extends using the first extension its rules find: the search picks which colour extends ' +
+          'next, not which candidate. If the search gets too large, it keeps the OFF result. \n\n' +
+          'The "Find by elims" tab always uses Optimize Dragons, whether this is ON or OFF.',
+      },
+    ],
+  },
+  {
     title: 'Dynamic Dragon Colouring techniques',
     intro:
       'Dynamic Dragon Colouring can reach further than plain Dragon Colouring by using all other non-colouring techniques to extend the Dragon. This list is which of those techniques it may use, both when ' +
@@ -103,16 +130,8 @@ export const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: 'Dragon Colouring',
+    title: 'Dynamic Dragon Colouring',
     items: [
-      {
-        name: 'Exhaustive Dragon Colouring',
-        settingKey: 'exhaustiveDragonColouring',
-        description:
-          'When ON, Dragon Colouring does not stop at the first elimination; it will continue to colour, only stopping when one colour is proven false or no more eliminations can be found. ' +
-          'Turn this ON to mimic human-friendly solving approach and to see promotions. \n\n' +
-          'When OFF, it stops at the first elimination it finds, mimicing AIC-like behaviour.',
-      },
       {
         name: 'Limit to 1 AIC per step',
         settingKey: 'aicLimitPerDragonStep',

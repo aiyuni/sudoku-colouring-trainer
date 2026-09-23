@@ -388,6 +388,7 @@ function computeStuckDragonExtensions(
   filter: DragonChainFilter = 'any',
   minBaseCandidates = 0,
   exhaustive = true,
+  optimize = false,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -405,7 +406,7 @@ function computeStuckDragonExtensions(
     if (!stuck) {
       continue
     }
-    const result = dragonFinder.extend(chain, board, candidates, { exhaustive })
+    const result = dragonFinder.extend(chain, board, candidates, { exhaustive, optimize })
     if (!result) {
       continue
     }
@@ -432,6 +433,7 @@ function computeStuckDynamicDragonExtensions(
   allowedRule3Techniques: ReadonlySet<Rule3Technique> = new Set(DEFAULT_RULE3_TECHNIQUES),
   aicLimitPerStep = true,
   exhaustive = true,
+  optimize = false,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -461,6 +463,7 @@ function computeStuckDynamicDragonExtensions(
       allowedRule3Techniques,
       aicLimitPerStep,
       exhaustive,
+      optimize,
     })
     if (!result) {
       continue
@@ -594,6 +597,7 @@ function buildTechniqueInstances(
   aicLimitPerDragonStep = true,
   exhaustiveDragon = true,
   genericAicEnabled = false,
+  optimizeDragons = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -1113,6 +1117,7 @@ function buildTechniqueInstances(
     'any',
     minBaseMedusaCandidates,
     exhaustiveDragon,
+    optimizeDragons,
   )
   dragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dragonExtensions) {
@@ -1126,6 +1131,7 @@ function buildTechniqueInstances(
     allowedRule3Techniques,
     aicLimitPerDragonStep,
     exhaustiveDragon,
+    optimizeDragons,
   )
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
@@ -1431,6 +1437,7 @@ function buildSolvePath(
   exhaustiveDragon = true,
   genericAicEnabled = false,
   easySolveEnabled = false,
+  optimizeDragons = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1472,6 +1479,7 @@ function buildSolvePath(
       aicLimitPerDragonStep,
       exhaustiveDragon,
       genericAicEnabled,
+      optimizeDragons,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart
@@ -1632,15 +1640,23 @@ interface FindPanelData {
   resultIsCurrent: boolean
 }
 
+/** Technique substep clauses start lowercase ("a naked pair of ...") since
+ * they're written to be read as a list; shown alone they read as a
+ * sentence. */
+function capitalizeFirst(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
 /** The forward/rewind player under a Dragon Colouring row: steps through
  * the move log one move at a time, with that move's own explanation.
  *
- * When the move on screen is a Dynamic Dragon Colouring step that chained
- * more than one technique together, a second, separate forward/rewind
- * control appears underneath it - "Reveal technique 1/1" etc. Revealing an
- * extra technique brings its own basis cells (yellow) and internal,
+ * When the move on screen is a Dynamic Dragon Colouring step, a second,
+ * separate forward/rewind control appears underneath it - "Substep 1 / 3"
+ * etc.: each chained technique, then the new dragon colour as the last
+ * substep. Revealing a technique brings its own basis cells and internal,
  * hypothetical eliminations (the hollow red circle+cross) onto the grid,
- * one at a time, instead of the whole chain's reasoning appearing at once.
+ * one at a time, instead of the whole chain's reasoning appearing at once;
+ * the colour itself only appears at the last substep.
  * `substepIndex` is the raw, shared piece of state: null means "not
  * navigating - show every substep revealed", which this component resolves
  * against the move currently on screen's own substep count (a different
@@ -1693,7 +1709,7 @@ function DragonStepper({
               ◀ Rewind
             </button>
             <span className="dragon-player-step">
-              Technique {resolvedSubstepIndex + 1} / {substeps.length}
+              Substep {resolvedSubstepIndex + 1} / {substeps.length}
             </span>
             <button
               type="button"
@@ -1704,7 +1720,7 @@ function DragonStepper({
               Forward ▶
             </button>
           </div>
-          <p className="dragon-substep-description">{substeps[resolvedSubstepIndex].clause}.</p>
+          <p className="dragon-substep-description">{capitalizeFirst(substeps[resolvedSubstepIndex].clause)}.</p>
         </div>
       )}
     </div>
@@ -2353,6 +2369,7 @@ export default function App() {
   )
   const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
   const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
+  const [optimizeDragons, setOptimizeDragons] = useState(DEFAULT_SETTINGS.optimizeDragons)
   const [easySolveEnabled, setEasySolveEnabled] = useState(DEFAULT_SETTINGS.easySolveEnabled)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
     DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics,
@@ -2497,6 +2514,7 @@ export default function App() {
         aicLimitPerDragonStep,
         exhaustiveDragonColouring,
         genericAicEnabled,
+        optimizeDragons,
       ),
     [
       board,
@@ -2508,6 +2526,7 @@ export default function App() {
       aicLimitPerDragonStep,
       exhaustiveDragonColouring,
       genericAicEnabled,
+      optimizeDragons,
     ],
   )
   // Looked up by id (rather than kept as its own state) so that if the
@@ -2579,6 +2598,10 @@ export default function App() {
     }
     return new Set(currentDragonMove.dynamicTechniqueCells.map(([r, c]) => `${r},${c}`))
   }, [visibleSubsteps, currentDragonMove])
+  // A Dragon mass elimination proven by an uncoloured cell that one side
+  // would leave with no candidates gets the same yellow border 3D Medusa
+  // gives its own emptied cell - only while that move is on screen.
+  const dragonEmptiedCell = currentDragonMove?.emptiedCell ?? null
   // An AIC (either kind) used within this one Dynamic Dragon Colouring step
   // gets the same purple/curved-line treatment the standalone Short AIC
   // technique shows - also just the currently-revealed substeps, not folded
@@ -2674,6 +2697,7 @@ export default function App() {
       exhaustiveDragonColouring,
       genericAicEnabled,
       easySolveEnabled,
+      optimizeDragons,
     )
   }, [
     board,
@@ -2686,6 +2710,7 @@ export default function App() {
     exhaustiveDragonColouring,
     genericAicEnabled,
     easySolveEnabled,
+    optimizeDragons,
   ])
   const solvability = useMemo(
     () => derivePuzzleSolvability(puzzleSolveResult.status, candidatesAccurate, bruteSolvePath),
@@ -3382,7 +3407,7 @@ export default function App() {
 
   function onDragonColouringBivalueSeeded() {
     runDragonColouring(
-      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring),
+      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring, optimizeDragons),
       'bivalue-seeded',
       'Dragon Colouring (bivalue-seeded)',
     )
@@ -3390,7 +3415,7 @@ export default function App() {
 
   function onDragonColouringAny() {
     runDragonColouring(
-      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring),
+      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring, optimizeDragons),
       'any',
       'Dragon Colouring (any Medusa)',
     )
@@ -3407,6 +3432,7 @@ export default function App() {
           effectiveAllowedRule3Techniques,
           aicLimitPerDragonStep,
           exhaustiveDragonColouring,
+          optimizeDragons,
         )
         if (dynamicDragonAutoSolveIncludesAics) {
           return results
@@ -3609,6 +3635,7 @@ export default function App() {
     setGenericAicEnabled(DEFAULT_SETTINGS.genericAicEnabled)
     setAllowedRule3Techniques(new Set(DEFAULT_SETTINGS.allowedRule3Techniques))
     setExhaustiveDragonColouring(DEFAULT_SETTINGS.exhaustiveDragonColouring)
+    setOptimizeDragons(DEFAULT_SETTINGS.optimizeDragons)
     setEasySolveEnabled(DEFAULT_SETTINGS.easySolveEnabled)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
     setDynamicDragonAutoSolveIncludesAics(DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics)
@@ -3623,6 +3650,10 @@ export default function App() {
 
   function toggleExhaustiveDragonColouring() {
     setExhaustiveDragonColouring((current) => !current)
+  }
+
+  function toggleOptimizeDragons() {
+    setOptimizeDragons((current) => !current)
   }
 
   function toggleEasySolveEnabled() {
@@ -3893,6 +3924,7 @@ export default function App() {
           exhaustiveDragonColouring,
           genericAicEnabled,
           easySolveEnabled,
+          optimizeDragons,
         )
         commitGrid({ board, givens, candidates }, nextSolvePath)
         setActiveSolvePathIndex(null)
@@ -4581,6 +4613,28 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Dragon Colouring</h3>
+            <label
+              className="menu-checkbox"
+              title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
+            >
+              <input
+                type="checkbox"
+                checked={exhaustiveDragonColouring}
+                onChange={toggleExhaustiveDragonColouring}
+              />
+              Exhaustive Dragon Colouring
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When on, Dragon Colouring (plain and Dynamic) looks for the elimination(s) it can reach from each Medusa base with the fewest dragon colour extensions, extending whichever colour gets there quickest instead of making the two colours take turns. When off, the two colours take turns to extend."
+            >
+              <input type="checkbox" checked={optimizeDragons} onChange={toggleOptimizeDragons} />
+              Optimize Dragons
+            </label>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
             <h3 className="dropdown-section-title">Select Dynamic Dragon Colouring techniques</h3>
             <p className="dropdown-hint">
               Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
@@ -4619,17 +4673,6 @@ export default function App() {
           <div className="dropdown-divider" />
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
-            <label
-              className="menu-checkbox"
-              title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
-            >
-              <input
-                type="checkbox"
-                checked={exhaustiveDragonColouring}
-                onChange={toggleExhaustiveDragonColouring}
-              />
-              Exhaustive Dragon Colouring
-            </label>
             <label
               className="menu-checkbox"
               title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
@@ -4746,7 +4789,8 @@ export default function App() {
               const isBivalueCell = bivalueCells.has(`${r},${c}`)
               const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
               const isMedusaHighlightCell =
-                highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false
+                (highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false) ||
+                (dragonEmptiedCell?.[0] === r && dragonEmptiedCell?.[1] === c)
               const isConflictCell = conflictedCells.has(`${r},${c}`)
               const classes = [
                 'cell',

@@ -156,7 +156,10 @@ export class SudokuDragonTargetFinder {
    * Dynamic Dragon Colouring (the latter only counted when it really used a
    * dynamic step), always in Exhaustive mode: an exhaustive run's log begins
    * with the very moves a non-exhaustive run would stop at, so it contains
-   * every stopping point either mode could give.
+   * every stopping point either mode could give. Always with Optimize Dragons
+   * too, whatever the app's own setting: reaching each elimination with the
+   * fewest extensions gives the shortest logs to cut, and Optimize never
+   * changes which chains resolve, so no chain is gained or lost by it.
    *
    * Each log is then cut at its earliest elimination-carrying move whose
    * accumulated result covers all the entered candidates. Later moves can only
@@ -228,13 +231,14 @@ export class SudokuDragonTargetFinder {
       chainsTried++
       const chainKey = chainKeyOf(chain)
 
-      const plain = this.dragonFinder.extend(chain, board, candidates, { exhaustive: true })
+      const plain = this.dragonFinder.extend(chain, board, candidates, { exhaustive: true, optimize: true })
       if (plain) {
         consider('dragon', chainKey, plain.moves)
       }
       const dynamic = this.dragonFinder.extend(chain, board, candidates, {
         dynamic: true,
         exhaustive: true,
+        optimize: true,
         allowedRule3Techniques: options.allowedRule3Techniques,
         aicLimitPerStep: options.aicLimitPerStep,
       })

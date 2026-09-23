@@ -677,9 +677,9 @@ function shortenMassReason(description: string): string {
   if (m) return `If ${sideNamed(m[3])} were true, ${m[1]} would be both ${m[2]} and ${m[4]}: impossible, so ${sideNamed(m[3])} is false.`
   m = /^(\d) in (r\dc\d) \(([a-z ]+)\) and (r\dc\d) \(([a-z ]+)\) are colours belonging to the same Medusa color/.exec(description)
   if (m) return `If ${sideNamed(m[3])} were true, ${m[2]} and ${m[4]} would both be ${m[1]}: impossible, so ${sideNamed(m[3])} is false.`
-  m = /^(r\dc\d) has no coloured candidates, but .* all see the (\w+) same colour side/.exec(description)
+  m = /^(r\dc\d) has no coloured candidates, but .* all see the (light blue|yellow) side/.exec(description)
   if (m) {
-    const side = m[2] === 'blue' ? 'light blue' : 'yellow'
+    const side = m[2]
     return `If ${side} were true, ${m[1]} would have no candidates left: impossible, so ${side} is false.`
   }
   return description
