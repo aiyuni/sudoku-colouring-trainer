@@ -26,6 +26,7 @@ export interface AppSettings {
   dragonGenerationDisregardsSingleDigitAic: boolean
   dragonGenerationDisregardsAic: boolean
   dragonGenerationDisregardsGenericAic: boolean
+  dynamicDragonPuzzleForbidsPlainDragon: boolean
   dragonGenerationTimeoutMs: number
   easySolveEnabled: boolean
 }
@@ -46,6 +47,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dragonGenerationDisregardsSingleDigitAic: true,
   dragonGenerationDisregardsAic: true,
   dragonGenerationDisregardsGenericAic: true,
+  dynamicDragonPuzzleForbidsPlainDragon: false,
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
 }

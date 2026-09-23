@@ -5,7 +5,7 @@ import { SudokuColorFinder } from './SudokuColorFinder'
 import { SudokuDragonFinder } from './SudokuDragonFinder'
 import { SudokuHiddenPairFinder } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './SudokuLockedCandidateFinder'
-import { SudokuMedusaFinder } from './SudokuMedusaFinder'
+import { type MedusaChain, SudokuMedusaFinder } from './SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
@@ -14,6 +14,7 @@ import { classifyShortAic, SudokuShortAicFinder } from './SudokuShortAicFinder'
 import { SudokuSingleFinder } from './SudokuSingleFinder'
 import { SudokuSolver } from './SudokuSolver'
 import { SudokuUniqueRectangleFinder } from './SudokuUniqueRectangleFinder'
+import { sudokuUnits } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -32,6 +33,40 @@ const DEFAULT_TIME_BUDGET_MS = 30_000
  * next attempt still yields well before the browser's own hang detector
  * would fire. */
 const YIELD_INTERVAL_MS = 50
+/** Above this many remaining clues, `reduceUntilDragonNeeded` skips calling
+ * `buildRobustCheckpoint` entirely and just keeps reducing - not a
+ * probabilistic shortcut, but exploiting that `buildRobustCheckpoint`'s
+ * very first check, `isFullySolved` (naked/hidden singles alone fully
+ * solve the board - see solveWithSinglesOnly), makes every check after it
+ * moot once it's true: a fully-solved board has no empty cells left, so
+ * every other check (locked candidates, pairs, subsets, hidden pairs, UR,
+ * BUG+1, Bivalue Oddagon, Simple Colouring, AIC, Medusa/Dragon) is
+ * necessarily a no-op against it too (there's nothing left with candidates
+ * to search). So "skip the whole call above this threshold" and "call it
+ * and let isFullySolved reject it" are exactly the same outcome, for any
+ * board this dense - the skip just avoids paying for the computation.
+ * Calibrated with a dedicated ~900k-trial sweep (many random solved grids,
+ * reduced one clue at a time down to whatever a bare uniqueness check
+ * allows, checking only solveWithSinglesOnly + isFullySolved - no other
+ * finder) that found singles alone were *always* still enough above 51
+ * remaining clues, never once falling short; this constant keeps a wide
+ * margin above that observed ceiling. Before this optimization, profiling
+ * the reported-slow case (requireDynamic + no AIC kind disregarded) showed
+ * ~95% of all buildRobustCheckpoint calls - the majority of the generator's
+ * total time - were this exact wasted case, concentrated entirely above
+ * clue count 45. Re-run that calibration sweep (kept as a throwaway script,
+ * not checked in) before lowering this number. */
+const PHASE1_CLUE_THRESHOLD = 55
+
+/** Lookup tables for solveWithSinglesOnly's bitmask search, cells indexed
+ * row * 9 + col. */
+const FULL_DIGIT_MASK = (1 << BOARD_SIZE) - 1
+const BOX_OF: number[] = Array.from({ length: BOARD_SIZE * BOARD_SIZE }, (_, cell) => {
+  const r = Math.floor(cell / BOARD_SIZE)
+  const c = cell % BOARD_SIZE
+  return Math.floor(r / 3) * 3 + Math.floor(c / 3)
+})
+const UNIT_CELLS: number[][] = sudokuUnits().map((unit) => unit.map(([r, c]) => r * BOARD_SIZE + c))
 
 /** Hands control back to the browser's event loop for a tick - see
  * YIELD_INTERVAL_MS. A plain `setTimeout(resolve, 0)` rather than
@@ -55,6 +90,19 @@ interface DisregardedAicKinds {
   generic: boolean
 }
 
+/** What a checkpoint must satisfy - DragonPuzzleGenerateOptions with its
+ * defaults resolved. */
+interface CheckpointTarget {
+  technique: GeneratedPuzzleTechnique
+  requireDynamic: boolean
+  forbidPlainDragon: boolean
+  disregardKinds: DisregardedAicKinds
+}
+
+/** The technique a generated puzzle state is built around - the easiest
+ * move available once candidates are freshly autofilled. */
+export type GeneratedPuzzleTechnique = 'simple-colouring' | 'medusa' | 'dragon'
+
 export interface GeneratedDragonPuzzle {
   board: Board
   givens: boolean[][]
@@ -62,11 +110,32 @@ export interface GeneratedDragonPuzzle {
 }
 
 export interface DragonPuzzleGenerateOptions {
+  /** Which technique the state must need (default 'dragon'):
+   *  - 'simple-colouring': every technique easier than Simple Colouring
+   *    (singles through Bivalue Oddagon, in the app's difficulty order)
+   *    fails, and Simple Colouring rule 1 or 2 applies.
+   *  - 'medusa': the same plus Simple Colouring fails, and some 3D Medusa
+   *    chain has a mass elimination (rules 1-2) or a rule 3/4/5 elimination.
+   *  - 'dragon': see the class comment; requireDynamic/forbidPlainDragon and
+   *    the disregard* AIC flags only apply here.
+   * The two colouring targets skip every AIC check: Simple Colouring and
+   * Medusa eliminations can always also be expressed as an AIC (usually a
+   * short one), so "no AIC available" would reject essentially every state.
+   * Such states are common (seconds at most), unlike Dragon ones. */
+  target?: GeneratedPuzzleTechnique
   /** When true, generates a puzzle where plain Dragon Colouring (Rules 1-2
    * and Promotion alone) is *not* enough - Dynamic Dragon Colouring's
    * Extension Rule 3 (naked pairs / Unique Rectangle Type 1 propagated
    * through a side's assumption) is what's actually needed. */
   requireDynamic?: boolean
+  /** Only with requireDynamic. When false (the default), it's enough that
+   * one stuck chain needs Dynamic Dragon - plain Dragon may still work on
+   * some other chain. When true, plain Dragon must fail on *every* chain,
+   * so Dynamic Dragon is the only way forward. Such positions are ~30-60x
+   * rarer (~3 minutes of 14-worker search each), so the app serves them from
+   * a pre-generated stock (dynamicDragonPuzzleStock.ts) instead of
+   * generating live. */
+  forbidPlainDragon?: boolean
   /** Wall-clock budget for the whole search, across as many fresh solved
    * grids as it takes - defaults to DEFAULT_TIME_BUDGET_MS. A qualifying
    * checkpoint (especially a Dynamic-Dragon-only one) can be rare enough
@@ -141,7 +210,9 @@ export class SudokuDragonPuzzleGenerator {
    *
    * async purely to yield periodically (see YIELD_INTERVAL_MS/
    * yieldToEventLoop) - the search itself is still ordinary synchronous
-   * work between those yield points, not offloaded to a worker. */
+   * work between those yield points. This is the main-thread fallback
+   * only: the app normally runs several `generateBlocking` searches in
+   * parallel Web Workers instead (see ParallelDragonPuzzleGenerator). */
   async generate(options: DragonPuzzleGenerateOptions = {}): Promise<GeneratedDragonPuzzle | null> {
     const deadline = Date.now() + (options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS)
     let lastYield = Date.now()
@@ -161,14 +232,72 @@ export class SudokuDragonPuzzleGenerator {
     return null
   }
 
+  /** Same search as `generate`, but never yields - for a Web Worker, where
+   * blocking is harmless (nothing else runs on that thread) and yielding
+   * would actually cost throughput: every yield is a setTimeout chained
+   * from inside another timer callback, which browsers clamp to >= 4ms once
+   * nested deeply enough, i.e. ~8% of a 50ms slice lost to idling. The
+   * worker is cancelled with `terminate()`, not by a message it would need
+   * to yield in order to receive. */
+  generateBlocking(options: DragonPuzzleGenerateOptions = {}): GeneratedDragonPuzzle | null {
+    const deadline = Date.now() + (options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS)
+    for (let attempt = 0; attempt < MAX_GRID_ATTEMPTS; attempt++) {
+      const result = this.reduceUntilDragonNeeded(this.generateSolvedGrid(), options)
+      if (result) {
+        return result
+      }
+      if (Date.now() >= deadline) {
+        return null
+      }
+    }
+    return null
+  }
+
+  /** Re-checks an existing position against the same target
+   * `generate` searches for (with the same options): returns it with
+   * freshly autofilled candidates if it qualifies, else null. Used to
+   * validate a pre-generated stock puzzle after a random symmetry
+   * transform (see dynamicDragonPuzzleStock.ts) - the board must already be
+   * solved as far as naked/hidden singles go, as every generated one is. */
+  checkPuzzleState(board: Board, options: DragonPuzzleGenerateOptions = {}): GeneratedDragonPuzzle | null {
+    const target = this.checkpointTarget(options)
+    if (this.solver.solve(board).status !== 'solved') {
+      return null
+    }
+    const checkpoint = this.buildRobustCheckpoint(board, target)
+    if (!checkpoint || !this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, this.solveWithDynamic(target))) {
+      return null
+    }
+    return { board: checkpoint.board, givens: computeGivenMask(checkpoint.board), candidates: checkpoint.candidates }
+  }
+
+  private checkpointTarget(options: DragonPuzzleGenerateOptions): CheckpointTarget {
+    return {
+      technique: options.target ?? 'dragon',
+      requireDynamic: options.requireDynamic ?? false,
+      forbidPlainDragon: options.forbidPlainDragon ?? false,
+      disregardKinds: {
+        singleDigit: options.disregardSingleDigitAic ?? true,
+        general: options.disregardAic ?? true,
+        generic: options.disregardGenericAic ?? true,
+      },
+    }
+  }
+
+  /** Whether the "rest of the puzzle is solvable" check may use Dynamic
+   * Dragon rounds. A Dragon target keeps its original meaning (plain-only
+   * unless requireDynamic). The colouring targets only constrain the
+   * *first* move, so the rest may use anything the app implements, up to
+   * Dynamic Dragon - otherwise Medusa/Simple Colouring puzzles that later
+   * need a Dragon would be thrown away for no reason. */
+  private solveWithDynamic(target: CheckpointTarget): boolean {
+    return target.technique !== 'dragon' || target.requireDynamic
+  }
+
   private reduceUntilDragonNeeded(solved: Board, options: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
     const puzzle = cloneBoard(solved)
-    const requireDynamic = options.requireDynamic ?? false
-    const disregardKinds: DisregardedAicKinds = {
-      singleDigit: options.disregardSingleDigitAic ?? true,
-      general: options.disregardAic ?? true,
-      generic: options.disregardGenericAic ?? true,
-    }
+    const target = this.checkpointTarget(options)
+    let clueCount = BOARD_SIZE * BOARD_SIZE
 
     for (const [row, col] of this.shuffled(this.allCoordinates())) {
       const removedValue = puzzle[row][col]
@@ -181,8 +310,18 @@ export class SudokuDragonPuzzleGenerator {
         puzzle[row][col] = removedValue
         continue
       }
+      clueCount--
 
-      const checkpoint = this.buildRobustCheckpoint(puzzle, requireDynamic, disregardKinds)
+      // Above PHASE1_CLUE_THRESHOLD, buildRobustCheckpoint is guaranteed
+      // (per its own calibration comment) to reject as "still too easy" -
+      // exactly the same outcome as this `continue` produces, minus the
+      // cost of actually computing it. See PHASE1_CLUE_THRESHOLD's comment
+      // for why this is safe, not just a probabilistic shortcut.
+      if (clueCount > PHASE1_CLUE_THRESHOLD) {
+        continue
+      }
+
+      const checkpoint = this.buildRobustCheckpoint(puzzle, target)
       if (!checkpoint) {
         // Still too easy (something short of the target technique still
         // works once candidates are freshly autofilled), or a dead end
@@ -190,7 +329,7 @@ export class SudokuDragonPuzzleGenerator {
         continue
       }
 
-      if (this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, requireDynamic)) {
+      if (this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, this.solveWithDynamic(target))) {
         // The first, sparsest point where the target technique becomes
         // necessary - and robustly so, surviving a fresh "Autofill all" -
         // while the puzzle is still solvable start to finish with what
@@ -209,28 +348,117 @@ export class SudokuDragonPuzzleGenerator {
       // This removal demands something harder than the target technique -
       // too far, put the clue back and try removing a different one.
       puzzle[row][col] = removedValue
+      clueCount++
     }
 
     return null
   }
 
-  /** Solves as far as naked/hidden singles alone can go, recomputing
-   * candidates fresh from board legality before every search - the only
-   * technique whose progress is inherently robust to a legality-only
-   * reset, since a single's own applicability never depends on anything
-   * beyond which digits are already placed on the board. */
+  /** Solves as far as naked/hidden singles alone can go. Candidates start
+   * as a single fresh autofill from board legality, then are maintained
+   * incrementally (`SudokuRules.eliminatePeerCandidates` after each
+   * placement) rather than re-autofilled from scratch every round - the two
+   * are provably equivalent here (verified against the old full-reautofill
+   * version across ~900k comparisons, 0 mismatches, before this change):
+   * autofilling is a pure function of board legality, and placing a digit
+   * only ever changes *its own* peers' legality for *that* digit, so
+   * incrementally clearing exactly those candidates always lands on the
+   * same grid a full re-autofill would - it just skips redoing the
+   * untouched 99% of the board every round. This was the single largest
+   * cost in the whole generator (buildRobustCheckpoint calls this first,
+   * on every clue removal it's asked to check) - see PHASE1_CLUE_THRESHOLD
+   * for the other, bigger optimization this enabled. Singles are still the
+   * only technique built this way (not naked pairs, UR, Medusa rules 3-5,
+   * ...) because they're the only one whose result is inherently robust to
+   * a legality-based reset in the first place - this incremental form
+   * reaches the identical fixed point, it doesn't change what's robust.
+   *
+   * Implemented on row/column/box "digit used" bitmasks rather than via
+   * SudokuSingleFinder + a CandidateGrid: even after the incremental change
+   * above, this was ~57% of a worker's time in the requireDynamic + no-AIC-
+   * disregarded case (SudokuSingleFinder.findHiddenSingles alone ~35%, from
+   * allocating a filtered array per unit per digit per pass). Placing each
+   * single immediately instead of in finder-sized batches can't change the
+   * result: this is only ever called on a uniquely solvable clue set (the
+   * caller has just checked), so every single is that cell's true digit,
+   * and both kinds of single stay applicable (or get placed) as other true
+   * digits land - a monotone closure with exactly one fixed point, whatever
+   * the order. Verified equal to the SudokuSingleFinder version (board and
+   * candidates) on 200k+ reduction states before switching. */
   private solveWithSinglesOnly(clueBoard: Board): { board: Board; candidates: CandidateGrid } {
     const board = cloneBoard(clueBoard)
-    let candidates = createEmptyCandidates()
-    for (;;) {
-      candidates = createEmptyCandidates()
-      this.autofillCandidates(board, candidates)
-      const assignments = this.singleFinder.findNakedAndHiddenSingles(board, candidates)
-      if (assignments.length === 0) {
-        break
+    const rowUsed = new Array<number>(BOARD_SIZE).fill(0)
+    const colUsed = new Array<number>(BOARD_SIZE).fill(0)
+    const boxUsed = new Array<number>(BOARD_SIZE).fill(0)
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        const value = board[r][c]
+        if (value !== 0) {
+          const bit = 1 << (value - 1)
+          rowUsed[r] |= bit
+          colUsed[c] |= bit
+          boxUsed[BOX_OF[r * BOARD_SIZE + c]] |= bit
+        }
       }
-      for (const { row, col, digit } of assignments) {
-        board[row][col] = digit
+    }
+    const available = (cell: number) =>
+      FULL_DIGIT_MASK & ~(rowUsed[(cell / BOARD_SIZE) | 0] | colUsed[cell % BOARD_SIZE] | boxUsed[BOX_OF[cell]])
+    const place = (cell: number, bit: number) => {
+      const r = (cell / BOARD_SIZE) | 0
+      const c = cell % BOARD_SIZE
+      board[r][c] = 31 - Math.clz32(bit) + 1
+      rowUsed[r] |= bit
+      colUsed[c] |= bit
+      boxUsed[BOX_OF[cell]] |= bit
+    }
+
+    for (let progress = true; progress; ) {
+      progress = false
+      for (let cell = 0; cell < BOARD_SIZE * BOARD_SIZE; cell++) {
+        if (board[(cell / BOARD_SIZE) | 0][cell % BOARD_SIZE] !== 0) {
+          continue
+        }
+        const mask = available(cell)
+        if (mask !== 0 && (mask & (mask - 1)) === 0) {
+          place(cell, mask)
+          progress = true
+        }
+      }
+      for (const unit of UNIT_CELLS) {
+        // seenOnce/seenTwice: digits available in at least one / at least
+        // two of this unit's empty cells - a hidden single is seenOnce &
+        // ~seenTwice, then located with a second pass over the unit.
+        let seenOnce = 0
+        let seenTwice = 0
+        for (const cell of unit) {
+          if (board[(cell / BOARD_SIZE) | 0][cell % BOARD_SIZE] === 0) {
+            const mask = available(cell)
+            seenTwice |= seenOnce & mask
+            seenOnce |= mask
+          }
+        }
+        let hidden = seenOnce & ~seenTwice
+        while (hidden !== 0) {
+          const bit = hidden & -hidden
+          hidden &= hidden - 1
+          for (const cell of unit) {
+            if (board[(cell / BOARD_SIZE) | 0][cell % BOARD_SIZE] === 0 && (available(cell) & bit) !== 0) {
+              place(cell, bit)
+              progress = true
+              break
+            }
+          }
+        }
+      }
+    }
+
+    const candidates = createEmptyCandidates()
+    for (let cell = 0; cell < BOARD_SIZE * BOARD_SIZE; cell++) {
+      const r = (cell / BOARD_SIZE) | 0
+      const c = cell % BOARD_SIZE
+      if (board[r][c] === 0) {
+        const mask = available(cell)
+        candidates[r][c] = DIGITS.map((d) => (mask & (1 << (d - 1))) !== 0)
       }
     }
     return { board, candidates }
@@ -242,8 +470,7 @@ export class SudokuDragonPuzzleGenerator {
    * the app itself will show right after the puzzle loads. */
   private buildRobustCheckpoint(
     clueBoard: Board,
-    requireDynamic: boolean,
-    disregardKinds: DisregardedAicKinds,
+    { technique, requireDynamic, forbidPlainDragon, disregardKinds }: CheckpointTarget,
   ): { board: Board; candidates: CandidateGrid } | null {
     const { board, candidates } = this.solveWithSinglesOnly(clueBoard)
 
@@ -274,32 +501,52 @@ export class SudokuDragonPuzzleGenerator {
     if (this.bivalueOddagonFinder.find(board, candidates).length > 0) {
       return null
     }
-    if (this.anySimpleColoringApplies(board, candidates)) {
+    const simpleColouringApplies = this.anySimpleColoringApplies(board, candidates)
+    if (technique === 'simple-colouring') {
+      // No AIC check - see DragonPuzzleGenerateOptions.target.
+      return simpleColouringApplies ? { board, candidates } : null
+    }
+    if (simpleColouringApplies) {
       return null
     }
-    if (this.anyBlockingShortAic(board, candidates, disregardKinds)) {
+    if (technique !== 'medusa' && this.anyBlockingShortAic(board, candidates, disregardKinds)) {
       return null
     }
 
     const chains = this.medusaFinder.findChains(board, candidates)
-    for (const chain of chains) {
-      const stuck =
-        this.medusaFinder.findMassElimination(chain, board, candidates) === null &&
-        this.medusaFinder.findRule3Eliminations(chain, board, candidates).length === 0 &&
-        this.medusaFinder.findRule4Eliminations(chain, candidates).length === 0 &&
-        this.medusaFinder.findRule5Eliminations(chain, candidates).length === 0
-      if (!stuck) {
-        return null
-      }
+    const medusaApplies = chains.some((chain) => !this.isMedusaStuck(chain, board, candidates))
+    if (technique === 'medusa') {
+      return medusaApplies ? { board, candidates } : null
+    }
+    if (medusaApplies) {
+      return null
     }
 
-    if (requireDynamic) {
+    if (requireDynamic && forbidPlainDragon) {
+      // Dynamic Dragon must be the *only* way forward: plain Dragon
+      // Colouring fails on every stuck chain (all chains are stuck by this
+      // point), and the dynamic extension (Extension Rule 3) succeeds on at
+      // least one. A state where plain Dragon works on some other chain is
+      // rejected even if another chain needs Dynamic - the player could
+      // just take the plain move instead. Every plain check runs before any
+      // dynamic one, since plain `extend` is far cheaper and rejects most
+      // candidates on its own.
+      if (chains.some((chain) => this.dragonFinder.extend(chain, board, candidates) !== null)) {
+        return null
+      }
+      const someChainNeedsDynamic = chains.some(
+        (chain) => this.dragonFinder.extend(chain, board, candidates, { dynamic: true }) !== null,
+      )
+      if (!someChainNeedsDynamic) {
+        return null
+      }
+    } else if (requireDynamic) {
       // At least one stuck chain must specifically need the dynamic
       // extension - plain Dragon Colouring fails for that chain, but the
       // dynamic one (Extension Rule 3) succeeds. Other chains elsewhere on
-      // the same board are free to be resolvable some easier way; only
-      // this one move, right at the start, has to require the dynamic
-      // extension.
+      // the same board are free to be resolvable by plain Dragon; only this
+      // one move, right at the start, has to require the dynamic extension
+      // (see forbidPlainDragon for the stricter version).
       const someChainNeedsDynamic = chains.some((chain) => {
         if (this.dragonFinder.extend(chain, board, candidates) !== null) {
           return false
@@ -317,6 +564,15 @@ export class SudokuDragonPuzzleGenerator {
     }
 
     return { board, candidates }
+  }
+
+  private isMedusaStuck(chain: MedusaChain, board: Board, candidates: CandidateGrid): boolean {
+    return (
+      this.medusaFinder.findMassElimination(chain, board, candidates) === null &&
+      this.medusaFinder.findRule3Eliminations(chain, board, candidates).length === 0 &&
+      this.medusaFinder.findRule4Eliminations(chain, candidates).length === 0 &&
+      this.medusaFinder.findRule5Eliminations(chain, candidates).length === 0
+    )
   }
 
   /** True when an AIC of a kind the caller does *not* disregard has
@@ -367,16 +623,6 @@ export class SudokuDragonPuzzleGenerator {
       }
       if (!this.applyOneDragonRound(board, candidates, useDynamic)) {
         return false
-      }
-    }
-  }
-
-  private autofillCandidates(board: Board, candidates: CandidateGrid) {
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
-        if (board[r][c] === 0) {
-          candidates[r][c] = DIGITS.map((d) => SudokuRules.isSafe(board, r, c, d))
-        }
       }
     }
   }

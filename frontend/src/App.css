@@ -454,6 +454,26 @@
   align-items: flex-start;
 }
 
+/* Middle column of .board-area: the grid with the import / screenshot /
+   export rows directly under it, so their position no longer depends on how
+   tall the side columns get. Takes over the sizing .grid has as a direct
+   .board-area child (kept on .grid itself for the tutorial, which reuses
+   that class); inside this column-direction flex box the grid's own
+   flex-basis would apply to its *height* and could squash it, hence
+   flex: none. */
+.grid-column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 32rem;
+  width: min(100%, 32rem);
+  min-width: 0;
+}
+
+.grid-column > .grid {
+  flex: none;
+  width: 100%;
+}
+
 /* Nine 3x3 boxes arranged in a 3x3 grid. The box grid's own gap/background
    draws the thick divider between boxes; each box is itself a 3x3 grid of
    cells whose thinner gap/background draws the divider between cells. */
@@ -890,27 +910,36 @@
   flex: 1 1 14rem;
 }
 
+/* Tabs always stay on one row; Apply always sits at the right edge - beside
+   the tabs when the panel is wide enough, otherwise alone on the next line
+   (margin-left: auto right-aligns it either way). Wrapping is decided on
+   content widths, so Apply wraps before the tabs ever have to shrink; the
+   tabs only truncate with an ellipsis if the panel is narrower still. */
 .technique-panel-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  align-items: flex-end;
+  gap: 0.35rem 0.5rem;
   margin-bottom: 0.3rem;
 }
 
 .technique-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.2rem;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .technique-tab {
-  font-size: 0.7rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 0.35rem 0.7rem 0.3rem;
+  padding: 0.35rem 0.5rem 0.3rem;
   border: 1px solid #cbd5e1;
   border-bottom: none;
   border-radius: 0.5rem 0.5rem 0 0;
@@ -925,8 +954,12 @@
 }
 
 .technique-apply-button {
-  font-size: 0.7rem;
-  padding: 0.2rem 0.55rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+  margin-bottom: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.9rem;
   border-radius: 0.4rem;
 }
 
@@ -936,7 +969,29 @@
   color: #64748b;
 }
 
-/* Find by elims tab. */
+/* Find by elims tab. The "experimental" badge lives here rather than on
+   the tab itself, so all three tabs fit on one row. */
+.find-panel .experimental-label {
+  display: inline-block;
+  vertical-align: baseline;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.05rem 0.35rem;
+  margin-right: 0.25rem;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .find-panel .experimental-label {
+    background: #3f2a05;
+    color: #fcd34d;
+  }
+}
+
 .find-form {
   display: flex;
   gap: 0.35rem;
@@ -1294,8 +1349,7 @@
   display: flex;
   align-items: flex-end;
   gap: 0.5rem;
-  max-width: 34rem;
-  margin: 1.5rem auto 0;
+  margin: 1rem 0 0;
 }
 
 .import-input {
@@ -1322,8 +1376,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
-  max-width: 34rem;
-  margin: 0.75rem auto 0;
+  margin: 0.6rem 0 0;
 }
 
 .image-import-drop {

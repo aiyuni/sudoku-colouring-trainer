@@ -12,12 +12,12 @@ const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
   {
     id: 'simple',
     label: 'Simple Colouring',
-    tagline: 'Pick one digit and find a Strong Link for the digit and give each end a Colour. Use the fact that exactly one colour is true to make deductions.',
+    tagline: 'Pick one candidate digit that appears exactly twice in a row, column or mini-grid, and give each candidate a different Colour.  Repeat this, and use the fact that exactly one colour must be true, to make deductions.',
   },
   {
     id: 'medusa',
     label: '3D Medusa',
-    tagline: 'Extends Simple Colouring into multiple digits by using cells that contain only 2 candidates.',
+    tagline: 'Simple Colouring has evolved.  Extends Simple Colouring into multiple digits by using cells that contain only 2 candidates.',
   },
   {
     id: 'dragon',
@@ -27,7 +27,7 @@ const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
   {
     id: 'dynamic',
     label: 'Dynamic Dragon',
-    tagline: 'Dynamic Dragons are Dragons that can call on other techniques to keep the colouring going when all else gets stuck.',
+    tagline: 'The strongest Colouring technique.  Dynamic Dragons are Dragons that can call on other techniques to keep the colouring going when regular Dragons get stuck.',
   },
 ]
 
@@ -265,7 +265,7 @@ export default function TutorialPage({ onClose, initialTab = 'basics' }: Tutoria
           <button type="button" className="tutorial-back" onClick={onClose}>
             ← Back to puzzle
           </button>
-          <h1 id="tutorial-title">How It Works</h1>
+          <h1 id="tutorial-title">Colouring Techniques Explained</h1>
         </div>
         <div className="tutorial-tabs" role="tablist" aria-label="Techniques">
           {TABS.map((t) => (

@@ -44,12 +44,14 @@ import {
   parseEliminationTargets,
   type TargetProblem,
 } from './sudoku/SudokuDragonTargetFinder'
-import { SudokuDragonPuzzleGenerator } from './sudoku/SudokuDragonPuzzleGenerator'
+import { generateDragonPuzzleInParallel } from './sudoku/ParallelDragonPuzzleGenerator'
+import { pickStockDynamicDragonPuzzle } from './sudoku/dynamicDragonPuzzleStock'
+import type { DragonPuzzleGenerateOptions } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
 import { SudokuHiddenPairFinder } from './sudoku/SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './sudoku/SudokuLockedCandidateFinder'
-import { SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
+import { type MassEliminationInstance, SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
@@ -71,7 +73,6 @@ import './App.css'
 
 const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
-const dragonPuzzleGenerator = new SudokuDragonPuzzleGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
 const singleFinder = new SudokuSingleFinder()
@@ -92,7 +93,7 @@ const dragonFinder = new SudokuDragonFinder()
 // index within a box, since both range over the same nine values.
 const NINE = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-const APP_VERSION = 'v0.1.0-beta'
+const APP_VERSION = 'v0.2.0-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -553,6 +554,34 @@ function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: string)
  * reflects exactly what's happening on the grid right now.
  * When a new technique is added to the app, add its instances here too, so
  * the Techniques panel stays a complete list of everything implemented. */
+/** Every candidate a 3D Medusa mass elimination (rules 1-2) removes once
+ * it's applied, as "row.col.digit" keys: the false colour's candidates, plus
+ * what placing each true-colour digit knocks out - the other candidates in
+ * its cell and that digit in every peer. The finder only reports the first
+ * part; the second is what lets the Techniques panel drop rule 3-5
+ * findings from the same chain that the placements already make redundant. */
+function medusaMassCoverage(mass: MassEliminationInstance, candidates: CandidateGrid): Set<string> {
+  const covered = new Set(mass.eliminatedCandidates.map((c) => `${c.row}.${c.col}.${c.digit}`))
+  for (const placed of mass.solvedCells) {
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const sameCell = row === placed.row && col === placed.col
+        const peer =
+          !sameCell &&
+          (row === placed.row ||
+            col === placed.col ||
+            (Math.floor(row / 3) === Math.floor(placed.row / 3) && Math.floor(col / 3) === Math.floor(placed.col / 3)))
+        for (let digit = 1; digit <= 9; digit++) {
+          if (candidates[row][col][digit - 1] && ((sameCell && digit !== placed.digit) || (peer && digit === placed.digit))) {
+            covered.add(`${row}.${col}.${digit}`)
+          }
+        }
+      }
+    }
+  }
+  return covered
+}
+
 function buildTechniqueInstances(
   board: Board,
   candidates: CandidateGrid,
@@ -938,15 +967,20 @@ function buildTechniqueInstances(
     instances.push(...singleDigitInstances, ...generalInstances, ...genericInstances)
   }
 
-  // 3D Medusa: massInstances (rules 1-2) before the per-candidate
-  // eliminations (rules 3-5), matching the order the user's rules were
-  // numbered in. usedCells is left empty throughout - a chain can span most
-  // of the board, so outlining every cell in it would be too noisy; the
-  // blue/yellow candidate coloring alone marks the chain instead.
-  const massInstances: TechniqueInstance[] = []
-  const medusaRule3Instances: TechniqueInstance[] = []
-  const medusaRule4Instances: TechniqueInstance[] = []
-  const medusaRule5Instances: TechniqueInstance[] = []
+  // 3D Medusa: one row per chain, listing everything that chain proves -
+  // its mass elimination (rules 1-2, if any) and every rule 3/4/5
+  // elimination - named after the rules involved ("3D Medusa Rules 3,5"),
+  // except rule 3-5 findings a rule 1-2 deduction on the same chain already
+  // makes redundant (see medusaMassCoverage).
+  // These used to be one row per rule per eliminated candidate, so a single
+  // chain showed up several times, each row highlighting the same colouring
+  // and only a slice of what it proves (and Apply took only that slice).
+  // Chains with a mass elimination are listed first, matching the old
+  // rules-1-2-before-3-5 order. usedCells is left empty throughout - a chain
+  // can span most of the board, so outlining every cell in it would be too
+  // noisy; the blue/yellow candidate coloring alone marks the chain instead.
+  const massMedusaInstances: TechniqueInstance[] = []
+  const otherMedusaInstances: TechniqueInstance[] = []
 
   for (const chain of medusaFinder.findChains(board, candidates)) {
     const chainKey = chain.candidates
@@ -960,92 +994,111 @@ function buildTechniqueInstances(
       .filter((c) => c.color === 'yellow')
       .map((c) => ({ row: c.row, col: c.col, digit: c.digit }))
 
+    const rules = new Set<number>()
+    const clauses: string[] = []
+    const usedCandidates: TechniqueCandidateRef[] = []
+    const eliminatedByKey = new Map<string, TechniqueCandidateRef>()
+    const solvedCandidates: TechniqueCandidateRef[] = []
+    const medusaHighlightCells: Array<readonly [number, number]> = []
+    const eliminate = (row: number, col: number, digit: number) => {
+      eliminatedByKey.set(`${row}.${col}.${digit}`, { row, col, digit })
+    }
+
     const mass = medusaFinder.findMassElimination(chain, board, candidates)
+    // When rule 1 or 2 settles which colour is true, a rule 3-5 finding
+    // whose eliminations placing that colour would make anyway adds nothing
+    // - it's left out of the row (title, text and highlights) entirely.
+    const coveredByMass = mass ? medusaMassCoverage(mass, candidates) : null
+    const coveredByMassDeduction = (row: number, col: number, digit: number) =>
+      coveredByMass?.has(`${row}.${col}.${digit}`) ?? false
     if (mass) {
-      let name: string
-      let notation: string
-      let medusaHighlightCells: Array<readonly [number, number]>
       if (mass.conflict.kind === 'cell') {
-        name = '3D Medusa Rule 1'
-        notation = `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
-        medusaHighlightCells = [[mass.conflict.row, mass.conflict.col]]
+        rules.add(1)
+        clauses.push(
+          `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`,
+        )
+        medusaHighlightCells.push([mass.conflict.row, mass.conflict.col])
       } else if (mass.conflict.kind === 'unit') {
-        name = '3D Medusa Rule 1'
-        notation = `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
-        medusaHighlightCells = [mass.conflict.a, mass.conflict.b]
+        rules.add(1)
+        clauses.push(
+          `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`,
+        )
+        medusaHighlightCells.push(mass.conflict.a, mass.conflict.b)
       } else {
-        name = '3D Medusa Rule 2'
-        notation = `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`
-        medusaHighlightCells = [[mass.conflict.row, mass.conflict.col]]
+        rules.add(2)
+        clauses.push(
+          `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`,
+        )
+        medusaHighlightCells.push([mass.conflict.row, mass.conflict.col])
       }
-      massInstances.push({
-        id: `medusa-mass-${chainKey}`,
-        name,
-        notation,
-        usedCells: [],
-        usedCandidates: [],
-        eliminatedCandidates: mass.eliminatedCandidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit })),
-        solvedCandidates: mass.solvedCells.map((c) => ({ row: c.row, col: c.col, digit: c.digit })),
-        blueCandidates,
-        yellowCandidates,
-        medusaHighlightCells,
-        techniqueRank: RANK_MEDUSA,
-      })
+      for (const c of mass.eliminatedCandidates) {
+        eliminate(c.row, c.col, c.digit)
+      }
+      solvedCandidates.push(...mass.solvedCells.map((c) => ({ row: c.row, col: c.col, digit: c.digit })))
     }
 
     for (const r3 of medusaFinder.findRule3Eliminations(chain, board, candidates)) {
-      medusaRule3Instances.push({
-        id: `medusa-rule3-${chainKey}-${r3.row}-${r3.col}-${r3.digit}`,
-        name: '3D Medusa Rule 3',
-        notation: `${cellRef(r3.row, r3.col)} cannot be ${r3.digit} (it sees both colours: ${cellRef(...r3.blueSeen)}, ${cellRef(...r3.yellowSeen)}).`,
-        usedCells: [],
-        usedCandidates: [],
-        eliminatedCandidates: [{ row: r3.row, col: r3.col, digit: r3.digit }],
-        solvedCandidates: [],
-        blueCandidates,
-        yellowCandidates,
-        medusaHighlightCells: [[r3.row, r3.col]],
-        techniqueRank: RANK_MEDUSA,
-      })
+      if (coveredByMassDeduction(r3.row, r3.col, r3.digit)) {
+        continue
+      }
+      rules.add(3)
+      clauses.push(
+        `${cellRef(r3.row, r3.col)} cannot be ${r3.digit} (it sees both colours: ${cellRef(...r3.blueSeen)}, ${cellRef(...r3.yellowSeen)}).`,
+      )
+      eliminate(r3.row, r3.col, r3.digit)
+      medusaHighlightCells.push([r3.row, r3.col])
     }
 
     for (const r4 of medusaFinder.findRule4Eliminations(chain, candidates)) {
+      if (r4.eliminatedDigits.every((digit) => coveredByMassDeduction(r4.row, r4.col, digit))) {
+        continue
+      }
+      rules.add(4)
       const sortedDigits = [...r4.eliminatedDigits].sort((a, b) => a - b)
       const value = sortedDigits.length === 1 ? `${sortedDigits[0]}` : `[${sortedDigits.join(',')}]`
-      medusaRule4Instances.push({
-        id: `medusa-rule4-${chainKey}-${r4.row}-${r4.col}`,
-        name: '3D Medusa Rule 4',
-        notation: `${cellRef(r4.row, r4.col)} is not ${value}`,
-        usedCells: [],
-        usedCandidates: r4.coloredCandidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit })),
-        eliminatedCandidates: r4.eliminatedDigits.map((digit) => ({ row: r4.row, col: r4.col, digit })),
-        solvedCandidates: [],
-        blueCandidates,
-        yellowCandidates,
-        medusaHighlightCells: [[r4.row, r4.col]],
-        techniqueRank: RANK_MEDUSA,
-      })
+      clauses.push(`${cellRef(r4.row, r4.col)} is not ${value} (it holds both colours).`)
+      usedCandidates.push(...r4.coloredCandidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit })))
+      for (const digit of r4.eliminatedDigits) {
+        eliminate(r4.row, r4.col, digit)
+      }
+      medusaHighlightCells.push([r4.row, r4.col])
     }
 
     for (const r5 of medusaFinder.findRule5Eliminations(chain, candidates)) {
+      if (coveredByMassDeduction(r5.row, r5.col, r5.eliminatedDigit)) {
+        continue
+      }
+      rules.add(5)
       const opponentColor = r5.coloredColor === 'blue' ? 'yellow' : 'blue'
-      medusaRule5Instances.push({
-        id: `medusa-rule5-${chainKey}-${r5.row}-${r5.col}-${r5.eliminatedDigit}`,
-        name: '3D Medusa Rule 5',
-        notation: `${cellRef(r5.row, r5.col)} is not ${r5.eliminatedDigit} (it sees opposite colour ${opponentColor} at ${cellRef(...r5.opponent)}).`,
-        usedCells: [],
-        usedCandidates: [{ row: r5.row, col: r5.col, digit: r5.coloredDigit }],
-        eliminatedCandidates: [{ row: r5.row, col: r5.col, digit: r5.eliminatedDigit }],
-        solvedCandidates: [],
-        blueCandidates,
-        yellowCandidates,
-        medusaHighlightCells: [[r5.row, r5.col]],
-        techniqueRank: RANK_MEDUSA,
-      })
+      clauses.push(
+        `${cellRef(r5.row, r5.col)} is not ${r5.eliminatedDigit} (it sees opposite colour ${opponentColor} at ${cellRef(...r5.opponent)}).`,
+      )
+      usedCandidates.push({ row: r5.row, col: r5.col, digit: r5.coloredDigit })
+      eliminate(r5.row, r5.col, r5.eliminatedDigit)
+      medusaHighlightCells.push([r5.row, r5.col])
     }
+
+    if (rules.size === 0) {
+      continue
+    }
+    const ruleList = [...rules].sort((a, b) => a - b)
+    const instance: TechniqueInstance = {
+      id: `medusa-${chainKey}`,
+      name: `3D Medusa ${ruleList.length === 1 ? 'Rule' : 'Rules'} ${ruleList.join(',')}`,
+      notation: clauses.join(' '),
+      usedCells: [],
+      usedCandidates,
+      eliminatedCandidates: [...eliminatedByKey.values()],
+      solvedCandidates,
+      blueCandidates,
+      yellowCandidates,
+      medusaHighlightCells,
+      techniqueRank: RANK_MEDUSA,
+    }
+    ;(mass ? massMedusaInstances : otherMedusaInstances).push(instance)
   }
 
-  instances.push(...massInstances, ...medusaRule3Instances, ...medusaRule4Instances, ...medusaRule5Instances)
+  instances.push(...massMedusaInstances, ...otherMedusaInstances)
 
   // Dragon Colouring and Dynamic Dragon Colouring: one instance per stuck
   // Medusa chain the extension turned into something actionable, each
@@ -1667,8 +1720,7 @@ function FindPanel({
   return (
     <div className="find-panel">
       <p className="technique-empty">
-        Enter candidates to eliminate as <b>digit, row, column</b> - like <b>8r2c3, 2r3c4</b>. This finds the Dragon (or
-        Dynamic Dragon) Colouring that eliminates them.
+        <span className="experimental-label">experimental</span> A reverse Dragon finder: Enter candidates to eliminate in the format of <b>1r2c3, 2r5r6</b>, and it will find the shortest Dragon that eliminates them.
       </p>
       <form
         className="find-form"
@@ -1820,7 +1872,7 @@ function TechniquePanel({
             className={['technique-tab', tab === 'solve-path' ? 'active' : ''].filter(Boolean).join(' ')}
             onClick={() => onTabChange('solve-path')}
           >
-            Solve path <span className="experimental-label">experimental</span>
+            Solve path
           </button>
           <button
             type="button"
@@ -1828,6 +1880,7 @@ function TechniquePanel({
             aria-selected={tab === 'find'}
             className={['technique-tab', tab === 'find' ? 'active' : ''].filter(Boolean).join(' ')}
             onClick={() => onTabChange('find')}
+            title="Find by eliminations (experimental): find the Dragon that eliminates candidates you choose."
           >
             Find by elims
           </button>
@@ -1895,12 +1948,12 @@ function TechniquePanel({
               className="solve-path-easy-solve"
               title={
                 easySolveEnabled
-                  ? 'Each step picks whichever applicable technique is simplest, regardless of how much progress it makes - ties go to the shortest Dragon Colouring chain, then the most eliminations.'
-                  : 'Each step picks whichever applicable technique makes the most progress right now (most cells solved, then most candidates eliminated, then the simplest technique).'
+                  ? 'Solver currently picks the simplest technique that applies at each state.'
+                  : 'Solver currently picks the technique that makes the most progress (most placements or eliminations) at each state.'
               }
             >
               <input type="checkbox" checked={easySolveEnabled} onChange={onToggleEasySolve} />
-              Easy Solve
+              Easiest Path (Easy Solve)
             </label>
           </div>
           {showSolvePathLog && (
@@ -1917,7 +1970,7 @@ function TechniquePanel({
               Puzzle is not solvable due to {UNSOLVABLE_REASON_TEXT[solvability.reason]}.
             </p>
           ) : !solvePath ? (
-            <p className="technique-empty">Click "Generate" to find a solve path from the current grid.   See the Settings or Help section to customize what the solver finds. </p>
+            <p className="technique-empty">Click "Generate" to find a solve path from the current grid.   See the Settings or Help section to customize what the solver finds.  <br></br> <b>Note</b>:   "Exhaustive Dragon Colouring" setting (default: ON) and "Easy Solve" will affect the solve path significantly.</p>
           ) : solvePath.steps.length === 0 ? (
             <p className="technique-empty">
               {solvePath.solvedFully ? 'Already solved.' : "Either there are no full candidates (Click 'Autofill All'), or the solver doesn't know a technique to solve it - brute force is required from here."}
@@ -1925,7 +1978,7 @@ function TechniquePanel({
           ) : (
             <>
               <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
-                Click on a step and click on the <b>"Apply"</b> button to execute up to and including the step. <br></br> <b>Note</b>: "Exhaustive Dragon Colouring" setting value has a huge impact on the solve path (default is ON).
+                Click on a step and click on the <b>"Apply"</b> button to execute up to and including the step. <br></br> <b>Note</b>: "Exhaustive Dragon Colouring" settings (default ON) and "Easy Solve" has a huge impact on the solve path.
               </p>
               {solvePathStale && (
                 <p className="solve-path-stale-warning">
@@ -2160,6 +2213,9 @@ export default function App() {
   )
   const [dragonGenerationDisregardsGenericAic, setDragonGenerationDisregardsGenericAic] = useState(
     DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic,
+  )
+  const [dynamicDragonPuzzleForbidsPlainDragon, setDynamicDragonPuzzleForbidsPlainDragon] = useState(
+    DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon,
   )
   const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
   const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
@@ -3301,14 +3357,20 @@ export default function App() {
     if (!shortSingleDigitAicEnabled) {
       return
     }
-    // A blocking dialog is fine here: it's a rare, deliberate settings
-    // change, and cancelling just leaves the (controlled) checkbox unchecked.
-    const confirmed = window.confirm(
-      'Generating Dragon Colouring puzzles will take longer with this setting enabled.  Are you sure you want to turn this ON?',
-    )
-    if (confirmed) {
       setShortAicEnabled(true)
-    }
+      // Enabling a technique also stops Dragon generation from disregarding
+      // it. "Disregards AIC" can only be off while "disregards single-digit
+      // AIC" is too (see toggleDragonGenerationDisregardsAic), so both go.
+      setDragonGenerationDisregardsSingleDigitAic(false)
+      setDragonGenerationDisregardsAic(false)
+    // Update:  No longer wants this: A blocking dialog is fine here: it's a rare, deliberate settings
+    // change, and cancelling just leaves the (controlled) checkbox unchecked.
+    // const confirmed = window.confirm(
+    //   'Generating Dragon Colouring puzzles will take longer with this setting enabled.  Are you sure you want to turn this ON?',
+    // )
+    // if (confirmed) {
+    //   setShortAicEnabled(true)
+    // }
   }
 
   function toggleShortSingleDigitAicEnabled() {
@@ -3323,6 +3385,8 @@ export default function App() {
       return
     }
     setShortSingleDigitAicEnabled(true)
+    // Enabling a technique also stops Dragon generation from disregarding it.
+    setDragonGenerationDisregardsSingleDigitAic(false)
   }
 
   function toggleGenericAicEnabled() {
@@ -3334,14 +3398,22 @@ export default function App() {
     if (!shortAicEnabled) {
       return
     }
+
+    setGenericAicEnabled(true)
+    // Enabling a technique also stops Dragon generation from disregarding
+    // it - and "disregards Generic AIC" can only be off while both the
+    // single-digit and short "disregards" are too, so all three go.
+    setDragonGenerationDisregardsSingleDigitAic(false)
+    setDragonGenerationDisregardsAic(false)
+    setDragonGenerationDisregardsGenericAic(false)
     // Same rare, deliberate settings change as Short AIC's - and the same
     // cost: with this on, every generated puzzle is also checked for long chains.
-    const confirmed = window.confirm(
-      `Generic AIC searches chains of up to ${GENERIC_AIC_MAX_LENGTH} links, and generating Dragon Colouring puzzles will take longer with this setting enabled.  Are you sure you want to turn this ON?`,
-    )
-    if (confirmed) {
-      setGenericAicEnabled(true)
-    }
+    // const confirmed = window.confirm(
+    //   `Generic AIC searches chains of up to ${GENERIC_AIC_MAX_LENGTH} links, and generating Dragon Colouring puzzles will take longer with this setting enabled.  Are you sure you want to turn this ON?`,
+    // )
+    // if (confirmed) {
+    //   setGenericAicEnabled(true)
+    // }
   }
 
   function toggleDragonGenerationDisregardsSingleDigitAic() {
@@ -3407,6 +3479,7 @@ export default function App() {
     setDragonGenerationDisregardsSingleDigitAic(DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic)
     setDragonGenerationDisregardsAic(DEFAULT_SETTINGS.dragonGenerationDisregardsAic)
     setDragonGenerationDisregardsGenericAic(DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic)
+    setDynamicDragonPuzzleForbidsPlainDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon)
     setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
     setSwatchColors(defaultSwatchColors())
     showToast('Settings reset to defaults.')
@@ -3953,13 +4026,42 @@ export default function App() {
     }, 0)
   }
 
+  /** Simple Colouring / 3D Medusa practice puzzles: a state where that
+   * technique is the easiest move (see DragonPuzzleGenerateOptions.target).
+   * AIC checks are skipped for these, so the "Dragon Generation disregards"
+   * settings don't apply; these are common enough to find in about a second. */
+  function onNewColouringPuzzle(target: 'simple-colouring' | 'medusa') {
+    const techniqueName = target === 'simple-colouring' ? 'Simple Colouring' : '3D Medusa'
+    setGenerating(true)
+    setStatus(`Generating a puzzle that needs ${techniqueName}…`)
+
+    window.setTimeout(async () => {
+      try {
+        const result = await generateDragonPuzzleInParallel({ target, timeBudgetMs: dragonGenerationTimeoutMs })
+        if (!result) {
+          setStatus(
+            `Couldn't find one within ${dragonGenerationTimeoutLabel()} - try again, or raise the timeout in Settings.`,
+          )
+          return
+        }
+        commitGrid({ board: result.board, givens: result.givens, candidates: result.candidates })
+        setHighlightedDigit(null)
+        setStatus(`New puzzle loaded: ${techniqueName} is the easiest technique that can make progress.`)
+      } catch {
+        setStatus('Puzzle generation failed.')
+      } finally {
+        setGenerating(false)
+      }
+    }, 0)
+  }
+
   function onNewDragonPuzzle() {
     setGenerating(true)
     setStatus('Generating a puzzle that needs Dragon Colouring…')
 
     window.setTimeout(async () => {
       try {
-        const result = await dragonPuzzleGenerator.generate({
+        const result = await generateDragonPuzzleInParallel({
           timeBudgetMs: dragonGenerationTimeoutMs,
           disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
           disregardAic: dragonGenerationDisregardsAic,
@@ -3992,13 +4094,18 @@ export default function App() {
 
     window.setTimeout(async () => {
       try {
-        const result = await dragonPuzzleGenerator.generate({
+        const options: DragonPuzzleGenerateOptions = {
           requireDynamic: true,
           timeBudgetMs: dragonGenerationTimeoutMs,
           disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
           disregardAic: dragonGenerationDisregardsAic,
           disregardGenericAic: dragonGenerationDisregardsGenericAic,
-        })
+        }
+        // "Must not allow plain Dragon" positions are too rare to find live
+        // (minutes each), so they come from the pre-generated stock instead.
+        const result = dynamicDragonPuzzleForbidsPlainDragon
+          ? pickStockDynamicDragonPuzzle(options)
+          : await generateDragonPuzzleInParallel(options)
         if (!result) {
           setStatus(
             `Couldn't find one within ${dragonGenerationTimeoutLabel()} - try again, or raise the timeout in Settings.`,
@@ -4007,7 +4114,11 @@ export default function App() {
         }
         commitGrid({ board: result.board, givens: result.givens, candidates: result.candidates })
         setHighlightedDigit(null)
-        setStatus('New puzzle loaded: a puzzle state that contains at least one Dynamic Dragon Colouring technique.')
+        setStatus(
+          dynamicDragonPuzzleForbidsPlainDragon
+            ? 'New puzzle loaded: plain Dragon Colouring is stuck on every chain - only Dynamic Dragon Colouring can continue.'
+            : 'New puzzle loaded: a puzzle state that contains at least one Dynamic Dragon Colouring technique.',
+        )
       } catch {
         setStatus('Puzzle generation failed.')
       } finally {
@@ -4095,6 +4206,24 @@ export default function App() {
               <button
                 type="button"
                 className="dropdown-item"
+                onClick={() => onNewColouringPuzzle('simple-colouring')}
+                disabled={busy}
+                title="Generates a puzzle state where Simple Colouring is the easiest technique that can make progress (AICs are not considered)"
+              >
+                Simple Colouring practice puzzle
+              </button>
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => onNewColouringPuzzle('medusa')}
+                disabled={busy}
+                title="Generates a puzzle state where 3D Medusa is the easiest technique that can make progress (AICs are not considered)"
+              >
+                3D Medusa practice puzzle
+              </button>
+              <button
+                type="button"
+                className="dropdown-item"
                 onClick={onNewDragonPuzzle}
                 disabled={busy}
                 title="Generates a puzzle state where the next move requires Dragon Colouring"
@@ -4165,6 +4294,17 @@ export default function App() {
                   onChange={toggleDragonGenerationDisregardsGenericAic}
                 />
                 Dragon Generation disregards Generic AIC
+              </label>
+              <label
+                className="menu-checkbox"
+                title="When on, a Dynamic Dragon puzzle is a state where plain Dragon Colouring is stuck on every chain, so Dynamic Dragon is the only way forward. These are too rare to generate live, so one is picked instantly from a built-in stock instead. When off, plain Dragon may still work on some other chain."
+              >
+                <input
+                  type="checkbox"
+                  checked={dynamicDragonPuzzleForbidsPlainDragon}
+                  onChange={() => setDynamicDragonPuzzleForbidsPlainDragon((value) => !value)}
+                />
+                Dynamic Dragon puzzles must not allow plain Dragon
               </label>
               <label
                 className="menu-select"
@@ -4390,238 +4530,294 @@ export default function App() {
           onToggleEasySolve={toggleEasySolveEnabled}
         />
 
-        <div
-          className={['grid', gridWhiteMode ? 'grid-white-mode' : ''].filter(Boolean).join(' ')}
-          role="grid"
-          aria-label="Sudoku board"
-          tabIndex={0}
-        >
-          {NINE.map((boxIndex) => {
-            const boxRow = Math.floor(boxIndex / 3)
-            const boxCol = boxIndex % 3
+        {/* The grid plus the import / screenshot / export rows, kept in one
+            column so they sit right under the grid instead of below
+            whichever side column (techniques panel, controls) is tallest. */}
+        <div className="grid-column">
+          <div
+            className={['grid', gridWhiteMode ? 'grid-white-mode' : ''].filter(Boolean).join(' ')}
+            role="grid"
+            aria-label="Sudoku board"
+            tabIndex={0}
+          >
+            {NINE.map((boxIndex) => {
+              const boxRow = Math.floor(boxIndex / 3)
+              const boxCol = boxIndex % 3
 
-            return (
-              <div key={boxIndex} className="box" role="rowgroup">
-                {NINE.map((cellIndex) => {
-                  const r = boxRow * 3 + Math.floor(cellIndex / 3)
-                  const c = boxCol * 3 + (cellIndex % 3)
-                  const value = board[r][c]
-                  const isSelected = selected?.row === r && selected?.col === c
-                  const isDigitHighlighted = value !== 0 && highlightedDigit === value
-                  const cellHasCandidates = candidates[r][c].some(Boolean)
-                  const isTechniqueCell =
-                    highlightedTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
-                  const isBivalueCell = bivalueCells.has(`${r},${c}`)
-                  const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
-                  const isMedusaHighlightCell =
-                    highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false
-                  const isConflictCell = conflictedCells.has(`${r},${c}`)
-                  const classes = [
-                    'cell',
-                    givens[r][c] ? 'given' : value ? 'filled' : '',
-                    isSelected ? 'selected' : '',
-                    isDigitHighlighted ? 'digit-highlighted' : '',
-                    isBivalueCell ? 'bivalue-highlighted' : '',
-                    isTechniqueCell ? 'technique-used' : '',
-                    isMedusaHighlightCell ? 'medusa-highlight-cell' : '',
-                    isDragonTechniqueCell ? 'dragon-technique-cell' : '',
-                    isConflictCell ? 'conflict' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')
+              return (
+                <div key={boxIndex} className="box" role="rowgroup">
+                  {NINE.map((cellIndex) => {
+                    const r = boxRow * 3 + Math.floor(cellIndex / 3)
+                    const c = boxCol * 3 + (cellIndex % 3)
+                    const value = board[r][c]
+                    const isSelected = selected?.row === r && selected?.col === c
+                    const isDigitHighlighted = value !== 0 && highlightedDigit === value
+                    const cellHasCandidates = candidates[r][c].some(Boolean)
+                    const isTechniqueCell =
+                      highlightedTechnique?.usedCells.some(([ur, uc]) => ur === r && uc === c) ?? false
+                    const isBivalueCell = bivalueCells.has(`${r},${c}`)
+                    const isDragonTechniqueCell = dragonTechniqueCellKeys?.has(`${r},${c}`) ?? false
+                    const isMedusaHighlightCell =
+                      highlightedTechnique?.medusaHighlightCells?.some(([hr, hc]) => hr === r && hc === c) ?? false
+                    const isConflictCell = conflictedCells.has(`${r},${c}`)
+                    const classes = [
+                      'cell',
+                      givens[r][c] ? 'given' : value ? 'filled' : '',
+                      isSelected ? 'selected' : '',
+                      isDigitHighlighted ? 'digit-highlighted' : '',
+                      isBivalueCell ? 'bivalue-highlighted' : '',
+                      isTechniqueCell ? 'technique-used' : '',
+                      isMedusaHighlightCell ? 'medusa-highlight-cell' : '',
+                      isDragonTechniqueCell ? 'dragon-technique-cell' : '',
+                      isConflictCell ? 'conflict' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')
 
+                    return (
+                      <button
+                        key={`${r}-${c}`}
+                        type="button"
+                        role="gridcell"
+                        aria-selected={isSelected}
+                        aria-readonly={givens[r][c]}
+                        aria-label={cellAriaLabel(r, c, value)}
+                        className={classes}
+                        onClick={() => onCellClick(r, c)}
+                      >
+                        {value !== 0 ? (
+                          value
+                        ) : cellHasCandidates ? (
+                          <span className="candidates" aria-hidden="true">
+                            {DIGITS.map((digit) => {
+                              const active = candidates[r][c][digit - 1]
+                              const isHighlighted = active && highlightedDigit === digit
+                              const isTechniqueUsed =
+                                active &&
+                                (highlightedTechnique?.usedCandidates.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? highlightedTechnique?.eliminatedCandidates
+                              const isTechniqueEliminated =
+                                active &&
+                                (eliminatedSource?.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const solvedSource = dragonHighlight?.solvedCandidates ?? highlightedTechnique?.solvedCandidates
+                              const isTechniqueSolved =
+                                active &&
+                                (solvedSource?.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const blueSource = dragonHighlight?.blueCandidates ?? highlightedTechnique?.blueCandidates
+                              const isTechniqueBlue =
+                                active &&
+                                (blueSource?.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const yellowSource = dragonHighlight?.yellowCandidates ?? highlightedTechnique?.yellowCandidates
+                              const isTechniqueYellow =
+                                active &&
+                                (yellowSource?.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const isTechniqueDarkBlue =
+                                active &&
+                                (dragonHighlight?.darkBlueCandidates.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const isTechniqueOrange =
+                                active &&
+                                (dragonHighlight?.orangeCandidates.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const aicCandidateSource = dragonAicChains
+                                ? dragonAicChains.flatMap((chain) => chain.candidates)
+                                : highlightedTechnique?.aicCandidates
+                              const isTechniqueAic =
+                                active &&
+                                (aicCandidateSource?.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              // A Dynamic Dragon Colouring step's own
+                              // technique (any of them - a Locked Candidate,
+                              // a naked pair, an AIC, ...) eliminates a
+                              // candidate purely as an internal deduction its
+                              // reasoning depends on, not a real board
+                              // elimination this move claims - shown as a
+                              // hollow circle+cross instead of the usual red
+                              // elimination pip (see
+                              // technique-hypothetical-elimination in
+                              // App.css).
+                              const isTechniqueHypotheticalElimination =
+                                active &&
+                                (dragonAssumedEliminations?.some(
+                                  (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                                ) ??
+                                  false)
+                              const isTechniqueColored =
+                                isTechniqueUsed ||
+                                isTechniqueEliminated ||
+                                isTechniqueSolved ||
+                                isTechniqueBlue ||
+                                isTechniqueYellow ||
+                                isTechniqueDarkBlue ||
+                                isTechniqueOrange ||
+                                isTechniqueAic ||
+                                isTechniqueHypotheticalElimination
+                              // A manually painted colour is a pure user
+                              // annotation - it only shows through when no
+                              // technique highlight is already claiming this
+                              // pip's background, so the two never fight.
+                              const paintedColorId = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
+                              const paintedHex = paintedColorId
+                                ? candidateColorSwatches.find((s) => s.id === paintedColorId)?.hex
+                                : undefined
+                              return (
+                                <span
+                                  key={digit}
+                                  className={[
+                                    'candidate',
+                                    active ? 'active' : '',
+                                    isHighlighted ? 'highlighted' : '',
+                                    isTechniqueUsed ? 'technique-used' : '',
+                                    isTechniqueEliminated ? 'technique-eliminated' : '',
+                                    isTechniqueSolved ? 'technique-solved' : '',
+                                    isTechniqueBlue ? 'technique-blue' : '',
+                                    isTechniqueYellow ? 'technique-yellow' : '',
+                                    isTechniqueDarkBlue ? 'technique-darkblue' : '',
+                                    isTechniqueOrange ? 'technique-orange' : '',
+                                    isTechniqueAic ? 'technique-aic' : '',
+                                    isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
+                                    paintedHex ? 'candidate-painted' : '',
+                                    active && paintColor ? 'paint-target' : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' ')}
+                                  style={paintedHex ? { backgroundColor: paintedHex } : undefined}
+                                  onClick={
+                                    active && paintColor
+                                      ? (event) => {
+                                          event.stopPropagation()
+                                          onCandidatePipClick(r, c, digit)
+                                        }
+                                      : undefined
+                                  }
+                                >
+                                  {active ? digit : ''}
+                                </span>
+                              )
+                            })}
+                          </span>
+                        ) : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })}
+
+            {strongLinks.length > 0 && (
+              <svg className="strong-links" viewBox="0 0 900 900" aria-hidden="true">
+                {strongLinks.map((link, index) => {
+                  const p1 = pipCenter(link.a[0], link.a[1], link.digit)
+                  const p2 = pipCenter(link.b[0], link.b[1], link.digit)
                   return (
-                    <button
-                      key={`${r}-${c}`}
-                      type="button"
-                      role="gridcell"
-                      aria-selected={isSelected}
-                      aria-readonly={givens[r][c]}
-                      aria-label={cellAriaLabel(r, c, value)}
-                      className={classes}
-                      onClick={() => onCellClick(r, c)}
-                    >
-                      {value !== 0 ? (
-                        value
-                      ) : cellHasCandidates ? (
-                        <span className="candidates" aria-hidden="true">
-                          {DIGITS.map((digit) => {
-                            const active = candidates[r][c][digit - 1]
-                            const isHighlighted = active && highlightedDigit === digit
-                            const isTechniqueUsed =
-                              active &&
-                              (highlightedTechnique?.usedCandidates.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? highlightedTechnique?.eliminatedCandidates
-                            const isTechniqueEliminated =
-                              active &&
-                              (eliminatedSource?.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const solvedSource = dragonHighlight?.solvedCandidates ?? highlightedTechnique?.solvedCandidates
-                            const isTechniqueSolved =
-                              active &&
-                              (solvedSource?.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const blueSource = dragonHighlight?.blueCandidates ?? highlightedTechnique?.blueCandidates
-                            const isTechniqueBlue =
-                              active &&
-                              (blueSource?.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const yellowSource = dragonHighlight?.yellowCandidates ?? highlightedTechnique?.yellowCandidates
-                            const isTechniqueYellow =
-                              active &&
-                              (yellowSource?.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const isTechniqueDarkBlue =
-                              active &&
-                              (dragonHighlight?.darkBlueCandidates.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const isTechniqueOrange =
-                              active &&
-                              (dragonHighlight?.orangeCandidates.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const aicCandidateSource = dragonAicChains
-                              ? dragonAicChains.flatMap((chain) => chain.candidates)
-                              : highlightedTechnique?.aicCandidates
-                            const isTechniqueAic =
-                              active &&
-                              (aicCandidateSource?.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            // A Dynamic Dragon Colouring step's own
-                            // technique (any of them - a Locked Candidate,
-                            // a naked pair, an AIC, ...) eliminates a
-                            // candidate purely as an internal deduction its
-                            // reasoning depends on, not a real board
-                            // elimination this move claims - shown as a
-                            // hollow circle+cross instead of the usual red
-                            // elimination pip (see
-                            // technique-hypothetical-elimination in
-                            // App.css).
-                            const isTechniqueHypotheticalElimination =
-                              active &&
-                              (dragonAssumedEliminations?.some(
-                                (ref) => ref.row === r && ref.col === c && ref.digit === digit,
-                              ) ??
-                                false)
-                            const isTechniqueColored =
-                              isTechniqueUsed ||
-                              isTechniqueEliminated ||
-                              isTechniqueSolved ||
-                              isTechniqueBlue ||
-                              isTechniqueYellow ||
-                              isTechniqueDarkBlue ||
-                              isTechniqueOrange ||
-                              isTechniqueAic ||
-                              isTechniqueHypotheticalElimination
-                            // A manually painted colour is a pure user
-                            // annotation - it only shows through when no
-                            // technique highlight is already claiming this
-                            // pip's background, so the two never fight.
-                            const paintedColorId = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
-                            const paintedHex = paintedColorId
-                              ? candidateColorSwatches.find((s) => s.id === paintedColorId)?.hex
-                              : undefined
-                            return (
-                              <span
-                                key={digit}
-                                className={[
-                                  'candidate',
-                                  active ? 'active' : '',
-                                  isHighlighted ? 'highlighted' : '',
-                                  isTechniqueUsed ? 'technique-used' : '',
-                                  isTechniqueEliminated ? 'technique-eliminated' : '',
-                                  isTechniqueSolved ? 'technique-solved' : '',
-                                  isTechniqueBlue ? 'technique-blue' : '',
-                                  isTechniqueYellow ? 'technique-yellow' : '',
-                                  isTechniqueDarkBlue ? 'technique-darkblue' : '',
-                                  isTechniqueOrange ? 'technique-orange' : '',
-                                  isTechniqueAic ? 'technique-aic' : '',
-                                  isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
-                                  paintedHex ? 'candidate-painted' : '',
-                                  active && paintColor ? 'paint-target' : '',
-                                ]
-                                  .filter(Boolean)
-                                  .join(' ')}
-                                style={paintedHex ? { backgroundColor: paintedHex } : undefined}
-                                onClick={
-                                  active && paintColor
-                                    ? (event) => {
-                                        event.stopPropagation()
-                                        onCandidatePipClick(r, c, digit)
-                                      }
-                                    : undefined
-                                }
-                              >
-                                {active ? digit : ''}
-                              </span>
-                            )
-                          })}
-                        </span>
-                      ) : null}
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          })}
-
-          {strongLinks.length > 0 && (
-            <svg className="strong-links" viewBox="0 0 900 900" aria-hidden="true">
-              {strongLinks.map((link, index) => {
-                const p1 = pipCenter(link.a[0], link.a[1], link.digit)
-                const p2 = pipCenter(link.b[0], link.b[1], link.digit)
-                return (
-                  <line
-                    key={index}
-                    className="strong-link-line"
-                    x1={p1.x}
-                    y1={p1.y}
-                    x2={p2.x}
-                    y2={p2.y}
-                  />
-                )
-              })}
-            </svg>
-          )}
-
-          {(() => {
-            const aicLinks = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedTechnique?.aicLinks
-            if (!aicLinks || aicLinks.length === 0) {
-              return null
-            }
-            return (
-              <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
-                {aicLinks.map((link, index) => {
-                  const p1 = pipCenter(link.from.row, link.from.col, link.from.digit)
-                  const p2 = pipCenter(link.to.row, link.to.col, link.to.digit)
-                  return (
-                    <path
+                    <line
                       key={index}
-                      className={link.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'}
-                      d={curvedPath(p1, p2)}
+                      className="strong-link-line"
+                      x1={p1.x}
+                      y1={p1.y}
+                      x2={p2.x}
+                      y2={p2.y}
                     />
                   )
                 })}
               </svg>
-            )
-          })()}
+            )}
 
+            {(() => {
+              const aicLinks = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedTechnique?.aicLinks
+              if (!aicLinks || aicLinks.length === 0) {
+                return null
+              }
+              return (
+                <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
+                  {aicLinks.map((link, index) => {
+                    const p1 = pipCenter(link.from.row, link.from.col, link.from.digit)
+                    const p2 = pipCenter(link.to.row, link.to.col, link.to.digit)
+                    return (
+                      <path
+                        key={index}
+                        className={link.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'}
+                        d={curvedPath(p1, p2)}
+                      />
+                    )
+                  })}
+                </svg>
+              )
+            })()}
+
+          </div>
+
+          <div className="import-row">
+            <textarea
+              className="import-input"
+              placeholder="Paste a 81-char string, or Sudoku.Coach puzzle string, or SudokuWiki.org text format..."
+              rows={1}
+              value={importText}
+              disabled={busy}
+              onChange={(event) => setImportText(event.target.value)}
+            />
+            <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
+              Import
+            </button>
+          </div>
+
+          <div className="import-secondary-row">
+            <div
+              className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setOcrDragActive(true)
+              }}
+              onDragLeave={() => setOcrDragActive(false)}
+              onDrop={onImageDrop}
+              onPaste={onImagePaste}
+              tabIndex={0}
+              role="button"
+              aria-label="Drop or paste a Sudoku grid screenshot to read it"
+            >
+              <span>
+                {ocrBusy
+                  ? 'Reading screenshot…'
+                  : 'Drag & drop or paste a Sudoku grid screenshot, or '}
+              </span>
+              {!ocrBusy && (
+                <label className="image-import-browse">
+                  browse for an image
+                  <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
+                </label>
+              )}
+            </div>
+            <button
+              type="button"
+              className="copy-sc-button"
+              onClick={onExportToSudokuCoach}
+              disabled={busy}
+              title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard"
+            >
+              Copy SC puzzle string
+            </button>
+          </div>
         </div>
 
         <div className="controls">
@@ -4914,57 +5110,6 @@ export default function App() {
             </button>
           </section>
         </div>
-      </div>
-
-      <div className="import-row">
-        <textarea
-          className="import-input"
-          placeholder="Paste a 81-char string, or Sudoku.Coach puzzle string, or SudokuWiki.org text format..."
-          rows={1}
-          value={importText}
-          disabled={busy}
-          onChange={(event) => setImportText(event.target.value)}
-        />
-        <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
-          Import
-        </button>
-      </div>
-
-      <div className="import-secondary-row">
-        <div
-          className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
-          onDragOver={(event) => {
-            event.preventDefault()
-            setOcrDragActive(true)
-          }}
-          onDragLeave={() => setOcrDragActive(false)}
-          onDrop={onImageDrop}
-          onPaste={onImagePaste}
-          tabIndex={0}
-          role="button"
-          aria-label="Drop or paste a Sudoku grid screenshot to read it"
-        >
-          <span>
-            {ocrBusy
-              ? 'Reading screenshot…'
-              : 'Drag & drop or paste a Sudoku grid screenshot, or '}
-          </span>
-          {!ocrBusy && (
-            <label className="image-import-browse">
-              browse for an image
-              <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
-            </label>
-          )}
-        </div>
-        <button
-          type="button"
-          className="copy-sc-button"
-          onClick={onExportToSudokuCoach}
-          disabled={busy}
-          title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard"
-        >
-          Copy SC puzzle string
-        </button>
       </div>
 
       <div className="actions">

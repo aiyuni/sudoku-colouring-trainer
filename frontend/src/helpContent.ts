@@ -131,7 +131,7 @@ export const HELP_SECTIONS: HelpSection[] = [
   },
   {
     title: 'Solve Path',
-    intro: 'This is the checkbox next to the Generate/Regenerate button on the Solve Path tab.',
+    intro: 'This is the checkbox next to the Generate/Regenerate button on the Solve Path tab that controls the solve path logic.',
     items: [
       {
         name: 'Easy Solve',
@@ -142,7 +142,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           'the simplest technique. \n\n' +
           'When ON, each step instead picks whichever applicable technique is simplest, regardless of how many ' +
           'cells it solves or candidates it eliminates - a Naked Single is always taken over a Dragon Colouring ' +
-          'chain that would solve half the grid, the way a person working through the puzzle by hand would. Ties ' +
+          'chain that would solve half the grid. Ties ' +
           '(usually several instances of the same technique) go to the shortest Dragon Colouring chain, then the ' +
           'most candidates eliminated.',
       },
@@ -150,7 +150,9 @@ export const HELP_SECTIONS: HelpSection[] = [
   },
   {
     title: 'Puzzle generation',
-    intro: 'These are in the Generate Puzzle menu and only affect the Dragon and Dynamic Dragon practice puzzles.',
+    intro:
+      'These are in the Generate Puzzle menu and only affect the Dragon and Dynamic Dragon practice puzzles. ' +
+      'Enabling an AIC technique in Settings automatically unchecks its matching "Dragon Generation disregards" box below.',
     items: [
       {
         name: 'Dragon Generation disregards single digit AIC',
@@ -174,11 +176,17 @@ export const HELP_SECTIONS: HelpSection[] = [
           'The same again for Generic AICs (chains longer than a Short AIC). It can only be turned OFF when the setting above is also OFF and Generic AIC is enabled.',
       },
       {
-        name: 'Dragon puzzle generation max timeout',
+        name: 'Dynamic Dragon puzzles must not allow plain Dragon',
+        settingKey: 'dynamicDragonPuzzleForbidsPlainDragon',
+        description:
+          'When OFF, a Dynamic Dragon puzzle will be generated such that there will always be a Dynamic Dragon, but plain Dragons can progress the puzzle too. \n\n' +
+          'When ON,  a Dynamic Dragon puzzle will be generated such that a Dynamic Dragon is the only way forward.  This is extremely expensive, so use caution.'
+      },
+      {
+        name: 'Dynamic Dragon puzzle generation max timeout',
         settingKey: 'dragonGenerationTimeoutMs',
         description:
-          'How long to keep searching for a suitable puzzle before giving up. Dynamic Dragon puzzles are rare and can ' +
-          'take anywhere from a few seconds to a couple of minutes to find.',
+          'How long to keep searching for a suitable Dynamic Dragon puzzle before giving up.',
       },
     ],
   }
