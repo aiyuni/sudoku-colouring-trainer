@@ -88,14 +88,157 @@
   padding: 2rem 1rem 3rem;
 }
 
-/* Solving/generating/OCR/solve-path calculation: shown for the whole
-   duration of the operation (set just before the blocking work starts,
-   cleared in a `finally` right after it ends or throws) so the cursor
-   never gets stuck mid-op. `!important` because buttons, links, and
-   disabled inputs all set their own `cursor` further down. */
-.page.is-busy,
-.page.is-busy * {
+/* Any long operation (see BusyIndicator.tsx): set on <html> just before the
+   work starts and removed the moment it ends, fails or is cancelled.
+   `!important` because buttons, links, and disabled inputs all set their
+   own `cursor` further down. */
+html.app-busy,
+html.app-busy * {
   cursor: progress !important;
+}
+
+/* The busy indicator card. Pinned to the top so it never covers the grid's
+   own status/solvability lines under it, above every modal (the tutorial
+   is z-index 90, dropdowns 100). Only transform/opacity animate, so the
+   browser keeps both animations running off the main thread while the
+   synchronous work has it blocked. The fade-in is delayed so a recompute
+   that finishes within a couple of frames never flashes it. */
+@keyframes busy-indicator-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.busy-indicator {
+  position: fixed;
+  top: 0.75rem;
+  left: 50%;
+  transform: translate(-50%, 0);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: max-content;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0.7rem 1rem;
+  border-radius: 0.75rem;
+  background: #1f2937;
+  color: #f8fafc;
+  box-shadow: 0 12px 30px -10px rgb(0 0 0 / 0.55);
+  opacity: 0;
+  animation: busy-indicator-in 160ms ease-out 180ms forwards;
+  pointer-events: auto;
+}
+
+.busy-spinner {
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  border: 3px solid rgb(248 250 252 / 0.25);
+  border-top-color: #60a5fa;
+  animation: busy-spin 0.8s linear infinite;
+}
+
+.busy-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.busy-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.busy-detail {
+  font-size: 0.78rem;
+  color: #cbd5e1;
+  line-height: 1.35;
+}
+
+.busy-elapsed {
+  flex: none;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: #94a3b8;
+}
+
+/* The one control that must stay clickable (and look it) while busy. */
+html.app-busy .busy-cancel,
+.busy-cancel {
+  flex: none;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgb(248 250 252 / 0.35);
+  background: transparent;
+  color: #f8fafc;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer !important;
+}
+
+.busy-cancel:hover {
+  background: rgb(248 250 252 / 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .busy-indicator {
+    background: #e2e8f0;
+    color: #0f172a;
+  }
+
+  .busy-spinner {
+    border-color: rgb(15 23 42 / 0.2);
+    border-top-color: #2563eb;
+  }
+
+  .busy-detail {
+    color: #334155;
+  }
+
+  .busy-elapsed {
+    color: #475569;
+  }
+
+  html.app-busy .busy-cancel,
+  .busy-cancel {
+    border-color: rgb(15 23 42 / 0.35);
+    color: #0f172a;
+  }
+
+  .busy-cancel:hover {
+    background: rgb(15 23 42 / 0.08);
+  }
+}
+
+@keyframes busy-indicator-fade {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still delayed (so it doesn't flash), just without the slide. */
+  .busy-indicator {
+    animation-name: busy-indicator-fade;
+  }
+
+  .busy-spinner {
+    animation-duration: 2.4s;
+  }
 }
 
 .header h1 {
@@ -868,22 +1011,23 @@
   cursor: pointer;
 }
 
+/* Same 3-column footprint as the digit pads above it, so the column reads
+   as one aligned stack instead of a small centred cluster. */
 .paint-swatches {
   display: grid;
-  grid-template-columns: repeat(3, 2.1rem);
-  gap: 0.5rem;
-  justify-content: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
 }
 
 .paint-swatch-wrapper {
   position: relative;
-  width: 2.1rem;
-  height: 2.1rem;
+  width: 100%;
+  height: 1.85rem;
 }
 
 .paint-swatch {
-  width: 2.1rem;
-  height: 2.1rem;
+  width: 100%;
+  height: 100%;
   border: 1.5px solid rgba(0, 0, 0, 0.25);
   border-radius: 6px;
   padding: 0;
@@ -907,8 +1051,8 @@
   -webkit-appearance: none;
   appearance: none;
   position: absolute;
-  right: -0.3rem;
-  bottom: -0.3rem;
+  right: 0.15rem;
+  bottom: 0.15rem;
   width: 1.15rem;
   height: 1.15rem;
   padding: 0;
@@ -937,8 +1081,8 @@
 
 .paint-swatch-edit-icon {
   position: absolute;
-  right: -0.3rem;
-  bottom: -0.3rem;
+  right: 0.15rem;
+  bottom: 0.15rem;
   width: 1.15rem;
   height: 1.15rem;
   display: flex;
@@ -953,9 +1097,10 @@
 }
 
 .paint-hint {
-  margin: 0.4rem 0 0;
+  margin: 0.35rem 0 0;
   font-size: 0.68rem;
   line-height: 1.25;
+  text-align: center;
   color: #6b7280;
 }
 
@@ -1174,6 +1319,18 @@
   cursor: pointer;
 }
 
+.solve-path-timeout {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+}
+
+.solve-path-timeout select {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.2rem;
+}
+
 .solve-path-log-toggle.active {
   background: #1d4ed8;
   border-color: #1d4ed8;
@@ -1315,13 +1472,54 @@
 }
 
 .control-label {
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.35rem;
   font-size: 0.66rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  text-align: center;
+  text-align: left;
   color: #475569;
+}
+
+/* Title on the left, the group's one reset-style action (Erase / Clear
+   cell / Clear all / Clear) on the right - same shape in every group. */
+.control-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.45rem;
+  margin-bottom: 0.35rem;
+}
+
+.control-header > .control-label {
+  margin: 0;
+}
+
+.control-header-action {
+  flex: 0 0 auto;
+  padding: 0.22rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+
+@media (hover: hover) {
+  .control-header-action:not(:disabled):hover {
+    border-color: #fca5a5;
+    background: #fef2f2;
+    color: #b91c1c;
+  }
+}
+
+.control-header-action:disabled {
+  opacity: 0.45;
 }
 
 .control-pad {
@@ -1331,20 +1529,30 @@
   margin-bottom: 0.3rem;
 }
 
+.control-pad:last-child {
+  margin-bottom: 0;
+}
+
 .pad-button {
   padding: 0.3rem 0;
   font: 700 0.9rem/1 inherit;
 }
 
 .candidate-bulk-actions {
-  display: flex;
-  gap: 0.3rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding-top: 0.35rem;
+  margin-top: 0.1rem;
+  border-top: 1px dashed #cbd5e1;
 }
 
-.candidate-bulk-actions .pad-button {
-  flex: 1;
-  font: 600 0.72rem/1.1 inherit;
-  padding: 0.35rem 0.2rem;
+.bulk-action-button {
+  padding: 0.4rem 0.3rem;
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.1;
 }
 
 .solution-group {
@@ -1393,16 +1601,38 @@
   background: #f0fdf4;
 }
 
-.autosolve-button {
-  width: 100%;
-  color: #15803d;
-  border-color: #86efac;
-  padding: 0.4rem 0.55rem;
-  font-size: 0.82rem;
+.autosolve-subgroup + .autosolve-subgroup {
+  margin-top: 0.45rem;
 }
 
-.autosolve-button + .autosolve-button {
-  margin-top: 0.3rem;
+.autosolve-subgroup-label {
+  margin: 0 0 0.2rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #16a34a;
+}
+
+.autosolve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.autosolve-button {
+  min-width: 0;
+  color: #15803d;
+  border-color: #86efac;
+  padding: 0.36rem 0.3rem;
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.autosolve-button.wide {
+  grid-column: 1 / -1;
 }
 
 .highlight-group {
@@ -1548,6 +1778,28 @@ button.primary {
   color: #b91c1c;
 }
 
+/* The solvability search is still running in its Web Worker: muted, with a
+   small spinner (the same one as the busy indicator's) so it reads as "in
+   progress" rather than as a verdict. */
+.solvability-checking {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.solvability-checking::before {
+  content: '';
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  border: 2px solid rgb(107 114 128 / 0.3);
+  border-top-color: #2563eb;
+  animation: busy-spin 0.8s linear infinite;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -1599,6 +1851,15 @@ button.primary {
 
   .solvability-unsolvable {
     color: #f87171;
+  }
+
+  .solvability-checking {
+    color: #9ca3af;
+  }
+
+  .solvability-checking::before {
+    border-color: rgb(156 163 175 / 0.3);
+    border-top-color: #60a5fa;
   }
 
   .solve-path-unsolvable {
@@ -1909,6 +2170,25 @@ button.primary {
   .autosolve-button {
     color: #86efac;
     border-color: #14532d;
+  }
+
+  .autosolve-subgroup-label {
+    color: #4ade80;
+  }
+
+  .control-header-action {
+    border-color: #475569;
+    color: #94a3b8;
+  }
+
+  .control-header-action:not(:disabled):hover {
+    border-color: #7f1d1d;
+    background: #3b1212;
+    color: #fca5a5;
+  }
+
+  .candidate-bulk-actions {
+    border-top-color: #334155;
   }
 
   .highlight-group {
@@ -2262,7 +2542,9 @@ button.primary {
   font-size: 0.85rem;
 }
 
-.compact-layout .solve-path-easy-solve {
+.compact-layout .solve-path-easy-solve,
+.compact-layout .solve-path-timeout,
+.compact-layout .solve-path-timeout select {
   min-height: 2.5rem;
   font-size: 0.85rem;
 }
@@ -2288,8 +2570,21 @@ button.primary {
   min-height: var(--compact-touch);
 }
 
-.compact-layout .erase-button,
-.compact-layout .candidate-bulk-actions .pad-button {
+.compact-layout .control-pad:last-child {
+  margin-bottom: 0;
+}
+
+.compact-layout .control-header {
+  margin-bottom: 0;
+}
+
+.compact-layout .control-header-action {
+  min-height: 2.25rem;
+  padding-inline: 0.9rem;
+  font-size: 0.8rem;
+}
+
+.compact-layout .bulk-action-button {
   min-height: 2.5rem;
   font-size: 0.85rem;
 }
@@ -2301,52 +2596,6 @@ button.primary {
 
 .compact-layout .candidate-button {
   padding: 0.25rem 0.3rem;
-}
-
-/* Section title and its one extra action share a row. */
-.compact-layout .solution-group,
-.compact-layout .highlight-group,
-.compact-layout .paint-group {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: 0.5rem;
-}
-
-.compact-layout .solution-group > :not(.control-label, .erase-button),
-.compact-layout .highlight-group > :not(.control-label, .erase-button),
-.compact-layout .paint-group > :not(.control-label, .erase-button) {
-  grid-column: 1 / -1;
-}
-
-.compact-layout .solution-group > .control-label,
-.compact-layout .highlight-group > .control-label,
-.compact-layout .paint-group > .control-label {
-  grid-row: 1;
-}
-
-.compact-layout .solution-group > .erase-button,
-.compact-layout .highlight-group > .erase-button,
-.compact-layout .paint-group > .erase-button {
-  grid-row: 1;
-  grid-column: 2;
-  padding-inline: 0.9rem;
-}
-
-/* Clear cell / Autofill All / Clear all on one row under the pad. */
-.compact-layout .candidate-group {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 0.3rem;
-}
-
-.compact-layout .candidate-group > .control-label,
-.compact-layout .candidate-group > .control-pad {
-  grid-column: 1 / -1;
-}
-
-.compact-layout .candidate-group > .candidate-bulk-actions {
-  display: contents;
 }
 
 .compact-layout .paint-swatches {
@@ -2379,22 +2628,28 @@ button.primary {
   font-size: 0.85rem;
 }
 
-.compact-layout .autosolve-group {
-  display: grid;
+/* Wider than the desktop column, so as many columns as fit. */
+.compact-layout .autosolve-grid {
   grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
   gap: 0.35rem;
 }
 
-.compact-layout .autosolve-group > .control-label {
-  grid-column: 1 / -1;
-}
-
 .compact-layout .autosolve-button {
   min-height: var(--compact-touch);
+  font-size: 0.85rem;
 }
 
-.compact-layout .autosolve-button + .autosolve-button {
-  margin-top: 0;
+.compact-layout .autosolve-button.wide {
+  grid-column: auto;
+}
+
+.compact-layout .autosolve-group > .control-label {
+  margin-bottom: 0.4rem;
+}
+
+.compact-layout .autosolve-subgroup-label {
+  margin-bottom: 0.3rem;
+  font-size: 0.68rem;
 }
 
 .compact-layout .actions {
@@ -2519,5 +2774,130 @@ button.primary {
 
   .compact-layout .technique-panel-header {
     background: #1e293b;
+  }
+}
+
+/* ---- Confirm dialog (ConfirmDialog.tsx) ----
+   The app's own replacement for window.confirm. Same backdrop/card look as
+   the Settings guide; above the dropdown menus (z-index 100) it's usually
+   opened from, below the busy indicator. */
+@keyframes confirm-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 0.55);
+}
+
+.confirm-dialog {
+  width: min(28rem, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  background: #fff;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 1rem;
+  box-shadow: 0 24px 60px -20px rgb(15 23 42 / 0.55);
+  animation: confirm-dialog-in 160ms ease-out;
+}
+
+.confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem 0;
+}
+
+.confirm-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+.confirm-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: #fef3c7;
+  color: #b45309;
+  font-weight: 800;
+  font-size: 1.05rem;
+}
+
+.confirm-body {
+  padding: 0.5rem 1.25rem 0.25rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.confirm-body p {
+  margin: 0.6rem 0;
+}
+
+.confirm-tip {
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.5rem;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 0.86rem;
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.75rem 1.25rem 1.1rem;
+}
+
+.confirm-actions .confirm-accept {
+  background: #b45309;
+  border-color: #b45309;
+  color: #fff;
+}
+
+.confirm-actions .confirm-accept:hover {
+  background: #92400e;
+  border-color: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .confirm-dialog {
+    background: #1e293b;
+    color: #e2e8f0;
+    border-color: #334155;
+  }
+
+  .confirm-icon {
+    background: #451a03;
+    color: #fbbf24;
+  }
+
+  .confirm-tip {
+    background: #172554;
+    color: #bfdbfe;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm-dialog {
+    animation: none;
   }
 }

@@ -38,6 +38,8 @@ export function dragonGenerationWorkerCount(): number {
  * checks). The losers are terminated the moment one worker succeeds,
  * which is also the only cancellation mechanism: `generateBlocking`
  * never yields, so a worker couldn't receive a "stop" message anyway.
+ * `signal` (the busy indicator's Cancel button) takes the same route:
+ * aborting terminates every worker and resolves null straight away.
  *
  * Falls back to the main-thread `generate` (which yields to keep the page
  * responsive) where Workers aren't available, or with whatever budget is
@@ -45,9 +47,13 @@ export function dragonGenerationWorkerCount(): number {
  */
 export async function generateDragonPuzzleInParallel(
   options: DragonPuzzleGenerateOptions,
+  signal?: AbortSignal,
 ): Promise<GeneratedDragonPuzzle | null> {
   const budgetMs = options.timeBudgetMs ?? 30_000
   const startedAt = Date.now()
+  if (signal?.aborted) {
+    return null
+  }
   if (typeof Worker === 'undefined') {
     return fallbackGenerator.generate(options)
   }
@@ -63,6 +69,7 @@ export async function generateDragonPuzzleInParallel(
       }
       settled = true
       window.clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       for (const worker of workers) {
         worker.terminate()
       }
@@ -78,6 +85,8 @@ export async function generateDragonPuzzleInParallel(
       }
     }
     const timer = window.setTimeout(() => finish(null), budgetMs + DEADLINE_GRACE_MS)
+    const onAbort = () => finish(null)
+    signal?.addEventListener('abort', onAbort)
 
     const request: DragonWorkerRequest = { options }
     for (let i = 0; i < dragonGenerationWorkerCount(); i++) {
@@ -120,5 +129,5 @@ export async function generateDragonPuzzleInParallel(
     return outcome
   }
   const remainingMs = budgetMs - (Date.now() - startedAt)
-  return remainingMs > 0 ? fallbackGenerator.generate({ ...options, timeBudgetMs: remainingMs }) : null
+  return remainingMs > 0 && !signal?.aborted ? fallbackGenerator.generate({ ...options, timeBudgetMs: remainingMs }) : null
 }

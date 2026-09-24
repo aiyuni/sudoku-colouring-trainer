@@ -31,6 +31,7 @@ export interface AppSettings {
   dynamicDragonPuzzleForbidsPlainDragon: boolean
   dragonGenerationTimeoutMs: number
   easySolveEnabled: boolean
+  solvePathTimeoutMs: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -54,6 +55,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dynamicDragonPuzzleForbidsPlainDragon: false,
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
+  solvePathTimeoutMs: 12_000,
 }
 
 /** Threshold for the "Require a bigger base Medusa" toggle - the minimum
@@ -69,6 +71,20 @@ export const MIN_BASE_MEDUSA_CANDIDATES = 3
  * than a safety cap. */
 export const DRAGON_GENERATION_TIMEOUT_OPTIONS: Array<{ label: string; ms: number }> = [
   { label: '15 seconds', ms: 15_000 },
+  { label: '30 seconds', ms: 30_000 },
+  { label: '1 minute', ms: 60_000 },
+  { label: '2 minutes', ms: 120_000 },
+  { label: '5 minutes', ms: 300_000 },
+]
+
+/** Options for the "Solve path timeout" setting - how long the Solve Path
+ * search (buildSolvePath) keeps taking steps before it stops and shows what
+ * it has. The same budget decides the "Solvable" verdict under the grid, which
+ * runs that search from a fresh autofill: one that runs out of time is
+ * reported as "couldn't tell", so a longer timeout means fewer of those. Both
+ * run in a Web Worker, so a long one no longer freezes the page. */
+export const SOLVE_PATH_TIMEOUT_OPTIONS: Array<{ label: string; ms: number }> = [
+  { label: '12 seconds', ms: 12_000 },
   { label: '30 seconds', ms: 30_000 },
   { label: '1 minute', ms: 60_000 },
   { label: '2 minutes', ms: 120_000 },
@@ -107,6 +123,9 @@ export function describeDefault(key: keyof AppSettings): string {
   }
   if (key === 'dragonGenerationTimeoutMs') {
     return DRAGON_GENERATION_TIMEOUT_OPTIONS.find((option) => option.ms === value)?.label ?? `${Number(value) / 1000} seconds`
+  }
+  if (key === 'solvePathTimeoutMs') {
+    return SOLVE_PATH_TIMEOUT_OPTIONS.find((option) => option.ms === value)?.label ?? `${Number(value) / 1000} seconds`
   }
   if (Array.isArray(value)) {
     return value.map((technique) => RULE3_TECHNIQUE_LABELS[technique as Rule3Technique]).join(', ')

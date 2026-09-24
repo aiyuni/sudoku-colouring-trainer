@@ -55,7 +55,7 @@ export const HELP_TITLE = 'QuickStart / Settings explanation'
 export const HELP_QUICKSTART_HEADING = 'New to Colouring? Keep the default settings.'
 
 export const HELP_QUICKSTART =
-  "The defaults give the best Colouring experience. Leave them alone if you're learning Colouring or don't know what AICs are, " +
+  "The defaults give the best Colouring and Sudoku solving experience. Leave them alone if you're learning Colouring or still learning what AICs are, " +
   'and use "Reset to defaults" in Settings to get back to them at any time. \n\nTo start, generate or import a puzzle. ' +
   '\n\n For how the techniques work, see the [Techniques overview](how-it-works).\n\n' +
   'For advanced players, the tabs below explain the customizations for the solver.'
@@ -63,7 +63,8 @@ export const HELP_QUICKSTART =
 export const HELP_TABS: HelpTab[] = [
   {
     label: 'Dragon Configuration',
-    intro: 'The Dragon Configuration menu.  Every setting here has a major impact on what the solver shows.  Advanced players may want to play around with these settings',
+    intro: 'The Dragon Configuration menu.  Every setting here has a major impact on what Dragons the solver shows, ' +
+    'but only "Select Dragon Colouring techniques" and "Limit to 1 AIC per step" affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
     sections: [
       {
         title: 'Dragon Colouring',
@@ -85,7 +86,7 @@ export const HELP_TABS: HelpTab[] = [
               'OFF: the two colours take turns to extend.\n\n' +
               'ON: for each Medusa base, searches for the order of colour extensions that reaches the elimination(s) ' +
               'with the fewest extensions.\n\n' +
-              'Find by elims always uses this, whether ON or OFF.',
+              '"Find by elims" feature is always optimized, so it will always uses this, whether ON or OFF.',
           },
           {
             name: `Dragon: require ${MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates`,
@@ -107,8 +108,8 @@ export const HELP_TABS: HelpTab[] = [
               'ON: Dynamic Dragons get the Optimize Dragons search (whether or not that is ON), and at every step it also ' +
               'tries every candidate the Dynamic techniques can force, not just the first one found. Dynamic Dragons ' +
               'typically come out with far fewer extensions.\n\n' +
-              'Slower, especially with AICs enabled. It never finds a Dynamic Dragon that OFF would not, and never uses ' +
-              'more extensions than Optimize Dragons alone. Find by elims follows this setting.',
+              'Slower, especially with AICs enabled or with Exhaustive Dragon Colouring OFF.  It never uses ' +
+              'more extensions than Optimize Dragons alone. "Find by elims" follows this setting.',
           },
           {
             name: 'Limit to 1 AIC per step',
@@ -143,7 +144,7 @@ export const HELP_TABS: HelpTab[] = [
   },
   {
     label: 'Settings',
-    intro: 'The ⚙ Settings menu.  Controls the techniques the solver uses.',
+    intro: 'The ⚙ Settings menu.  Controls the non-Dragon techniques the solver uses.',
     sections: [
       {
         title: 'Keyboard input',
@@ -177,24 +178,23 @@ export const HELP_TABS: HelpTab[] = [
       },
       {
         title: 'Techniques',
-        intro: 'Enables or disables certain techniques, for both the solver and the generator.  Advanced players may want to enable AICs',
+        intro: 'Enables or disables certain techniques, for both the solver and the generator.  Advanced players may want to enable AICs.  Note that Dragons will find all AICs eliminations.',
         items: [
           {
             name: 'Enable Short Single-Digit AIC',
             settingKey: 'shortSingleDigitAicEnabled',
-            description: 'Single-digit AICs of length <= 3. Leave OFF for a pure Colouring experience.',
+            description: 'Single-digit AICs of length up to 3. Leave OFF for a pure Colouring experience.',
           },
           {
             name: 'Enable Short AIC',
             settingKey: 'shortAicEnabled',
-            description: 'General AICs of length <= 5. Needs Short Single-Digit AIC ON.',
+            description: 'General AICs of length up to 5. Needs Short Single-Digit AIC ON.',
           },
           {
             name: 'Enable Generic AIC',
             settingKey: 'genericAicEnabled',
             description:
-              `AICs longer than a Short AIC, up to ${GENERIC_AIC_MAX_LENGTH} links. Needs Short AIC ON, and asks ` +
-              'to confirm first because Dragon puzzle generation gets slower.',
+              `AICs longer than a Short AIC, up to ${GENERIC_AIC_MAX_LENGTH} links. Needs Short AIC ON.`,
           },
         ],
       },
@@ -202,7 +202,7 @@ export const HELP_TABS: HelpTab[] = [
   },
   {
     label: 'Solve Path',
-    intro: 'The checkbox next to Generate/Regenerate on the Solve Path tab.',
+    intro: 'The controls next to Generate/Regenerate on the Solve Path tab.  Customizes the Solve Path shown.',
     sections: [
       {
         title: 'Solve Path',
@@ -216,13 +216,23 @@ export const HELP_TABS: HelpTab[] = [
               'ON: each step takes the simplest technique regardless of progress; ties go to the shortest Dragon, ' +
               'then most candidates eliminated.',
           },
+          {
+            name: 'Timeout',
+            settingKey: 'solvePathTimeoutMs',
+            description:
+              'How long Generate/Regenerate keeps searching before it stops and shows the steps found so far. ' +
+              'The "Solvable" check under the grid uses the same limit - if it runs out of time it says it ' +
+              "couldn't tell whether brute force is needed, so raise this if you see that often (slow settings " +
+              'like Optimize Dynamic Dragons or every AIC enabled make each step take longer).\n\n' +
+              'The search runs in the background.',
+          },
         ],
       },
     ],
   },
   {
     label: 'Generate Puzzle',
-    intro: 'We can specify what type of Dragon Colouring puzzles to generate. Unless you are looking for the hardest of hard puzzles (Beyond Hell/Almost Impossible SC category), there is no reason to touch these.',
+    intro: 'We can specify what type of Dragon Colouring puzzles to generate here.  However, unless you are looking for the hardest of hard puzzles (Beyond Hell/Almost Impossible SC category), there is no reason to touch these default settings.',
     sections: [
       {
         title: 'Puzzle generation',
