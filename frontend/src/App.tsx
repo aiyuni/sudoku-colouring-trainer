@@ -434,6 +434,7 @@ function computeStuckDynamicDragonExtensions(
   aicLimitPerStep = true,
   exhaustive = true,
   optimize = false,
+  optimizeDynamic = false,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -458,12 +459,15 @@ function computeStuckDynamicDragonExtensions(
       // Plain Dragon Colouring already handles this chain.
       continue
     }
+    // Optimize Dynamic Dragons implies the optimized search for Dynamic
+    // Dragons, whether or not Optimize Dragons (plain) is on.
     const result = dragonFinder.extend(chain, board, candidates, {
       dynamic: true,
       allowedRule3Techniques,
       aicLimitPerStep,
       exhaustive,
-      optimize,
+      optimize: optimize || optimizeDynamic,
+      optimizeDynamic,
     })
     if (!result) {
       continue
@@ -598,6 +602,7 @@ function buildTechniqueInstances(
   exhaustiveDragon = true,
   genericAicEnabled = false,
   optimizeDragons = false,
+  optimizeDynamicDragons = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -1132,6 +1137,7 @@ function buildTechniqueInstances(
     aicLimitPerDragonStep,
     exhaustiveDragon,
     optimizeDragons,
+    optimizeDynamicDragons,
   )
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
@@ -1438,6 +1444,7 @@ function buildSolvePath(
   genericAicEnabled = false,
   easySolveEnabled = false,
   optimizeDragons = false,
+  optimizeDynamicDragons = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1480,6 +1487,7 @@ function buildSolvePath(
       exhaustiveDragon,
       genericAicEnabled,
       optimizeDragons,
+      optimizeDynamicDragons,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart
@@ -2370,6 +2378,7 @@ export default function App() {
   const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
   const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
   const [optimizeDragons, setOptimizeDragons] = useState(DEFAULT_SETTINGS.optimizeDragons)
+  const [optimizeDynamicDragons, setOptimizeDynamicDragons] = useState(DEFAULT_SETTINGS.optimizeDynamicDragons)
   const [easySolveEnabled, setEasySolveEnabled] = useState(DEFAULT_SETTINGS.easySolveEnabled)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
     DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics,
@@ -2515,6 +2524,7 @@ export default function App() {
         exhaustiveDragonColouring,
         genericAicEnabled,
         optimizeDragons,
+        optimizeDynamicDragons,
       ),
     [
       board,
@@ -2527,6 +2537,7 @@ export default function App() {
       exhaustiveDragonColouring,
       genericAicEnabled,
       optimizeDragons,
+      optimizeDynamicDragons,
     ],
   )
   // Looked up by id (rather than kept as its own state) so that if the
@@ -2698,6 +2709,7 @@ export default function App() {
       genericAicEnabled,
       easySolveEnabled,
       optimizeDragons,
+      optimizeDynamicDragons,
     )
   }, [
     board,
@@ -2711,6 +2723,7 @@ export default function App() {
     genericAicEnabled,
     easySolveEnabled,
     optimizeDragons,
+    optimizeDynamicDragons,
   ])
   const solvability = useMemo(
     () => derivePuzzleSolvability(puzzleSolveResult.status, candidatesAccurate, bruteSolvePath),
@@ -3433,6 +3446,7 @@ export default function App() {
           aicLimitPerDragonStep,
           exhaustiveDragonColouring,
           optimizeDragons,
+          optimizeDynamicDragons,
         )
         if (dynamicDragonAutoSolveIncludesAics) {
           return results
@@ -3636,6 +3650,7 @@ export default function App() {
     setAllowedRule3Techniques(new Set(DEFAULT_SETTINGS.allowedRule3Techniques))
     setExhaustiveDragonColouring(DEFAULT_SETTINGS.exhaustiveDragonColouring)
     setOptimizeDragons(DEFAULT_SETTINGS.optimizeDragons)
+    setOptimizeDynamicDragons(DEFAULT_SETTINGS.optimizeDynamicDragons)
     setEasySolveEnabled(DEFAULT_SETTINGS.easySolveEnabled)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
     setDynamicDragonAutoSolveIncludesAics(DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics)
@@ -3654,6 +3669,10 @@ export default function App() {
 
   function toggleOptimizeDragons() {
     setOptimizeDragons((current) => !current)
+  }
+
+  function toggleOptimizeDynamicDragons() {
+    setOptimizeDynamicDragons((current) => !current)
   }
 
   function toggleEasySolveEnabled() {
@@ -3817,6 +3836,7 @@ export default function App() {
     const search = dragonTargetFinder.find(board, candidates, targets, {
       allowedRule3Techniques: effectiveAllowedRule3Techniques,
       aicLimitPerStep: aicLimitPerDragonStep,
+      optimizeDynamic: optimizeDynamicDragons,
     })
 
     const best = search.best
@@ -3925,6 +3945,7 @@ export default function App() {
           genericAicEnabled,
           easySolveEnabled,
           optimizeDragons,
+          optimizeDynamicDragons,
         )
         commitGrid({ board, givens, candidates }, nextSolvePath)
         setActiveSolvePathIndex(null)
@@ -4368,7 +4389,7 @@ export default function App() {
               ) : (
                 <>
                   {phone ? 'Generate' : 'Generate Puzzle'}
-                  <span
+                  {/* <span
                     style={{
                       fontSize: '0.45em',
                       verticalAlign: 'top',
@@ -4377,7 +4398,7 @@ export default function App() {
                     }}
                   >
                     ALPHA
-                  </span>
+                  </span> */}
                 </>
               )}{' '}
               <span className="dropdown-caret">▾</span>
@@ -4510,6 +4531,116 @@ export default function App() {
         </DropdownMenu>
 
         <DropdownMenu
+          label={
+            phone ? (
+              '🐉'
+            ) : (
+              <>
+                Dragon Configuration <span className="dropdown-caret">▾</span>
+              </>
+            )
+          }
+          ariaLabel={phone ? 'Dragon Configuration' : undefined}
+          buttonClassName="dragon-config-trigger"
+          align="right"
+        >
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Dragon Colouring</h3>
+            <label
+              className="menu-checkbox"
+              title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
+            >
+              <input
+                type="checkbox"
+                checked={exhaustiveDragonColouring}
+                onChange={toggleExhaustiveDragonColouring}
+              />
+              Exhaustive Dragon Colouring
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When on, Dragon Colouring (plain and Dynamic) looks for the elimination(s) it can reach from each Medusa base with the fewest dragon colour extensions, extending whichever colour gets there quickest instead of making the two colours take turns. When off, the two colours take turns to extend."
+            >
+              <input type="checkbox" checked={optimizeDragons} onChange={toggleOptimizeDragons} />
+              Optimize Dragons
+            </label>
+            <label
+              className="menu-checkbox"
+              title={`Only show Dragon Colouring techniques with a Medusa base of at least ${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates`}
+            >
+              <input type="checkbox" checked={minBaseMedusaFilter} onChange={toggleMinBaseMedusaFilter} />
+              Dragon: require {MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates
+            </label>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
+            <label
+              className="menu-checkbox"
+              title="When on, Dynamic Dragons are searched for the fewest colour extensions like Optimize Dragons, but also trying every candidate the Dynamic techniques can force at each step, not just the first one found. Finds much shorter Dynamic Dragons; noticeably slower, especially with AICs enabled. Also applies to Find by elims."
+            >
+              <input type="checkbox" checked={optimizeDynamicDragons} onChange={toggleOptimizeDynamicDragons} />
+              Optimize Dynamic Dragons
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
+            >
+              <input type="checkbox" checked={aicLimitPerDragonStep} onChange={toggleAicLimitPerDragonStep} />
+              Limit to 1 AIC per step
+            </label>
+            <label
+              className="menu-checkbox"
+              title="When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled in Settings."
+            >
+              <input
+                type="checkbox"
+                checked={dynamicDragonAutoSolveIncludesAics}
+                onChange={toggleDynamicDragonAutoSolveIncludesAics}
+              />
+              Auto-solve includes AICs
+            </label>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Select Dynamic Dragon Colouring techniques</h3>
+            <p className="dropdown-hint">
+              Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
+            </p>
+            {ALL_RULE3_TECHNIQUES.map((technique) => {
+              const disabledByMasterSwitch =
+                (technique === 'short aic' && !shortAicEnabled) ||
+                (technique === 'generic aic' && !genericAicEnabled) ||
+                (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
+              return (
+                <label
+                  key={technique}
+                  className="menu-checkbox"
+                  title={
+                    disabledByMasterSwitch
+                      ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
+                      : undefined
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowedRule3Techniques.has(technique)}
+                    disabled={
+                      technique === 'naked pair' ||
+                      technique === 'hidden single' ||
+                      technique === 'locked candidate' ||
+                      disabledByMasterSwitch
+                    }
+                    onChange={() => toggleRule3Technique(technique)}
+                  />
+                  {RULE3_TECHNIQUE_LABELS[technique]}
+                </label>
+              )
+            })}
+          </div>
+        </DropdownMenu>
+
+        <DropdownMenu
           label={phone ? '⚙' : '⚙ Settings'}
           ariaLabel={phone ? 'Settings' : undefined}
           buttonClassName="settings-trigger"
@@ -4602,94 +4733,6 @@ export default function App() {
                 onChange={toggleGenericAicEnabled}
               />
               Enable Generic AIC
-            </label>
-            <label
-              className="menu-checkbox"
-              title={`Only show Dragon Colouring techniques with a Medusa base of at least ${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates`}
-            >
-              <input type="checkbox" checked={minBaseMedusaFilter} onChange={toggleMinBaseMedusaFilter} />
-              Dragon: require {MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates
-            </label>
-          </div>
-          <div className="dropdown-divider" />
-          <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Dragon Colouring</h3>
-            <label
-              className="menu-checkbox"
-              title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
-            >
-              <input
-                type="checkbox"
-                checked={exhaustiveDragonColouring}
-                onChange={toggleExhaustiveDragonColouring}
-              />
-              Exhaustive Dragon Colouring
-            </label>
-            <label
-              className="menu-checkbox"
-              title="When on, Dragon Colouring (plain and Dynamic) looks for the elimination(s) it can reach from each Medusa base with the fewest dragon colour extensions, extending whichever colour gets there quickest instead of making the two colours take turns. When off, the two colours take turns to extend."
-            >
-              <input type="checkbox" checked={optimizeDragons} onChange={toggleOptimizeDragons} />
-              Optimize Dragons
-            </label>
-          </div>
-          <div className="dropdown-divider" />
-          <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Select Dynamic Dragon Colouring techniques</h3>
-            <p className="dropdown-hint">
-              Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
-            </p>
-            {ALL_RULE3_TECHNIQUES.map((technique) => {
-              const disabledByMasterSwitch =
-                (technique === 'short aic' && !shortAicEnabled) ||
-                (technique === 'generic aic' && !genericAicEnabled) ||
-                (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
-              return (
-                <label
-                  key={technique}
-                  className="menu-checkbox"
-                  title={
-                    disabledByMasterSwitch
-                      ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
-                      : undefined
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    checked={allowedRule3Techniques.has(technique)}
-                    disabled={
-                      technique === 'naked pair' ||
-                      technique === 'hidden single' ||
-                      technique === 'locked candidate' ||
-                      disabledByMasterSwitch
-                    }
-                    onChange={() => toggleRule3Technique(technique)}
-                  />
-                  {RULE3_TECHNIQUE_LABELS[technique]}
-                </label>
-              )
-            })}
-          </div>
-          <div className="dropdown-divider" />
-          <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
-            <label
-              className="menu-checkbox"
-              title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
-            >
-              <input type="checkbox" checked={aicLimitPerDragonStep} onChange={toggleAicLimitPerDragonStep} />
-              Limit to 1 AIC per step
-            </label>
-            <label
-              className="menu-checkbox"
-              title="When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled above."
-            >
-              <input
-                type="checkbox"
-                checked={dynamicDragonAutoSolveIncludesAics}
-                onChange={toggleDynamicDragonAutoSolveIncludesAics}
-              />
-              Auto-solve includes AICs
             </label>
           </div>
         </DropdownMenu>

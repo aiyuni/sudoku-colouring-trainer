@@ -186,6 +186,49 @@
   fill: #dc2626;
 }
 
+/* ---- sub-tabs (Basics, Abusing Uniqueness): one per technique. A segmented
+   bar, so it reads as "pick a technique", distinct from the outlined example
+   pills below it. ---- */
+
+.tutorial-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 0.75rem;
+  padding: 0.25rem;
+  background: var(--t-surface);
+  border: 1px solid var(--t-border);
+  border-radius: 0.7rem;
+}
+
+.tutorial-subtab {
+  padding: 0.4rem 0.85rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--t-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tutorial-subtab:hover {
+  color: var(--t-text);
+  background: var(--t-accent-soft);
+}
+
+.tutorial-subtab.active {
+  color: #fff;
+  background: var(--t-accent);
+}
+
+.tutorial-subtab-blurb {
+  margin: 0 0 1rem;
+  color: var(--t-muted);
+}
+
 /* ---- step player (the colouring tabs) ---- */
 
 .tutorial-pills {
@@ -516,6 +559,16 @@
 
   .tutorial-badge {
     background: var(--t-accent-soft);
+  }
+
+  .tutorial-subtab {
+    background: transparent;
+    color: var(--t-muted);
+  }
+
+  .tutorial-subtab.active {
+    color: #020617;
+    background: var(--t-accent);
   }
 }
 

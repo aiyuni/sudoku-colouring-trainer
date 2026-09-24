@@ -1,5 +1,7 @@
 import { SAMPLE_PUZZLE } from '../sudoku/types'
 import {
+  buildBivalueOddagonLesson,
+  buildBugPlusOneLesson,
   buildDragonLesson,
   buildHiddenSingleLesson,
   buildLockedCandidatesLesson,
@@ -7,6 +9,7 @@ import {
   buildNakedPairLesson,
   buildNakedSingleLesson,
   buildSimpleColouringLesson,
+  buildUniqueRectangleLesson,
 } from './lessonBuilders'
 import { decodePuzzleState } from './puzzleState'
 import type { TutorialLesson } from './tutorialTypes'
@@ -24,7 +27,9 @@ import type { TutorialLesson } from './tutorialTypes'
 
 const SAMPLE_BOARD = SAMPLE_PUZZLE.map((row) => row.join('')).join('')
 
-export interface BasicsCard {
+/** One sub-tab of a tab that has several techniques (Basics, Abusing
+ * Uniqueness): its label, one line about it, and its example(s). */
+export interface LessonGroup {
   title: string
   blurb: string
   lessons: TutorialLesson[]
@@ -42,7 +47,7 @@ function safely(build: () => TutorialLesson): TutorialLesson[] {
   }
 }
 
-export function buildBasicsCards(): BasicsCard[] {
+export function buildBasicsGroups(): LessonGroup[] {
   const sample = decodePuzzleState(SAMPLE_BOARD)
   return [
     {
@@ -76,6 +81,131 @@ export function buildBasicsCards(): BasicsCard[] {
           [1, 3],
         ),
       ),
+    },
+  ]
+}
+
+/** Abusing Uniqueness: one sub-tab per technique. Every position here was
+ * mined from real solves as the first stuck point after the Basics, and each
+ * needs no pencil marks removed - a plain autofill of the board shows it. */
+export function buildUniquenessGroups(): LessonGroup[] {
+  return [
+    {
+      title: 'UR Type 1',
+      blurb: 'Three corners hold only the pair, so the fourth must be something else.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-1',
+          title: 'UR Type 1',
+          state: decodePuzzleState('408025761206071508157608320589164273621537000743002156870019635315706902960053017'),
+          type: 'Type 1',
+          corner: [8, 3],
+        }),
+      ),
+    },
+    {
+      title: 'UR Type 4',
+      blurb: 'One pair digit is locked into the two extra corners, so the other pair digit leaves them.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-4',
+          title: 'UR Type 4',
+          state: decodePuzzleState('754001000183726945962854371047589103510043097300017450000008514435162789801405632'),
+          type: 'Type 4',
+          corner: [6, 1],
+        }),
+      ),
+    },
+    {
+      title: 'UR Type 7a',
+      blurb: 'Two pair-only corners sit diagonally, and one of them is linked to a neighbour.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-7a',
+          title: 'UR Type 7a',
+          state: decodePuzzleState('430706520785492613020305007548671392000520000072840165217954836004238001803167200'),
+          type: 'Type 7a',
+          corner: [4, 0],
+        }),
+      ),
+    },
+    {
+      title: 'UR Type 7b',
+      blurb: 'Two links chain round the rectangle from a pair-only corner.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-7b',
+          title: 'UR Type 7b',
+          state: decodePuzzleState('100548007500763200070291504050176948417859002006432175700305406000904703000627800'),
+          type: 'Type 7b',
+          corner: [8, 7],
+        }),
+      ),
+    },
+    {
+      title: 'UR Type 7c',
+      blurb: 'Each side of the rectangle is locked to a different pair digit.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-7c',
+          title: 'UR Type 7c',
+          state: decodePuzzleState('010052047034010952527490160783249615152060094040501270498125736075906401061074509'),
+          type: 'Type 7c',
+          corner: [1, 3],
+        }),
+      ),
+    },
+    {
+      title: 'UR Type 7d',
+      blurb: 'Hidden Rectangle: the corner opposite a pair-only cell is linked to both its neighbours.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-7d',
+          title: 'UR Type 7d',
+          state: decodePuzzleState('504769803839152467607483095046530900098240536352690040981306054473905680265804309'),
+          type: 'Type 7d',
+          corner: [3, 5],
+        }),
+      ),
+    },
+    {
+      title: 'BUG+1',
+      blurb: 'Every cell has two candidates except one: that cell holds the digit that breaks the pattern.',
+      lessons: safely(() =>
+        buildBugPlusOneLesson(
+          'bug-plus-one',
+          'BUG+1',
+          'Bivalue Universal Grave, plus one.',
+          decodePuzzleState('086307250205608703734521869802736500053284607647915382561473928328169475479852136'),
+        ),
+      ),
+    },
+    {
+      title: 'Bivalue Oddagon',
+      blurb:
+        "An odd loop of cells can't be filled with just two digits. Strictly, this one doesn't need uniqueness - such a loop has no solution at all - but it's a close cousin of the patterns here.",
+      lessons: [
+        ...safely(() =>
+          buildBivalueOddagonLesson({
+            id: 'oddagon-1',
+            title: 'One way out',
+            hint: 'Type 1: a single cell can break the loop.',
+            state: decodePuzzleState('815006024427850601936421857183945762592637418674218500058060140041500086369184275'),
+            type: 1,
+            cell: [7, 5],
+          }),
+        ),
+        ...safely(() =>
+          buildBivalueOddagonLesson({
+            id: 'oddagon-2',
+            title: 'Several ways out',
+            hint: 'Type 2: the loop is broken by one of a few cells, all with the same extra digit.',
+            state: decodePuzzleState('285090763103500492094002581501009826029050134408200957917625348842973615356000279'),
+            type: 2,
+            cell: [1, 5],
+          }),
+        ),
+      ],
     },
   ]
 }

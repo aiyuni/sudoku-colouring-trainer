@@ -335,22 +335,88 @@
   line-height: 1;
 }
 
-.help-body {
+/* Quickstart box, tabs and tab content scroll as one, between the fixed
+   header and footer. */
+.help-scroll {
+  /* The offsetParent HelpModal measures the tab panel against. */
+  position: relative;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+}
+
+.help-body {
   padding: 1rem 1.25rem 0.5rem;
 }
 
-.help-intro {
-  white-space: pre-line;
-  margin: 0 0 1.25rem;
-  padding: 0.75rem 0.9rem;
-  font-size: 0.9rem;
+/* The "keep the defaults" box - above the tabs, so it's the first thing read
+   whichever tab is open. */
+.help-quickstart {
+  margin: 1rem 1.25rem 0;
+  padding: 0.8rem 1rem;
+  color: #14532d;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-left: 5px solid #16a34a;
+  border-radius: 0.5rem;
+}
+
+.help-quickstart-heading {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.help-quickstart-text {
+  margin: 0.3rem 0 0;
+  font-size: 0.88rem;
   line-height: 1.5;
-  color: #1e3a8a;
+}
+
+/* One tab per settings menu - same look as the Techniques overview's tabs. */
+.help-tabs {
+  /* Stays in view while the tab's content scrolls under it. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+  padding: 0 1.25rem;
+  overflow-x: auto;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.help-tab {
+  flex: none;
+  padding: 0.55rem 0.9rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.help-tab:hover {
+  color: #0f172a;
   background: #eff6ff;
-  border-left: 4px solid #3b82f6;
-  border-radius: 0.4rem;
+}
+
+.help-tab.active {
+  color: #1d4ed8;
+  border-bottom-color: #3b82f6;
+  background: transparent;
+}
+
+.help-tab-intro {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #64748b;
 }
 
 .help-link {
@@ -1732,14 +1798,37 @@ button.primary {
     color: #93c5fd;
   }
 
-  .help-intro {
-    color: #bfdbfe;
+  .help-quickstart {
+    color: #bbf7d0;
+    background: #0f1f13;
+    border-color: #14532d;
+    border-left-color: #22c55e;
+  }
+
+  .help-tabs {
+    background: #1e293b;
+    border-color: #334155;
+  }
+
+  .help-tab {
+    background: transparent;
+    color: #94a3b8;
+    border-color: transparent;
+  }
+
+  .help-tab:hover {
+    color: #e2e8f0;
     background: #16233a;
-    border-left-color: #60a5fa;
+  }
+
+  .help-tab.active {
+    color: #93c5fd;
+    border-bottom-color: #60a5fa;
   }
 
   .help-section-title,
-  .help-section-intro {
+  .help-section-intro,
+  .help-tab-intro {
     color: #94a3b8;
   }
 
@@ -1961,6 +2050,7 @@ button.primary {
 }
 
 .compact-phone .main-toolbar .settings-trigger,
+.compact-phone .main-toolbar .dragon-config-trigger,
 .compact-phone .main-toolbar .more-trigger {
   min-width: var(--compact-touch);
   padding: 0.5rem;

@@ -18,6 +18,7 @@ import {
   buildLinkGraphs,
   classifyShortAic,
   SudokuShortAicFinder,
+  type LinkGraphs,
   type ShortAicInstance,
 } from './SudokuShortAicFinder'
 import { sudokuUnits } from './SudokuUnits'
@@ -91,6 +92,13 @@ export interface DragonExtendOptions {
    * see extendOptimized. Like `exhaustive`, it never changes *whether* a
    * chain yields a result, only which moves it reports. */
   optimize?: boolean
+  /** Optimize Dynamic Dragons - defaults to false; only matters with both
+   * `optimize` and `dynamic`. When true, the search also branches on every
+   * candidate Extension Rule 3 can force (not just its first, and not only
+   * when a side has no plain extension), so a Dynamic Dragon too is reported
+   * with as few extensions as the search can find. Much costlier than plain
+   * Optimize - see OPTIMIZE_MAX_RULE3_SIMULATIONS. */
+  optimizeDynamic?: boolean
 }
 
 export interface DragonCandidateRef {
@@ -281,7 +289,7 @@ function uniqueCells(eliminations: { row: number; col: number }[]): readonly (re
 /** Every non-colouring technique Extension Rule 3 can lean on - 'hidden
  * single' never actually appears in a Rule3ChainStep (it's always the
  * final technique, never a chainable antecedent - see
- * findNewlyHiddenSingleCell), but is included here so it shares one type
+ * findNewlyHiddenSingleCells), but is included here so it shares one type
  * with the final-technique parameter and DragonMove.dynamicTechniques. */
 export type Rule3Technique =
   | 'hidden single'
@@ -417,18 +425,225 @@ function sameUnit(a: readonly [number, number], b: readonly [number, number]): b
  * runs live, on every board/candidate change). */
 const MAX_RULE3_SIMULATION_STEPS = 200
 
-/** Optimize Dragons' per-phase search budget, counted in extension lookups
- * (one side's Rule 1 -> 2 -> hidden single [-> Rule 3] attempt on one
- * state). Past it, the phase falls back to the default alternating result,
- * so this only bounds how hard it tries, never correctness. Sized for a
- * computation that runs live on every board change, per stuck chain. */
-const OPTIMIZE_MAX_EXTENSION_SEARCHES = 400
+/** When collecting *every* move (Optimize Dynamic Dragons), the simulation
+ * runs until nothing more applies instead of stopping at its first forced
+ * candidate - and with AICs enabled, every step that no simpler technique
+ * covers starts a full AIC search, by far the costliest part (a generic AIC
+ * search especially). So the AIC search may run only this many times per
+ * collecting simulation; after that, AICs count as "nothing more applies".
+ * The non-AIC techniques are cheap and aren't limited, so with AICs off
+ * (the default) this changes nothing. Measured: capping *all* steps instead
+ * cost as much quality with AICs off as on. */
+const MAX_RULE3_ENUMERATION_AIC_SEARCHES = 4
+
+/** Optimize Dragons' per-phase search budget, counted in distinct colourings
+ * tried (each one an elimination check, and later its own extension scan).
+ * Past it, the phase falls back to the default alternating result, so this
+ * only bounds how hard it tries, never correctness. Sized for a computation
+ * that runs live on every board change, per stuck chain.
+ *
+ * The first phase (Medusa to first elimination - the Dragon itself) gets the
+ * full budget. Exhaustive mode's later phases start from an already long
+ * colouring whose alternating baseline is typically far deeper than any
+ * search can reach, so they'd mostly just burn the budget before falling
+ * back; they get a smaller one. */
+const OPTIMIZE_MAX_SEARCH_STATES = 3000
+const OPTIMIZE_MAX_SEARCH_STATES_LATER_PHASES = 500
+
+/** Optimize Dynamic Dragons' per-phase budget of fresh Extension Rule 3
+ * simulations (each one the whole technique battery, run until nothing more
+ * applies, on one side's hypothetical board). Past it, a newly reached
+ * colouring doesn't get its own simulation and uses the Rule 3 moves it
+ * inherited instead (see OptimizeState.rule3Known) - still valid, just
+ * possibly missing a move only its newest candidate unlocks. The search is
+ * breadth-first, so the budget goes to the shallowest colourings first,
+ * where a shorter Dragon would be. */
+const OPTIMIZE_MAX_RULE3_SIMULATIONS = 20
+const OPTIMIZE_MAX_RULE3_SIMULATIONS_LATER_PHASES = 2
+/** The same, for plain Optimize Dragons' Rule 3 fallback in dynamic mode
+ * (one simulation, stopping at its first forced candidate, for a side with
+ * no plain extension) - cheaper each, so more of them. */
+const OPTIMIZE_MAX_RULE3_FALLBACK_SIMULATIONS = 60
+const OPTIMIZE_MAX_RULE3_FALLBACK_SIMULATIONS_LATER_PHASES = 15
+
+/** Every cell index (row * 9 + col) sharing a row, column or box with each
+ * cell - the cell itself included, as sameUnit counts it. Fixed, so built
+ * once. */
+const PEERS_WITH_SELF: readonly (readonly number[])[] = Array.from({ length: 81 }, (_, cell) => {
+  const r = Math.floor(cell / 9)
+  const c = cell % 9
+  const peers: number[] = []
+  for (let other = 0; other < 81; other++) {
+    const r2 = Math.floor(other / 9)
+    const c2 = other % 9
+    if (r === r2 || c === c2 || (Math.floor(r / 3) === Math.floor(r2 / 3) && Math.floor(c / 3) === Math.floor(c2 / 3))) {
+      peers.push(other)
+    }
+  }
+  return peers
+})
+
+/** seen[(digit - 1) * 81 + row * 9 + col]: some node passing `include`, of
+ * that digit, is in a different cell sharing a row, column or box with this
+ * one - exactly what the old per-cell "sees this colour" scans (seesSide,
+ * Extension Rule 1's seesPrimary) asked, own cell excluded. */
+function seenByNodes(nodes: Iterable<DragonNode>, include: (n: DragonNode) => boolean): Uint8Array {
+  const seen = new Uint8Array(9 * 81)
+  for (const n of nodes) {
+    if (!include(n)) {
+      continue
+    }
+    const cell = n.row * 9 + n.col
+    const base = (n.digit - 1) * 81
+    for (const peer of PEERS_WITH_SELF[cell]) {
+      if (peer !== cell) {
+        seen[base + peer] = 1
+      }
+    }
+  }
+  return seen
+}
+
+/** Whether findEliminationMoves would return anything - the same conditions
+ * as findMassElimination and findRule3/4/5, each only asking whether a
+ * match exists, answered from one table of which cells see each (side,
+ * digit) instead of scanning every node per candidate. Must stay exactly in
+ * step with those methods: a false "no" would silently drop eliminations.
+ * They only ever look at a node's side, never primary vs dragon colour, so
+ * neither does this. */
+function hasAnyElimination(nodes: readonly DragonNode[], board: Board, candidates: CandidateGrid): boolean {
+  // sees[(side * 9 + digit - 1) * 81 + cell]: some node of that side and
+  // digit shares a unit with the cell (or is in it).
+  const sees = new Uint8Array(2 * 9 * 81)
+  const cellSides = new Uint8Array(81) // bit 1 = side A, bit 2 = side B
+  const cellNodeCount = new Uint8Array(81)
+  const cellFirstDigit = new Uint8Array(81)
+  const colored = new Uint8Array(81 * 9)
+  for (const n of nodes) {
+    const cell = n.row * 9 + n.col
+    const side = sideOf(n.color) === 'A' ? 0 : 1
+    const base = (side * 9 + n.digit - 1) * 81
+    // Mass elimination (same side twice): two nodes in one cell, or the
+    // same digit in one unit (an earlier node of this side and digit
+    // already sees this cell).
+    if (cellSides[cell] & (1 << side) || sees[base + cell]) {
+      return true
+    }
+    cellSides[cell] |= 1 << side
+    if (cellNodeCount[cell]++ === 0) {
+      cellFirstDigit[cell] = n.digit
+    }
+    colored[cell * 9 + n.digit - 1] = 1
+    for (const peer of PEERS_WITH_SELF[cell]) {
+      sees[base + peer] = 1
+    }
+  }
+  for (let cell = 0; cell < 81; cell++) {
+    const row = Math.floor(cell / 9)
+    const col = cell % 9
+    if (board[row][col] !== 0) {
+      continue
+    }
+    const marks = candidates[row][col]
+    const sides = cellSides[cell]
+    if (sides === 0) {
+      // Mass elimination: an uncoloured cell every candidate of which sees
+      // one side.
+      let anyDigit = false
+      let allSeeA = true
+      let allSeeB = true
+      for (let d = 0; d < 9; d++) {
+        if (!marks[d]) {
+          continue
+        }
+        anyDigit = true
+        allSeeA &&= sees[d * 81 + cell] === 1
+        allSeeB &&= sees[(9 + d) * 81 + cell] === 1
+      }
+      if (anyDigit && (allSeeA || allSeeB)) {
+        return true
+      }
+    }
+    for (let d = 0; d < 9; d++) {
+      if (!marks[d] || colored[cell * 9 + d]) {
+        continue
+      }
+      // Rule 3: an uncoloured candidate seeing its digit on both sides.
+      if (sees[d * 81 + cell] && sees[(9 + d) * 81 + cell]) {
+        return true
+      }
+      // Rule 4: a cell holding both sides, with an uncoloured candidate.
+      if (sides === 3) {
+        return true
+      }
+      // Rule 5: a cell with exactly one node, another candidate of which
+      // sees its digit on the other side (the lone node is a different
+      // digit, so no same-cell node can be the one seen).
+      if (cellNodeCount[cell] === 1 && d + 1 !== cellFirstDigit[cell]) {
+        const otherSide = sides === 1 ? 1 : 0
+        if (sees[(otherSide * 9 + d) * 81 + cell]) {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
+
+/** How many Rule 3 finder results memoFind keeps (all finders together).
+ * Measured on a 41-step solve path (every AIC kind, AIC limit off, Optimize
+ * Dynamic on): Dynamic Dragon work took 21.3 s with no cache, 17.0 s at
+ * 5000 entries (~6 MB retained), 15.7 s at 20000 (~29 MB). 10000 is the
+ * middle of that curve, ~15 MB. */
+const FINDER_MEMO_MAX_ENTRIES = 10000
+
+/** The whole grid as a compact string: per cell, its digit (or 0) and its
+ * candidate marks as a 9-bit mask - two characters, so equal keys mean
+ * exactly equal grids. */
+function gridKey(board: Board, candidates: CandidateGrid): string {
+  let key = ''
+  for (let row = 0; row < BOARD_SIZE; row++) {
+    for (let col = 0; col < BOARD_SIZE; col++) {
+      const marks = candidates[row][col]
+      let mask = 0
+      for (let d = 0; d < 9; d++) {
+        if (marks[d]) {
+          mask |= 1 << d
+        }
+      }
+      key += String.fromCharCode(48 + board[row][col], 0x4000 + mask)
+    }
+  }
+  return key
+}
+
+/** A hidden single on a side's hypothetical board. */
+interface HiddenSingleFind {
+  row: number
+  col: number
+  digit: number
+  unitKind: 'row' | 'column' | 'box'
+  /** The unit's own 9 cells - a hidden single's validity rests on *all* of
+   * them (every other one no longer holding this digit), not just the
+   * resulting cell, so this is what dependency-tracking needs to check a
+   * prior antecedent against - see findExtensionRule3Move. */
+  unit: readonly (readonly [number, number])[]
+}
 
 /** One branch of Optimize Dragons' search - see extendOptimized. */
 interface OptimizeState {
   nodeMap: Map<string, DragonNode>
   moves: DragonMove[]
   counter: number
+  /** Optimize Dynamic Dragons only: every Extension Rule 3 move known so
+   * far for each side, carried down from parent to child. A move derived
+   * from some of a side's candidates stays valid once the side has more
+   * ("if the side is true, these candidates are, so ... forces X" doesn't
+   * care what else the side holds), so a child inherits its parent's
+   * without simulating again. Reset when an exhaustive-mode elimination
+   * changes the candidates, since its explanation would describe marks that
+   * are gone. */
+  rule3Known: Record<Side, DragonMove[]>
 }
 
 /** Where extend()'s loop stands once it next needs an extension, or why it
@@ -453,12 +668,54 @@ interface OptimizePhaseResult {
 /** A colouring's identity for Optimize Dragons' state dedup - which
  * candidates carry which colour, independent of the order they got it. */
 function colouringSignature(nodeMap: Map<string, DragonNode>): string {
-  return Array.from(nodeMap.values(), (n) => `${n.row}${n.col}${n.digit}${n.color}`)
-    .sort()
-    .join(',')
+  // One code per node - (cell, digit, colour), unique by construction and
+  // under 2916 - sorted numerically and packed into a string: equal
+  // signatures mean exactly equal colourings. Called for every state the
+  // Optimize search generates, so this avoids building and sorting a string
+  // per node.
+  const codes = new Uint16Array(nodeMap.size)
+  let i = 0
+  for (const n of nodeMap.values()) {
+    codes[i++] = ((n.row * 9 + n.col) * 9 + n.digit - 1) * 4 + COLOR_CODE[n.color]
+  }
+  codes.sort()
+  return String.fromCharCode(...codes)
 }
 
+const COLOR_CODE: Record<DragonColor, number> = { blue: 0, yellow: 1, darkBlue: 2, orange: 3 }
+
 export class SudokuDragonFinder {
+  /** Extension Rule 3 finder results by hypothetical grid - see memoFind. */
+  private readonly finderMemo = new Map<string, unknown>()
+
+  /** Every Rule 3 technique finder is a pure function of (board,
+   * candidates), and the same hypothetical grid comes up again and again:
+   * the default path, Optimize's fallback and Optimize Dynamic's every-move
+   * simulation all simulate the same colourings, stepping through identical
+   * grids until they first diverge, and consecutive solve-path positions
+   * repeat many of them too (measured: ~45% of all finder calls on a long
+   * solve path were a grid already seen). So each result is kept, keyed by
+   * finder and the grid itself (gridKey - the whole grid, not a hash, so a
+   * hit is always the identical input), in a bounded least-recently-used
+   * map. Results are only ever read, never mutated, by the simulation and
+   * the moves it builds, so sharing them is safe. */
+  private memoFind<T>(finder: string, grid: string, compute: () => T): T {
+    const key = `${finder}|${grid}`
+    if (this.finderMemo.has(key)) {
+      const hit = this.finderMemo.get(key) as T
+      // Least recently used goes first: re-insert on a hit.
+      this.finderMemo.delete(key)
+      this.finderMemo.set(key, hit)
+      return hit
+    }
+    const result = compute()
+    this.finderMemo.set(key, result)
+    if (this.finderMemo.size > FINDER_MEMO_MAX_ENTRIES) {
+      this.finderMemo.delete(this.finderMemo.keys().next().value!)
+    }
+    return result
+  }
+
   private readonly pairFinder = new SudokuPairFinder()
   private readonly lockedCandidateFinder = new SudokuLockedCandidateFinder()
   private readonly medusaFinder = new SudokuMedusaFinder()
@@ -544,6 +801,7 @@ export class SudokuDragonFinder {
         exhaustive,
         allowedRule3Techniques,
         aicLimitPerStep,
+        options.optimizeDynamic ?? false,
       )
     }
 
@@ -734,8 +992,9 @@ export class SudokuDragonFinder {
    * path: the two sides take turns, each taking the first extension its
    * rules find. Here each *phase* - the colouring from the medusa (or, in
    * exhaustive mode, from the last applied elimination) up to the next
-   * elimination - is instead a search over which side extends at each
-   * point, to reach an elimination with as few extension moves as possible.
+   * elimination - is instead a search over which candidate (of either side)
+   * gets coloured at each point, to reach an elimination with as few
+   * extension moves as possible.
    * Promotions and medusa growth aren't extensions (they're forced, and
    * applied exactly where the default loop applies them), so they're free.
    *
@@ -746,23 +1005,26 @@ export class SudokuDragonFinder {
    *     *whether* a chain resolves. That matters beyond tidiness: the
    *     plain-vs-Dynamic split (App's computeStuckDynamicDragonExtensions)
    *     and the puzzle generator both decide from a non-optimized call.
-   *  2. Breadth-first search over "extend side A or side B next", strictly
-   *     shallower than the baseline (so it can only ever improve on it),
-   *     deduplicating states by their exact colouring - interleavings that
-   *     colour the same candidates reach the same state, so the search is
-   *     usually far smaller than 2^depth. The first state at the shallowest
-   *     depth that reaches an elimination wins (side A tried before B at
-   *     each state, so ties are deterministic).
-   *  3. If the search exceeds OPTIMIZE_MAX_EXTENSION_SEARCHES extension
-   *     lookups (each can be a full Rule 3 simulation in dynamic mode), it
+   *  2. Breadth-first search over every extension either side could take
+   *     next (allExtensions: every Rule 1, Rule 2 and hidden-single hit,
+   *     not just the first), strictly shallower than the baseline (so it
+   *     can only ever improve on it), deduplicating states by their exact
+   *     colouring - orders that colour the same candidates reach the same
+   *     state. The first state at the shallowest depth that reaches an
+   *     elimination wins (side A before B, then each rule's scan order, so
+   *     ties are deterministic).
+   *  3. If the search exceeds OPTIMIZE_MAX_SEARCH_STATES colourings, it
    *     gives up and the baseline stands.
    *
-   * Within one side, the extension taken is still the first one its rules
-   * find (Rule 1 -> Rule 2 -> hidden single -> Rule 3), exactly as in the
-   * default loop - the search chooses between sides, not between every
-   * possible candidate on a side, which would multiply the branching (and
-   * need every rule rewritten to enumerate all its finds) for a live
-   * per-board-change computation. So "fewest" is fewest over side orders. */
+   * Branching on the first hit only (what this first did) missed short
+   * Dragons whenever one side had nothing to extend: the side choice was
+   * then forced, so the search was the default path. E.g. a chain whose
+   * light blue needed 3 extensions (the last a hidden single) for a Rule 5
+   * elimination was reported as a 22-extension mass elimination, because
+   * the fixed scan order kept picking other Rule 1/2 hits first.
+   *
+   * Rule 3 (Dynamic) is still only a fallback for a side with no plain
+   * extension, and only its first find - see allExtensions. */
   private extendOptimized(
     seedNodeMap: Map<string, DragonNode>,
     seedMoves: DragonMove[],
@@ -772,6 +1034,7 @@ export class SudokuDragonFinder {
     exhaustive: boolean,
     allowedRule3Techniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
+    optimizeDynamic: boolean,
   ): DragonResult | null {
     // Same meaning as in extend(): fixed within a phase, changed only when
     // an exhaustive-mode elimination is applied between phases.
@@ -785,7 +1048,14 @@ export class SudokuDragonFinder {
       nodeMap: new Map(state.nodeMap),
       moves: state.moves.slice(),
       counter: state.counter,
+      // Lists are replaced, never mutated, so sharing them is safe.
+      rule3Known: { ...state.rule3Known },
     })
+    // Fresh Rule 3 simulation budgets for the search, per phase: the plain
+    // search's one-move fallback, and Optimize Dynamic Dragons' every-move
+    // simulations. Separate, so the first pass can't starve the second.
+    let fallbackRule3SimulationsLeft = OPTIMIZE_MAX_RULE3_FALLBACK_SIMULATIONS
+    let everyRule3SimulationsLeft = OPTIMIZE_MAX_RULE3_SIMULATIONS
 
     const findExtension = (state: OptimizeState, primary: PrimaryColor): DragonMove | null =>
       this.findExtensionRule1Move(state.nodeMap, board, workingCandidates, primary) ??
@@ -914,35 +1184,139 @@ export class SudokuDragonFinder {
       }
     }
 
-    // Breadth-first over which side extends next, at most maxDepth
-    // extensions deep. Null if nothing within reach, or over budget.
-    const searchFewerExtensions = (start: OptimizeState, maxDepth: number): OptimizePhaseResult | null => {
+    // Every extension this side could take next, not just the first one the
+    // default loop takes - the search branches on each. Rules 1, 2 and the
+    // hidden single are cheap scans, so all of their hits are listed (one
+    // move per candidate, the simplest rule's explanation kept). Rule 3
+    // stays what it is in the default loop: a fallback only when the side
+    // has no plain extension at all, and only its first find - enumerating
+    // every Rule 3 simulation would multiply the most expensive step.
+    //
+    // What a side can extend with depends only on that side's own cells,
+    // apart from skipping candidates (Rule 2: cells) the other side has
+    // already coloured - so it's computed once per distinct side colouring,
+    // from that side's cells alone, and the other side's colouring is
+    // filtered out per state. Same moves as scanning the full state, but a
+    // side that isn't changing (often one side has nothing to extend at
+    // all) isn't rescanned - or, in dynamic mode, re-simulated - for every
+    // state of the other. Keyed per phase: the working candidates change
+    // between phases.
+    let sideExtensionCache = new Map<
+      string,
+      { plain: DragonMove[]; rule3: DragonMove | null | undefined; rule3All?: DragonMove[] }
+    >()
+    const usableIn = (state: OptimizeState, move: DragonMove): boolean => {
+      const [n] = move.colored
+      if (state.nodeMap.has(nodeKey(n.row, n.col, n.digit))) {
+        return false
+      }
+      // Rule 2 only ever colours a cell with no coloured candidate yet.
+      return (
+        move.kind !== 'extension-rule2' ||
+        !markedCandidateDigits(workingCandidates[n.row][n.col]).some((d) => state.nodeMap.has(nodeKey(n.row, n.col, d)))
+      )
+    }
+    const allExtensions = (state: OptimizeState, primary: PrimaryColor, everyRule3: boolean): DragonMove[] => {
+      const side = sideOfPrimary(primary)
+      const own = new Map(Array.from(state.nodeMap).filter(([, n]) => sideOf(n.color) === side))
+      const cacheKey = `${side}|${colouringSignature(own)}`
+      let cached = sideExtensionCache.get(cacheKey)
+      if (!cached) {
+        const plain: DragonMove[] = []
+        const found = new Set<string>()
+        for (const move of [
+          ...this.extensionRule1Moves(own, board, workingCandidates, primary, Infinity),
+          ...this.extensionRule2Moves(own, board, workingCandidates, primary, Infinity),
+          ...this.extensionHiddenSingleMoves(own, board, workingCandidates, primary, Infinity),
+        ]) {
+          const [n] = move.colored
+          const key = nodeKey(n.row, n.col, n.digit)
+          if (!found.has(key)) {
+            found.add(key)
+            plain.push(move)
+          }
+        }
+        cached = { plain, rule3: undefined }
+        sideExtensionCache.set(cacheKey, cached)
+      }
+      const moves = cached.plain.filter((move) => usableIn(state, move))
+      // Rule 3: with Optimize Dynamic Dragons (everyRule3) every move it can
+      // force is a branch; otherwise, as in the default loop, only one, and
+      // only when the side has no plain extension.
+      if (!dynamic || (!everyRule3 && moves.length > 0)) {
+        return moves
+      }
+      // A fresh simulation for this exact side colouring while the phase's
+      // budget lasts (the costliest thing in the search, by far), pooled
+      // with every Rule 3 move the state inherited - see rule3Known.
+      let fresh: DragonMove[] | undefined
+      if (everyRule3) {
+        if (cached.rule3All === undefined && everyRule3SimulationsLeft > 0) {
+          everyRule3SimulationsLeft--
+          cached.rule3All = this.extensionRule3Moves(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, Infinity)
+        }
+        fresh = cached.rule3All
+      } else {
+        if (cached.rule3 === undefined && fallbackRule3SimulationsLeft > 0) {
+          fallbackRule3SimulationsLeft--
+          cached.rule3 = this.findExtensionRule3Move(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep)
+        }
+        fresh = cached.rule3 === undefined ? undefined : cached.rule3 ? [cached.rule3] : []
+      }
+      const pool = new Map<string, DragonMove>()
+      for (const move of [...(fresh ?? []), ...state.rule3Known[side]]) {
+        const [n] = move.colored
+        const key = nodeKey(n.row, n.col, n.digit)
+        if (!pool.has(key)) {
+          pool.set(key, move)
+        }
+      }
+      state.rule3Known = { ...state.rule3Known, [side]: Array.from(pool.values()) }
+      // A candidate a plain rule also reaches keeps the plain explanation.
+      const plainKeys = new Set(moves.map((m) => nodeKey(m.colored[0].row, m.colored[0].col, m.colored[0].digit)))
+      for (const [key, move] of pool) {
+        if (!plainKeys.has(key) && usableIn(state, move)) {
+          moves.push(move)
+          if (!everyRule3) {
+            break
+          }
+        }
+      }
+      return moves
+    }
+
+    // Breadth-first over every extension either side could take next, at
+    // most maxDepth extensions deep. Null if nothing within reach, or over
+    // budget.
+    const searchFewerExtensions = (start: OptimizeState, maxDepth: number, everyRule3: boolean): OptimizePhaseResult | null => {
       const sides: PrimaryColor[] = [turnPrimary, oppositePrimary(turnPrimary)]
       const seen = new Set([colouringSignature(start.nodeMap)])
       let frontier = [start]
-      let lookups = 0
+      let statesTried = 0
       for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
         const next: OptimizeState[] = []
         for (const state of frontier) {
           for (const primary of sides) {
-            if (++lookups > OPTIMIZE_MAX_EXTENSION_SEARCHES) {
-              return null
-            }
-            const move = findExtension(state, primary)
-            if (!move) {
-              continue
-            }
-            const child = cloneState(state)
-            applyExtension(child, move)
-            const outcome = settle(child)
-            if (outcome.kind === 'extend') {
+            for (const move of allExtensions(state, primary, everyRule3)) {
+              const child = cloneState(state)
+              applyExtension(child, move)
+              // Interleavings that colour the same candidates reach the same
+              // state (settle is a pure function of the colouring), so a
+              // repeat is dropped before paying for settle.
               const signature = colouringSignature(child.nodeMap)
-              if (!seen.has(signature)) {
-                seen.add(signature)
-                next.push(child)
+              if (seen.has(signature)) {
+                continue
               }
-            } else if (outcome.kind !== 'dead-end') {
-              return { state: child, outcome, turn: oppositePrimary(primary), extensions: depth }
+              seen.add(signature)
+              if (++statesTried > (continuing ? OPTIMIZE_MAX_SEARCH_STATES_LATER_PHASES : OPTIMIZE_MAX_SEARCH_STATES)) {
+                return null
+              }
+              const outcome = settle(child)
+              if (outcome.kind === 'extend') {
+                next.push(child)
+              } else if (outcome.kind !== 'dead-end') {
+                return { state: child, outcome, turn: oppositePrimary(primary), extensions: depth }
+              }
             }
           }
         }
@@ -960,10 +1334,20 @@ export class SudokuDragonFinder {
       if (!baseline) {
         return null
       }
-      return (baseline.extensions > 1 && searchFewerExtensions(start, baseline.extensions - 1)) || baseline
+      let best = (baseline.extensions > 1 && searchFewerExtensions(start, baseline.extensions - 1, false)) || baseline
+      // Optimize Dynamic Dragons: a second search that also branches on
+      // every Rule 3 move, only looking for something shallower than the
+      // plain search already found. Run second, not instead: its much wider
+      // branching could hit the state budget before the depth the plain
+      // search reaches, so on its own it could do worse than plain Optimize;
+      // this way it never does, and the depth bound keeps it small.
+      if (dynamic && optimizeDynamic && best.extensions > 1) {
+        best = searchFewerExtensions(start, best.extensions - 1, true) ?? best
+      }
+      return best
     }
 
-    let state: OptimizeState = { nodeMap: seedNodeMap, moves: seedMoves, counter: 0 }
+    let state: OptimizeState = { nodeMap: seedNodeMap, moves: seedMoves, counter: 0, rule3Known: { A: [], B: [] } }
     for (;;) {
       const phase = runPhase(state)
       if (!phase) {
@@ -998,6 +1382,10 @@ export class SudokuDragonFinder {
         }
       }
       strongLinkGraph = null
+      sideExtensionCache = new Map()
+      state.rule3Known = { A: [], B: [] }
+      fallbackRule3SimulationsLeft = OPTIMIZE_MAX_RULE3_FALLBACK_SIMULATIONS_LATER_PHASES
+      everyRule3SimulationsLeft = OPTIMIZE_MAX_RULE3_SIMULATIONS_LATER_PHASES
       continuing = true
     }
   }
@@ -1051,27 +1439,6 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     }
   }
 
-  private seesSide(
-    nodeMap: Map<string, DragonNode>,
-    row: number,
-    col: number,
-    digit: number,
-    side: Side,
-  ): boolean {
-    for (const n of nodeMap.values()) {
-      if (sideOf(n.color) !== side || n.digit !== digit) {
-        continue
-      }
-      if (n.row === row && n.col === col) {
-        continue
-      }
-      if (sameUnit([row, col], [n.row, n.col])) {
-        return true
-      }
-    }
-    return false
-  }
-
   /** Extension Rule 1: assuming a medusa color is true, if exactly one
    * candidate of a digit in some section survives (doesn't see that color
    * elsewhere), it must be the placement under that assumption. Looks at
@@ -1084,44 +1451,71 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     candidates: CandidateGrid,
     primary: PrimaryColor,
   ): DragonMove | null {
+    return this.extensionRule1Moves(nodeMap, board, candidates, primary, 1)[0] ?? null
+  }
+
+  /** Every Extension Rule 1 move for this side, in scan order, stopping at
+   * `limit` - 1 for the default loop (its first hit, exactly as before),
+   * Infinity for Optimize Dragons' search, which branches on each of them.
+   * A candidate forced through more than one unit is listed once. */
+  private extensionRule1Moves(
+    nodeMap: Map<string, DragonNode>,
+    board: Board,
+    candidates: CandidateGrid,
+    primary: PrimaryColor,
+    limit: number,
+  ): DragonMove[] {
+    const moves: DragonMove[] = []
+    const found = new Set<string>()
     const side = sideOfPrimary(primary)
-    // This colour's nodes grouped by digit, built once: seesColor would
-    // otherwise rescan the whole node map for every cell of every unit, and
-    // this runs on every simulated step of every stuck chain.
-    const primaryByDigit: DragonNode[][] = Array.from({ length: 9 }, () => [])
-    for (const n of nodeMap.values()) {
-      if (n.color === primary) {
-        primaryByDigit[n.digit - 1].push(n)
-      }
-    }
-    const seesPrimary = (r: number, c: number, digit: number) =>
-      primaryByDigit[digit - 1].some((n) => !(n.row === r && n.col === c) && sameUnit([r, c], [n.row, n.col]))
+    // Which cells see a node of this colour, per digit, built once - this
+    // runs for every colouring the Optimize search tries and on every step
+    // of the default loop, and rescanning the node map for every cell of
+    // every unit was most of its cost.
+    const seesPrimary = seenByNodes(nodeMap.values(), (n) => n.color === primary)
     for (const unit of sudokuUnits()) {
       for (let digit = 1; digit <= 9; digit++) {
-        const cellsWithDigit = unit.filter(([r, c]) => board[r][c] === 0 && candidates[r][c][digit - 1])
-        if (cellsWithDigit.length < 2) {
+        // Cells of the unit holding the digit, and the ones among them not
+        // seeing it in this colour - only whether there are >= 2 of the
+        // first and exactly 1 of the second matters.
+        let withDigit = 0
+        let notSeeingCount = 0
+        let r = -1
+        let c = -1
+        for (const [ur, uc] of unit) {
+          if (board[ur][uc] !== 0 || !candidates[ur][uc][digit - 1]) {
+            continue
+          }
+          withDigit++
+          if (!seesPrimary[(digit - 1) * 81 + ur * 9 + uc]) {
+            notSeeingCount++
+            r = ur
+            c = uc
+          }
+        }
+        if (withDigit < 2 || notSeeingCount !== 1) {
           continue
         }
-        const notSeeing = cellsWithDigit.filter(([r, c]) => !seesPrimary(r, c, digit))
-        if (notSeeing.length !== 1) {
+        const key = nodeKey(r, c, digit)
+        if (nodeMap.has(key) || found.has(key)) {
           continue
         }
-        const [r, c] = notSeeing[0]
-        if (nodeMap.has(nodeKey(r, c, digit))) {
-          continue
-        }
+        found.add(key)
         const secondary = secondaryForSide(side)
-        return {
+        moves.push({
           id: '',
           kind: 'extension-rule1',
           description: `Assuming ${colorLabel(primary)} is true: ${cellRef(r, c)} would be the only remaining ${digit} in its ${classifyUnitKind(unit)}, so colour it ${colorLabel(secondary)}.`,
           colored: [{ row: r, col: c, digit, color: secondary }],
           eliminated: [],
           solved: [],
+        })
+        if (moves.length >= limit) {
+          return moves
         }
       }
     }
-    return null
+    return moves
   }
 
   /** Places this side's own already-coloured cells onto a copy of the
@@ -1169,24 +1563,34 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     candidates: CandidateGrid,
     primary: PrimaryColor,
   ): DragonMove | null {
+    return this.extensionHiddenSingleMoves(nodeMap, board, candidates, primary, 1)[0] ?? null
+  }
+
+  /** Every hidden-single extension for this side, in scan order, up to
+   * `limit` - see extensionRule1Moves. */
+  private extensionHiddenSingleMoves(
+    nodeMap: Map<string, DragonNode>,
+    board: Board,
+    candidates: CandidateGrid,
+    primary: PrimaryColor,
+    limit: number,
+  ): DragonMove[] {
     const side = sideOfPrimary(primary)
     const secondary = secondaryForSide(side)
     const hypothetical = this.buildHypotheticalBoard(nodeMap, board, candidates, side)
     if (!hypothetical) {
-      return null
+      return []
     }
-    const hiddenSingle = this.findNewlyHiddenSingleCell(hypothetical.hypBoard, hypothetical.hypCandidates, nodeMap)
-    if (!hiddenSingle) {
-      return null
-    }
-    return {
-      id: '',
-      kind: 'extension-hidden-single',
-      description: `Assuming ${colorLabel(primary)} is true, then we have ${this.hiddenSingleClause(secondary, hiddenSingle)}.`,
-      colored: [{ row: hiddenSingle.row, col: hiddenSingle.col, digit: hiddenSingle.digit, color: secondary }],
-      eliminated: [],
-      solved: [],
-    }
+    return this.findNewlyHiddenSingleCells(hypothetical.hypBoard, hypothetical.hypCandidates, nodeMap, limit).map(
+      (hiddenSingle) => ({
+        id: '',
+        kind: 'extension-hidden-single',
+        description: `Assuming ${colorLabel(primary)} is true, then we have ${this.hiddenSingleClause(secondary, hiddenSingle)}.`,
+        colored: [{ row: hiddenSingle.row, col: hiddenSingle.col, digit: hiddenSingle.digit, color: secondary }],
+        eliminated: [],
+        solved: [],
+      }),
+    )
   }
 
   /** Extension Rule 2: assuming a medusa color (or its dragon color) is
@@ -1199,7 +1603,22 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     candidates: CandidateGrid,
     primary: PrimaryColor,
   ): DragonMove | null {
+    return this.extensionRule2Moves(nodeMap, board, candidates, primary, 1)[0] ?? null
+  }
+
+  /** Every Extension Rule 2 move for this side, in scan order, up to
+   * `limit` - see extensionRule1Moves. */
+  private extensionRule2Moves(
+    nodeMap: Map<string, DragonNode>,
+    board: Board,
+    candidates: CandidateGrid,
+    primary: PrimaryColor,
+    limit: number,
+  ): DragonMove[] {
+    const moves: DragonMove[] = []
     const side = sideOfPrimary(primary)
+    // See extensionRule1Moves - the same table, for the whole side.
+    const seesSide = seenByNodes(nodeMap.values(), (n) => sideOf(n.color) === side)
     for (let row = 0; row < BOARD_SIZE; row++) {
       for (let col = 0; col < BOARD_SIZE; col++) {
         if (board[row][col] !== 0) {
@@ -1209,23 +1628,26 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         if (digits.length === 0 || digits.some((d) => nodeMap.has(nodeKey(row, col, d)))) {
           continue
         }
-        const survivors = digits.filter((d) => !this.seesSide(nodeMap, row, col, d, side))
+        const survivors = digits.filter((d) => !seesSide[(d - 1) * 81 + row * 9 + col])
         if (survivors.length !== 1) {
           continue
         }
         const digit = survivors[0]
         const secondary = secondaryForSide(side)
-        return {
+        moves.push({
           id: '',
           kind: 'extension-rule2',
           description: `Assuming ${colorLabel(primary)} is true eliminates every other candidate from ${cellRef(row, col)}, leaving only ${digit} - colour it ${colorLabel(secondary)}.`,
           colored: [{ row, col, digit, color: secondary }],
           eliminated: [],
           solved: [],
+        })
+        if (moves.length >= limit) {
+          return moves
         }
       }
     }
-    return null
+    return moves
   }
 
   /** Extension Rule 3 (Dynamic Dragon Colouring only): Rules 1-2, and the
@@ -1280,11 +1702,54 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     allowedTechniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
   ): DragonMove | null {
+    return this.extensionRule3Moves(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, 1)[0] ?? null
+  }
+
+  /** Every Extension Rule 3 move for this side, up to `limit`. With
+   * `limit` 1 this is exactly findExtensionRule3Move's old behaviour: the
+   * simulation stops at the first candidate it forces. Otherwise
+   * (Optimize Dynamic Dragons) it records that candidate and keeps
+   * simulating - the forced candidate is left unplaced, and skipped by the
+   * "newly forced" checks from then on - so every candidate the simulation
+   * reaches becomes its own move, each explained by only the steps it
+   * depended on (buildRule3CombinedMove prunes the rest). The AIC limit
+   * covers the whole simulation, so no move ever leans on more than it. */
+  private extensionRule3Moves(
+    nodeMap: Map<string, DragonNode>,
+    board: Board,
+    candidates: CandidateGrid,
+    primary: PrimaryColor,
+    allowedTechniques: ReadonlySet<Rule3Technique>,
+    aicLimitPerStep: boolean,
+    limit: number,
+  ): DragonMove[] {
+    const moves: DragonMove[] = []
+    // nodeMap plus every candidate already reported this call - what the
+    // "newly forced" checks skip.
+    const known = new Map(nodeMap)
+    /** Records a move; true once `limit` is reached (stop simulating).
+     * Never one for a candidate that's already coloured, by either side -
+     * the same rule every other extension path follows. The direct-solve
+     * branches (UR Type 1, BUG+1, Oddagon Type 1) used to return such a move
+     * anyway, recolouring the other side's dragon node (e.g. orange ->
+     * dark blue): that side silently lost a candidate it implied, and the
+     * per-side "found nothing" memo, which assumes a side's nodes only grow,
+     * could go stale. Now they're skipped and the simulation carries on. */
+    const emit = (move: DragonMove): boolean => {
+      const [n] = move.colored
+      const key = nodeKey(n.row, n.col, n.digit)
+      if (known.has(key)) {
+        return false
+      }
+      known.set(key, n)
+      moves.push(move)
+      return moves.length >= limit
+    }
     const side = sideOfPrimary(primary)
     const secondary = secondaryForSide(side)
     const hypothetical = this.buildHypotheticalBoard(nodeMap, board, candidates, side)
     if (!hypothetical) {
-      return null
+      return moves
     }
     const { hypBoard, hypCandidates } = hypothetical
 
@@ -1295,15 +1760,18 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     // reading of "used once within a step" either way.
     let aicStepsUsed = 0
 
+    // Collecting every move: how many more times the AIC search may run
+    // (see MAX_RULE3_ENUMERATION_AIC_SEARCHES). Unlimited for one move.
+    let aicSearchesLeft = limit === 1 ? Infinity : MAX_RULE3_ENUMERATION_AIC_SEARCHES
     for (let step = 0; step < MAX_RULE3_SIMULATION_STEPS; step++) {
       let appliedSomething = false
+      const grid = gridKey(hypBoard, hypCandidates)
 
       if (allowedTechniques.has('hidden single')) {
-        const hiddenSingle = this.findNewlyHiddenSingleCell(hypBoard, hypCandidates, nodeMap)
-        if (hiddenSingle) {
+        for (const hiddenSingle of this.findNewlyHiddenSingleCells(hypBoard, hypCandidates, known, limit - moves.length)) {
           // Never its own technique substep (see DragonRule3Substep) - the
           // closing "As a result, ..." substep states the hidden single.
-          return this.buildRule3CombinedMove(
+          const move = this.buildRule3CombinedMove(
             primary,
             steps,
             {
@@ -1318,11 +1786,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             { kind: 'hidden single', unitKind: hiddenSingle.unitKind },
             hiddenSingle.unit,
           )
+          if (emit(move)) {
+            return moves
+          }
         }
       }
 
       if (allowedTechniques.has('locked candidate')) {
-        for (const locked of this.lockedCandidateFinder.findInstances(hypBoard, hypCandidates)) {
+        for (const locked of this.memoFind('locked', grid, () => this.lockedCandidateFinder.findInstances(hypBoard, hypCandidates))) {
           if (locked.eliminations.length === 0) {
             continue
           }
@@ -1337,9 +1808,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             clause: this.lockedCandidateClause(locked),
             summaryName: `a Locked Candidate (${locked.type === 'pointing' ? 'Pointing' : 'Claiming'})`,
           }
-          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-          if (forced) {
-            return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+          if (
+            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+            )
+          ) {
+            return moves
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -1352,7 +1826,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
 
       // No allowedTechniques.has('naked pair') gate here - extend() always
       // adds 'naked pair' back to the set, so it can never be excluded.
-      for (const pair of this.pairFinder.findNakedPairs(hypBoard, hypCandidates)) {
+      for (const pair of this.memoFind('pair', grid, () => this.pairFinder.findNakedPairs(hypBoard, hypCandidates))) {
         if (pair.eliminations.length === 0) {
           continue
         }
@@ -1367,9 +1841,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           clause: this.nakedPairClause(pair),
           summaryName: 'a naked pair',
         }
-        const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-        if (forced) {
-          return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+        if (
+          this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+            emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+          )
+        ) {
+          return moves
         }
         steps.push(chainStep)
         appliedSomething = true
@@ -1387,7 +1864,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       const needsTriple = allowedTechniques.has('naked triple')
       const needsQuad = allowedTechniques.has('naked quad')
       const { triples, quads } = needsTriple || needsQuad
-        ? this.nakedSubsetFinder.findNakedTriplesAndQuads(hypBoard, hypCandidates)
+        ? this.memoFind('subset', grid, () => this.nakedSubsetFinder.findNakedTriplesAndQuads(hypBoard, hypCandidates))
         : { triples: [], quads: [] }
 
       for (const [technique, subsets] of [
@@ -1409,9 +1886,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             clause: this.nakedSubsetClause(subset),
             summaryName: technique === 'naked triple' ? 'a naked triple' : 'a naked quad',
           }
-          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-          if (forced) {
-            return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+          if (
+            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+            )
+          ) {
+            return moves
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -1426,7 +1906,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       }
 
       if (allowedTechniques.has('hidden pair')) {
-        for (const pair of this.hiddenPairFinder.findHiddenPairs(hypBoard, hypCandidates)) {
+        for (const pair of this.memoFind('hiddenPair', grid, () => this.hiddenPairFinder.findHiddenPairs(hypBoard, hypCandidates))) {
           if (pair.eliminations.length === 0) {
             continue
           }
@@ -1441,9 +1921,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             clause: this.hiddenPairClause(pair),
             summaryName: 'a hidden pair',
           }
-          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-          if (forced) {
-            return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+          if (
+            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+            )
+          ) {
+            return moves
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -1455,14 +1938,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       }
 
       if (allowedTechniques.has('UR')) {
-        for (const ur of this.uniqueRectangleFinder.find(hypBoard, hypCandidates)) {
+        for (const ur of this.memoFind('ur', grid, () => this.uniqueRectangleFinder.find(hypBoard, hypCandidates))) {
           const summaryName = `a Unique Rectangle (${ur.type})`
           if (ur.solvedCandidates.length > 0) {
             // The Unique Rectangle's own conclusion *is* the move (Type 1's
             // single-extra-candidate case only) - no need to also check for
             // a newly-single-candidate cell, and no reason to keep
             // simulating past it first.
-            return this.buildRule3CombinedMove(
+            const move = this.buildRule3CombinedMove(
               primary,
               steps,
               {
@@ -1476,6 +1959,10 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               { ...ur.solvedCandidates[0], color: secondary },
               { kind: 'direct' },
             )
+            if (emit(move)) {
+              return moves
+            }
+            continue
           }
           if (ur.eliminatedCandidates.length > 0) {
             for (const { row, col, digit } of ur.eliminatedCandidates) {
@@ -1489,9 +1976,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               clause: this.uniqueRectangleClause(ur),
               summaryName,
             }
-            const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-            if (forced) {
-              return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+            if (
+              this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+                emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+              )
+            ) {
+              return moves
             }
             steps.push(chainStep)
             appliedSomething = true
@@ -1508,9 +1998,9 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         // grid's one escape-hatch cell (and directly forces its own
         // solution) or it doesn't apply at all, unlike every other
         // technique here which can also just narrow things down.
-        const bugPlusOne = this.bugPlusOneFinder.find(hypBoard, hypCandidates)
+        const bugPlusOne = this.memoFind('bug', grid, () => this.bugPlusOneFinder.find(hypBoard, hypCandidates))
         if (bugPlusOne) {
-          return this.buildRule3CombinedMove(
+          const move = this.buildRule3CombinedMove(
             primary,
             steps,
             {
@@ -1524,14 +2014,17 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             { row: bugPlusOne.cell[0], col: bugPlusOne.cell[1], digit: bugPlusOne.solvedDigit, color: secondary },
             { kind: 'direct' },
           )
+          if (emit(move)) {
+            return moves
+          }
         }
       }
 
       if (allowedTechniques.has('bivalue oddagon')) {
-        for (const oddagon of this.bivalueOddagonFinder.find(hypBoard, hypCandidates)) {
+        for (const oddagon of this.memoFind('oddagon', grid, () => this.bivalueOddagonFinder.find(hypBoard, hypCandidates))) {
           const summaryName = `a Bivalue Oddagon (Type ${oddagon.type})`
           if (oddagon.solvedCell) {
-            return this.buildRule3CombinedMove(
+            const move = this.buildRule3CombinedMove(
               primary,
               steps,
               {
@@ -1545,6 +2038,10 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               { row: oddagon.solvedCell[0], col: oddagon.solvedCell[1], digit: oddagon.guardianDigit, color: secondary },
               { kind: 'direct' },
             )
+            if (emit(move)) {
+              return moves
+            }
+            continue
           }
           if (oddagon.eliminations.length > 0) {
             for (const { row, col, digit } of oddagon.eliminations) {
@@ -1558,9 +2055,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               clause: this.bivalueOddagonEliminationClause(oddagon),
               summaryName,
             }
-            const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-            if (forced) {
-              return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+            if (
+              this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+                emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+              )
+            ) {
+              return moves
             }
             steps.push(chainStep)
             appliedSomething = true
@@ -1576,24 +2076,22 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       // generic. The generic search only runs when nothing shorter applied
       // (it's a generator, so it's never started otherwise), and not at
       // all once the per-step AIC limit is used up.
-      if (!(aicLimitPerStep && aicStepsUsed >= 1)) {
-        // Built once and handed to both finders when both might run - short
-        // and generic AIC otherwise each rebuild the identical link graph
-        // for the same hypBoard/hypCandidates, and with the per-step limit
-        // off this whole block can run dozens of times per chain.
-        const needsGraph =
-          allowedTechniques.has('short single-digit aic') ||
-          allowedTechniques.has('short aic') ||
-          allowedTechniques.has('generic aic')
-        const sharedGraph = needsGraph ? buildLinkGraphs(hypBoard, hypCandidates) : undefined
+      if (!(aicLimitPerStep && aicStepsUsed >= 1) && aicSearchesLeft-- > 0) {
+        // Built at most once and handed to both finders - short and generic
+        // AIC otherwise each rebuild the identical link graph for the same
+        // hypBoard/hypCandidates, and with the per-step limit off this whole
+        // block can run dozens of times per chain. Only built when a finder's
+        // result isn't already cached (see memoFind).
+        let sharedGraph: LinkGraphs | undefined
+        const graph = () => (sharedGraph ??= buildLinkGraphs(hypBoard, hypCandidates))
         const aicsInOrder = function* (finder: SudokuDragonFinder): Generator<{ aic: ShortAicInstance; technique: AicTechnique }> {
           if (allowedTechniques.has('short single-digit aic') || allowedTechniques.has('short aic')) {
-            for (const aic of finder.shortAicFinder.findShortAics(hypBoard, hypCandidates, sharedGraph)) {
+            for (const aic of finder.memoFind('shortAic', grid, () => finder.shortAicFinder.findShortAics(hypBoard, hypCandidates, graph()))) {
               yield { aic, technique: classifyShortAic(aic) === 'single-digit' ? 'short single-digit aic' : 'short aic' }
             }
           }
           if (allowedTechniques.has('generic aic')) {
-            for (const aic of finder.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, sharedGraph)) {
+            for (const aic of finder.memoFind('genericAic', grid, () => finder.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, graph()))) {
               yield { aic, technique: 'generic aic' }
             }
           }
@@ -1616,9 +2114,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             summaryName: `a ${this.aicLabel(technique)} (Type ${aic.eliminationType})`,
             aic,
           }
-          const forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, nodeMap)
-          if (forced) {
-            return this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })
+          if (
+            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+            )
+          ) {
+            return moves
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -1629,15 +2130,36 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      // Nothing more applies - whatever's accumulated in `steps` never led
-      // anywhere actionable, so it's discarded rather than surfaced.
-      return null
+      // Nothing more applies - whatever's accumulated in `steps` that
+      // never led anywhere actionable is discarded rather than surfaced.
+      return moves
     }
 
-    // Exceeded the safety cap without either resolving or getting stuck -
-    // treat it the same as "nothing actionable found" rather than risk an
-    // unbounded simulation.
-    return null
+    // Exceeded the safety cap without getting stuck - keep what was found
+    // (always nothing when `limit` is 1, which returns at its first find),
+    // rather than risk an unbounded simulation.
+    return moves
+  }
+
+  /** After a Rule 3 step: hands every uncoloured, not-yet-reported cell the
+   * step left with a single candidate to `record` (just the first when
+   * only one move is wanted - `record` returns true to stop), returning
+   * whether `record` asked to stop. */
+  private emitForcedCells(
+    hypBoard: Board,
+    hypCandidates: CandidateGrid,
+    known: Map<string, DragonNode>,
+    record: (forced: { row: number; col: number; digit: number }) => boolean,
+  ): boolean {
+    for (let forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, known); forced; ) {
+      if (record(forced)) {
+        return true
+      }
+      // record() added it to `known` (or it already was), so the next
+      // scan moves past it.
+      forced = this.findNewlySingleCandidateCell(hypBoard, hypCandidates, known)
+    }
+    return false
   }
 
   /** Walks `steps` (in the order they were applied) backward from the
@@ -1671,7 +2193,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
    * antecedent is recorded in. `dependencyCells` is what dependency-
    * tracking checks prior steps against - defaults to `final.basisCells`,
    * but a hidden single's real dependency is its whole unit (see
-   * findNewlyHiddenSingleCell), not just the one cell it resolves, so that
+   * findNewlyHiddenSingleCells), not just the one cell it resolves, so that
    * case passes the unit's 9 cells here instead while still highlighting
    * only the resolved cell. */
   private buildRule3CombinedMove(
@@ -1800,36 +2322,49 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
    * any elimination-only technique on every iteration, since it needs
    * nothing beyond the current candidate marks to be a valid, standalone
    * conclusion - simulating a more complex technique to reach a cell a
-   * hidden single already resolves would misrepresent the reasoning. */
-  private findNewlyHiddenSingleCell(
+   * hidden single already resolves would misrepresent the reasoning.
+   *
+   * Every such hidden single, in scan order, up to `limit` - see
+   * extensionRule1Moves. A candidate that's a hidden single in more than one
+   * unit is listed once, with the first unit found. */
+  private findNewlyHiddenSingleCells(
     hypBoard: Board,
     hypCandidates: CandidateGrid,
     nodeMap: Map<string, DragonNode>,
-  ): {
-    row: number
-    col: number
-    digit: number
-    unitKind: 'row' | 'column' | 'box'
-    /** The unit's own 9 cells - a hidden single's validity rests on *all*
-     * of them (every other one no longer holding this digit), not just the
-     * resulting cell, so this is what dependency-tracking needs to check a
-     * prior antecedent against - see findExtensionRule3Move. */
-    unit: readonly (readonly [number, number])[]
-  } | null {
+    limit: number,
+  ): HiddenSingleFind[] {
+    const finds: HiddenSingleFind[] = []
+    const found = new Set<string>()
     for (const unit of sudokuUnits()) {
       for (let digit = 1; digit <= 9; digit++) {
-        const withCandidate = unit.filter(([r, c]) => hypBoard[r][c] === 0 && hypCandidates[r][c][digit - 1])
-        if (withCandidate.length !== 1) {
+        // Count without building a list - this runs on every simulated step.
+        let count = 0
+        let row = -1
+        let col = -1
+        for (const [r, c] of unit) {
+          if (hypBoard[r][c] === 0 && hypCandidates[r][c][digit - 1]) {
+            if (++count > 1) {
+              break
+            }
+            row = r
+            col = c
+          }
+        }
+        if (count !== 1) {
           continue
         }
-        const [row, col] = withCandidate[0]
-        if (nodeMap.has(nodeKey(row, col, digit))) {
+        const key = nodeKey(row, col, digit)
+        if (nodeMap.has(key) || found.has(key)) {
           continue
         }
-        return { row, col, digit, unitKind: classifyUnitKind(unit), unit }
+        found.add(key)
+        finds.push({ row, col, digit, unitKind: classifyUnitKind(unit), unit })
+        if (finds.length >= limit) {
+          return finds
+        }
       }
     }
-    return null
+    return finds
   }
 
   // --- Extension Rule 3 technique clauses: "a TECHNIQUE of DIGITS in
@@ -2056,6 +2591,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
   }
 
   private findEliminationMoves(nodes: DragonNode[], board: Board, candidates: CandidateGrid): DragonMove[] {
+    // Almost every call - once per colouring the Optimize search tries, and
+    // after every step of the default loop - finds nothing. The rules below
+    // each rescan every node for every candidate, so an exact, cheap "is
+    // there anything at all?" test goes first; only a yes pays for building
+    // the moves.
+    if (!hasAnyElimination(nodes, board, candidates)) {
+      return []
+    }
     const mass = this.findMassElimination(nodes, board, candidates)
     if (mass) {
       // A mass elimination resolves every node in the chain at once, so the

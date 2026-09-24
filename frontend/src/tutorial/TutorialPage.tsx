@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import TutorialGrid from './TutorialGrid'
-import { buildBasicsCards, buildColourLessons, type ColourTabId } from './tutorialExamples'
+import {
+  buildBasicsGroups,
+  buildColourLessons,
+  buildUniquenessGroups,
+  type ColourTabId,
+  type LessonGroup,
+} from './tutorialExamples'
 import type { TutorialColor, TutorialLesson } from './tutorialTypes'
 import './tutorial.css'
 
-type TabId = 'basics' | ColourTabId
+type TabId = 'basics' | ColourTabId | 'uniqueness'
 
 /** The tab bar and the one line under it. Edit the wording here. */
 const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
@@ -28,6 +34,12 @@ const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
     id: 'dynamic',
     label: 'Dynamic Dragon',
     tagline: 'The strongest Colouring technique.  Dynamic Dragons are Dragons that can call on other techniques to keep the colouring going when regular Dragons get stuck.',
+  },
+  {
+    id: 'uniqueness',
+    label: 'Abusing Uniqueness',
+    tagline:
+      "Shortcuts (primarily Unique Rectangles) that rely on a proper puzzle having exactly one solution: a pattern that would allow two solutions can never happen, so whatever prevents it must be true. Uniqueness is never needed to solve a puzzle - you can always solve it without these - so this whole section can be skipped.",
   },
 ]
 
@@ -153,18 +165,52 @@ export function LessonPlayer({ lesson, initialStep = 0 }: LessonPlayerProps) {
   )
 }
 
-/** Basics: every step of every example is on screen at once, side by side. */
-function BasicsView() {
-  const cards = useMemo(() => buildBasicsCards(), [])
+/** A tab that teaches several techniques: one sub-tab per technique, so the
+ * reader can jump straight to the one they want. A group whose every example
+ * was skipped (see `safely` in tutorialExamples.ts) gets no sub-tab. */
+function GroupTabs({ groups, label, render }: { groups: LessonGroup[]; label: string; render: (group: LessonGroup) => ReactNode }) {
+  const shown = groups.filter((group) => group.lessons.length > 0)
+  const [index, setIndex] = useState(0)
+  const group = shown[Math.min(index, shown.length - 1)]
+  if (!group) {
+    return <p className="tutorial-empty">These examples aren't available right now.</p>
+  }
   return (
-    <div className="tutorial-basics">
-      {cards.map((card) => (
-        <section key={card.title} className="tutorial-card">
-          <h2>{card.title}</h2>
-          <p className="tutorial-card-blurb">{card.blurb}</p>
-          {card.lessons.map((lesson) => (
+    <div className="tutorial-grouped">
+      <div className="tutorial-subtabs" role="tablist" aria-label={label}>
+        {shown.map((candidate, i) => (
+          <button
+            key={candidate.title}
+            type="button"
+            role="tab"
+            aria-selected={i === index}
+            className={['tutorial-subtab', i === index ? 'active' : ''].filter(Boolean).join(' ')}
+            onClick={() => setIndex(i)}
+          >
+            {candidate.title}
+          </button>
+        ))}
+      </div>
+      <p className="tutorial-subtab-blurb">{group.blurb}</p>
+      <div role="tabpanel" aria-label={group.title}>
+        {render(group)}
+      </div>
+    </div>
+  )
+}
+
+/** Basics: every step of the technique's example(s) on screen at once, side by side. */
+function BasicsView() {
+  const groups = useMemo(() => buildBasicsGroups(), [])
+  return (
+    <GroupTabs
+      groups={groups}
+      label="Basic techniques"
+      render={(group) => (
+        <section className="tutorial-card">
+          {group.lessons.map((lesson) => (
             <div key={lesson.id} className="tutorial-example">
-              {card.lessons.length > 1 && (
+              {group.lessons.length > 1 && (
                 <h3>
                   {lesson.title} <span className="tutorial-example-hint">{lesson.hint}</span>
                 </h3>
@@ -183,13 +229,31 @@ function BasicsView() {
             </div>
           ))}
         </section>
-      ))}
-    </div>
+      )}
+    />
+  )
+}
+
+/** Abusing Uniqueness: a sub-tab per technique, each played step by step. */
+function UniquenessView() {
+  const groups = useMemo(() => buildUniquenessGroups(), [])
+  return (
+    <GroupTabs
+      groups={groups}
+      label="Uniqueness techniques"
+      render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
+    />
   )
 }
 
 function ColourView({ tab }: { tab: ColourTabId }) {
   const lessons = useMemo(() => buildColourLessons(tab), [tab])
+  return <LessonSwitcher lessons={lessons} />
+}
+
+/** One or more examples played step by step, with a pill per example when
+ * there's more than one. */
+function LessonSwitcher({ lessons }: { lessons: TutorialLesson[] }) {
   const [index, setIndex] = useState(0)
   const lesson = lessons[Math.min(index, lessons.length - 1)]
   if (!lesson) {
@@ -287,7 +351,7 @@ export default function TutorialPage({ onClose, initialTab = 'basics' }: Tutoria
 
       <div className="tutorial-content" role="tabpanel" id="tutorial-panel" aria-labelledby={`tutorial-tab-${tab}`}>
         <p className="tutorial-tagline">{current.tagline}</p>
-        {tab === 'basics' ? <BasicsView /> : <ColourView key={tab} tab={tab} />}
+        {tab === 'basics' ? <BasicsView /> : tab === 'uniqueness' ? <UniquenessView /> : <ColourView key={tab} tab={tab} />}
       </div>
     </div>
   )

@@ -22,6 +22,7 @@ export interface AppSettings {
   allowedRule3Techniques: readonly Rule3Technique[]
   exhaustiveDragonColouring: boolean
   optimizeDragons: boolean
+  optimizeDynamicDragons: boolean
   aicLimitPerDragonStep: boolean
   dynamicDragonAutoSolveIncludesAics: boolean
   dragonGenerationDisregardsSingleDigitAic: boolean
@@ -44,6 +45,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   allowedRule3Techniques: DEFAULT_RULE3_TECHNIQUES,
   exhaustiveDragonColouring: true,
   optimizeDragons: false,
+  optimizeDynamicDragons: false,
   aicLimitPerDragonStep: true,
   dynamicDragonAutoSolveIncludesAics: false,
   dragonGenerationDisregardsSingleDigitAic: true,

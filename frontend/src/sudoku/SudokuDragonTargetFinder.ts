@@ -138,6 +138,9 @@ export interface DragonTargetSearch {
 export interface DragonTargetOptions {
   allowedRule3Techniques?: ReadonlySet<Rule3Technique>
   aicLimitPerStep?: boolean
+  /** The Optimize Dynamic Dragons setting: unlike plain Optimize (always on
+   * here), this one follows the user's setting - it's far costlier. */
+  optimizeDynamic?: boolean
 }
 
 function chainKeyOf(chain: MedusaChain): string {
@@ -239,6 +242,7 @@ export class SudokuDragonTargetFinder {
         dynamic: true,
         exhaustive: true,
         optimize: true,
+        optimizeDynamic: options.optimizeDynamic,
         allowedRule3Techniques: options.allowedRule3Techniques,
         aicLimitPerStep: options.aicLimitPerStep,
       })

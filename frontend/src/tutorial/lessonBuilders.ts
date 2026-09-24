@@ -1,5 +1,7 @@
 import { markedCandidateDigits } from '../sudoku/boardUtils'
 import { foldDragonMoves } from '../sudoku/dragonReplay'
+import { SudokuBivalueOddagonFinder } from '../sudoku/SudokuBivalueOddagonFinder'
+import { SudokuBugPlusOneFinder } from '../sudoku/SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from '../sudoku/SudokuColorFinder'
 import {
   SudokuDragonFinder,
@@ -10,6 +12,7 @@ import { SudokuLockedCandidateFinder } from '../sudoku/SudokuLockedCandidateFind
 import { SudokuMedusaFinder, type ColoredCandidate, type MedusaChain } from '../sudoku/SudokuMedusaFinder'
 import { SudokuPairFinder } from '../sudoku/SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE } from '../sudoku/SudokuRules'
+import { SudokuUniqueRectangleFinder, type UniqueRectangleTypeName } from '../sudoku/SudokuUniqueRectangleFinder'
 import type {
   CandRef,
   ColouredCand,
@@ -36,6 +39,9 @@ const medusaFinder = new SudokuMedusaFinder()
 const dragonFinder = new SudokuDragonFinder()
 const lockedFinder = new SudokuLockedCandidateFinder()
 const pairFinder = new SudokuPairFinder()
+const urFinder = new SudokuUniqueRectangleFinder()
+const bugFinder = new SudokuBugPlusOneFinder()
+const oddagonFinder = new SudokuBivalueOddagonFinder()
 
 // ---------------------------------------------------------------- helpers
 
@@ -794,4 +800,439 @@ function dragonFrame(moves: DragonMove[], index: number, lastIndex: number): Tut
     greenCells: move.dynamicTechniqueCells ? [...move.dynamicTechniqueCells] : undefined,
     links: move.aicChains?.flatMap((aic) => aic.links.map((link) => ({ from: link.from, to: link.to, kind: 'strong' as const }))),
   }
+}
+
+// ------------------------------------------------------- abusing uniqueness
+
+function sameCell(a: TutorialCell, b: TutorialCell): boolean {
+  return a[0] === b[0] && a[1] === b[1]
+}
+
+function cellList(cells: readonly TutorialCell[]): string {
+  return joinPhrases(cells.map(([r, c]) => cellName(r, c)))
+}
+
+/** The row/column/box a solved-digit count or strong link lives in, named
+ * the way every other lesson names units. */
+function unitContaining(kind: UnitKind, cell: TutorialCell): Unit {
+  const index = kind === 'row' ? cell[0] : kind === 'column' ? cell[1] : boxOf(cell[0], cell[1])
+  return { kind, index, cells: unitCells(kind, index) }
+}
+
+interface UniqueRectangleOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  type: UniqueRectangleTypeName
+  /** Any corner of the rectangle to teach, in case the position has more. */
+  corner: TutorialCell
+}
+
+/** One "digit is locked to these two cells" fact a UR type rests on. */
+interface UrLink {
+  digit: number
+  from: TutorialCell
+  to: TutorialCell
+}
+
+/** "Suppose the eliminated candidate were true" and what that forces, one
+ * corner at a time, until all four corners are the pair (the deadly pattern). */
+interface UrStep {
+  cell: TutorialCell
+  digit: number
+  because: string
+}
+
+/**
+ * Every Unique Rectangle type told the same way: the rectangle, why "all four
+ * corners are just the pair" can't happen (it would have two solutions), then
+ * the type's own reason. Types 7a-7d are shown as "suppose the eliminated
+ * candidate were true": each forced corner follows, one frame at a time, until
+ * the rectangle is the deadly pattern - which is why that candidate goes.
+ *
+ * The facts come from the finder's own instance (cells, reason cells, the
+ * elimination); only the order they're told in is worked out here.
+ */
+export function buildUniqueRectangleLesson(options: UniqueRectangleOptions): TutorialLesson {
+  const { id, title, hint, state, type, corner } = options
+  const { board, candidates } = state
+  const instance = urFinder
+    .find(board, candidates)
+    .find(
+      (candidate) =>
+        candidate.type.replace(' aka Hidden Rectangle', '') === type && candidate.cells.some((cell) => sameCell(cell, corner)),
+    )
+  if (!instance) {
+    throw new Error(`No Unique Rectangle ${type} at ${cellName(corner[0], corner[1])} in this example.`)
+  }
+
+  const [a, b] = instance.urDigits
+  const cells = instance.cells.map(([r, c]) => [r, c] as const)
+  const digitsOf = ([r, c]: TutorialCell) => markedCandidateDigits(candidates[r][c])
+  const bivalue = cells.filter((cell) => digitsOf(cell).length === 2)
+  const pairPips = cells.flatMap(([r, c]) => [ref(r, c, a), ref(r, c, b)])
+  // a on one diagonal, b on the other - the order `cells` comes in is
+  // (r1,c1), (r1,c2), (r2,c1), (r2,c2), so 0/3 and 1/2 are the diagonals.
+  const colourOf = (digit: number): TutorialColor => (digit === a ? 'blue' : 'yellow')
+  const deadly: ColouredCand[] = cells.map(([r, c], i) => {
+    const digit = i === 0 || i === 3 ? a : b
+    return { ...ref(r, c, digit), color: colourOf(digit) }
+  })
+  const extraDigits = [...new Set(cells.flatMap((cell) => digitsOf(cell).filter((d) => d !== a && d !== b)))]
+  const spotlight = { digits: [a, b, ...extraDigits] }
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Look',
+      caption:
+        `${cellList(cells)} span 2 rows, 2 columns and 2 boxes, and all four can be ${a} or ${b}` +
+        (bivalue.length > 0 && bivalue.length < 4 ? `; ${cellList(bivalue)} ${bivalue.length === 1 ? 'holds' : 'hold'} nothing else.` : '.'),
+      outlineCells: cells,
+      basis: pairPips,
+      spotlight,
+    },
+    {
+      badge: 'Deadly',
+      caption: `If all four ended up as just ${a} and ${b}, the two could swap diagonally: two solutions. A proper puzzle has exactly one, so this can never happen.`,
+      outlineCells: cells,
+      coloured: deadly,
+      spotlight,
+    },
+  ]
+
+  const eliminated = instance.eliminatedCandidates.map((e) => ref(e.row, e.col, e.digit))
+  const solved = instance.solvedCandidates.map((s) => ref(s.row, s.col, s.digit))
+
+  if (type === 'Type 1') {
+    const [extraCell] = instance.reasonCells
+    const extras = digitsOf(extraCell).filter((d) => d !== a && d !== b)
+    const name = cellName(extraCell[0], extraCell[1])
+    const pairAtExtra = [ref(extraCell[0], extraCell[1], a), ref(extraCell[0], extraCell[1], b)]
+    frames.push(
+      {
+        badge: 'Spot it',
+        caption: `${name} is the only corner with anything else (${joinPhrases(extras.map(String))}). If it were ${a} or ${b}, all four corners would be just ${a} and ${b}.`,
+        outlineCells: cells,
+        basis: pairPips,
+        eliminated: pairAtExtra,
+        spotlight,
+      },
+      solved.length > 0
+        ? { badge: 'Result', caption: `So ${name} must be ${solved[0].digit}.`, outlineCells: cells, solved, spotlight, applied: true }
+        : { badge: 'Result', caption: `So ${name} can't be ${a} or ${b}.`, outlineCells: cells, eliminated, spotlight, applied: true },
+    )
+    return { id, title, hint, state, frames }
+  }
+
+  if (type === 'Type 4') {
+    const [x, y] = instance.reasonCells
+    const e = instance.eliminatedCandidates[0].digit
+    const d = e === a ? b : a
+    const unit = strongUnit(state, d, x, y)
+    const link: TutorialLink = { from: ref(x[0], x[1], d), to: ref(y[0], y[1], d), kind: 'strong' }
+    const names = `${cellName(x[0], x[1])} and ${cellName(y[0], y[1])}`
+    frames.push(
+      {
+        badge: 'Link',
+        caption: `In ${unit ? unitPhrase(unit) : 'their shared unit'}, ${d} fits only in ${names}, so one of them is ${d}.`,
+        outlineCells: cells,
+        unitCells: unit?.cells,
+        links: [link],
+        spotlight,
+      },
+      {
+        badge: 'Why',
+        caption: `The other one can't be ${e}: that would leave all four corners as just ${a} and ${b}.`,
+        outlineCells: cells,
+        links: [link],
+        eliminated,
+        spotlight,
+      },
+      {
+        badge: 'Result',
+        caption: `So neither ${cellName(x[0], x[1])} nor ${cellName(y[0], y[1])} can be ${e}.`,
+        outlineCells: cells,
+        eliminated,
+        spotlight,
+        applied: true,
+      },
+    )
+    return { id, title, hint, state, frames }
+  }
+
+  // Types 7a-7d: the links, then "suppose the eliminated candidate were true".
+  const target = instance.eliminatedCandidates[0]
+  const targetCell: TutorialCell = [target.row, target.col]
+  const x = target.digit
+  const y = x === a ? b : a
+  const name = (cell: TutorialCell) => cellName(cell[0], cell[1])
+  const others = (...exclude: TutorialCell[]) => cells.filter((cell) => !exclude.some((e) => sameCell(e, cell)))
+  let links: UrLink[]
+  let steps: UrStep[]
+
+  if (type === 'Type 7a') {
+    // Bivalue A is linked to N on x; N' (the target) is A's other neighbour;
+    // B, the other bivalue corner, sees both N and N'.
+    const [A, N] = instance.reasonCells
+    const [B] = others(A, N, targetCell)
+    links = [{ digit: x, from: A, to: N }]
+    steps = [
+      { cell: A, digit: y, because: `${name(A)} sees ${name(targetCell)}, so it isn't ${x}: it's ${y}` },
+      { cell: N, digit: x, because: `the ${x} link puts ${x} in ${name(N)}` },
+      { cell: B, digit: y, because: `${name(B)} sees both ${x}s, so it's ${y}` },
+    ]
+  } else if (type === 'Type 7b') {
+    // Bivalue A links to B on x, B links on to C on y; the target is the
+    // fourth corner, which sees A and C.
+    const [A, B, C] = instance.reasonCells
+    links = [
+      { digit: x, from: A, to: B },
+      { digit: y, from: B, to: C },
+    ]
+    steps = [
+      { cell: A, digit: y, because: `${name(A)} sees ${name(targetCell)}, so it isn't ${x}: it's ${y}` },
+      { cell: B, digit: x, because: `the ${x} link puts ${x} in ${name(B)}` },
+      { cell: C, digit: y, because: `${name(B)} isn't ${y}, so the ${y} link puts ${y} in ${name(C)}` },
+    ]
+  } else if (type === 'Type 7c') {
+    // Bivalue A links to P on x; the target and the last corner Q share the
+    // other row (or column), linked on y.
+    const [A, P] = instance.reasonCells
+    const [Q] = others(A, P, targetCell)
+    links = [
+      { digit: x, from: A, to: P },
+      { digit: y, from: targetCell, to: Q },
+    ]
+    steps = [
+      { cell: A, digit: y, because: `${name(A)} sees ${name(targetCell)}, so it isn't ${x}: it's ${y}` },
+      { cell: P, digit: x, because: `the ${x} link puts ${x} in ${name(P)}` },
+      { cell: Q, digit: y, because: `${name(targetCell)} isn't ${y}, so the ${y} link puts ${y} in ${name(Q)}` },
+    ]
+  } else {
+    // Type 7d: the target corner Z is linked on y to both of its
+    // neighbours; A, the bivalue opposite corner, sees both of them.
+    const [A] = instance.reasonCells
+    const [R, C] = others(A, targetCell)
+    links = [
+      { digit: y, from: targetCell, to: R },
+      { digit: y, from: targetCell, to: C },
+    ]
+    steps = [
+      { cell: R, digit: y, because: `${name(targetCell)} isn't ${y}, so the ${y} link puts ${y} in ${name(R)}` },
+      { cell: C, digit: y, because: `the other ${y} link puts ${y} in ${name(C)} too` },
+      { cell: A, digit: x, because: `${name(A)} sees both ${y}s, so it's ${x}` },
+    ]
+  }
+
+  const linkLines: TutorialLink[] = links.map((l) => ({ from: ref(l.from[0], l.from[1], l.digit), to: ref(l.to[0], l.to[1], l.digit), kind: 'strong' }))
+  const linkUnits = links.map((l) => strongUnit(state, l.digit, l.from, l.to))
+  frames.push({
+    badge: 'Links',
+    caption: links
+      .map((l, i) => `In ${linkUnits[i] ? unitPhrase(linkUnits[i]!) : 'their shared unit'}, ${l.digit} fits only in ${name(l.from)} and ${name(l.to)}.`)
+      .join(' '),
+    outlineCells: cells,
+    unitCells: linkUnits.flatMap((unit) => unit?.cells ?? []),
+    links: linkLines,
+    spotlight,
+  })
+
+  const targetPip = ref(target.row, target.col, x)
+  const suppose: ColouredCand[] = [{ ...targetPip, color: colourOf(x) }]
+  frames.push({
+    badge: 'Suppose',
+    caption: `Suppose ${name(targetCell)} were ${x}.`,
+    outlineCells: cells,
+    links: linkLines,
+    coloured: suppose,
+    fresh: [targetPip],
+    spotlight,
+  })
+  steps.forEach((step, i) => {
+    const pip = ref(step.cell[0], step.cell[1], step.digit)
+    frames.push({
+      badge: 'Follow',
+      caption: `Then ${step.because}.`,
+      outlineCells: cells,
+      links: linkLines,
+      coloured: [
+        ...suppose,
+        ...steps.slice(0, i + 1).map((s) => ({ ...ref(s.cell[0], s.cell[1], s.digit), color: colourOf(s.digit) })),
+      ],
+      fresh: [pip],
+      spotlight,
+    })
+  })
+  const allColoured: ColouredCand[] = [
+    ...suppose,
+    ...steps.map((s) => ({ ...ref(s.cell[0], s.cell[1], s.digit), color: colourOf(s.digit) })),
+  ]
+  frames.push(
+    {
+      badge: 'Deadly',
+      caption: `Now all four corners are just ${a} and ${b}: the deadly pattern. So the supposition was wrong.`,
+      outlineCells: cells,
+      links: linkLines,
+      coloured: allColoured,
+      spotlight,
+    },
+    {
+      badge: 'Result',
+      caption: `So ${name(targetCell)} can't be ${x}.`,
+      outlineCells: cells,
+      links: linkLines,
+      eliminated,
+      spotlight,
+      applied: true,
+    },
+  )
+  return { id, title, hint, state, frames }
+}
+
+export function buildBugPlusOneLesson(id: string, title: string, hint: string, state: PuzzleState): TutorialLesson {
+  const instance = bugFinder.find(state.board, state.candidates)
+  if (!instance) {
+    throw new Error('No BUG+1 in this example.')
+  }
+  const cell: TutorialCell = [instance.cell[0], instance.cell[1]]
+  const name = cellName(cell[0], cell[1])
+  const digit = instance.solvedDigit
+  const unit = unitContaining(instance.unitKind, cell)
+  const inUnit = unit.cells
+    .filter(([r, c]) => state.board[r][c] === 0 && state.candidates[r][c][digit - 1])
+    .map(([r, c]) => ref(r, c, digit))
+  const solved = [ref(cell[0], cell[1], digit)]
+
+  return {
+    id,
+    title,
+    hint,
+    state,
+    frames: [
+      {
+        badge: 'Look',
+        caption: `Every unsolved cell has exactly two candidates, except ${name}, which has three (${joinPhrases(instance.candidates.map(String))}).`,
+        outlineCells: [cell],
+      },
+      {
+        badge: 'Deadly',
+        caption: `With only two candidates in every cell, each digit left in a row, column or box would appear there exactly twice: a pattern that always has two solutions. So ${name} must be the digit that breaks it.`,
+        outlineCells: [cell],
+      },
+      {
+        badge: 'Count',
+        caption: `In ${unitPhrase(unit)}, ${digit} appears three times, while every other digit pairs up. The odd one out is ${digit}.`,
+        outlineCells: [cell],
+        unitCells: unit.cells,
+        basis: inUnit,
+        spotlight: { digits: [digit] },
+      },
+      {
+        badge: 'Result',
+        caption: `So ${name} is ${digit}.`,
+        outlineCells: [cell],
+        solved,
+        spotlight: { digits: [digit] },
+        applied: true,
+      },
+    ],
+  }
+}
+
+interface OddagonOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  type: 1 | 2
+  /** Any loop cell, in case the position has more than one loop. */
+  cell: TutorialCell
+}
+
+export function buildBivalueOddagonLesson(options: OddagonOptions): TutorialLesson {
+  const { id, title, hint, state, type, cell } = options
+  const instance = oddagonFinder
+    .find(state.board, state.candidates)
+    .find((candidate) => candidate.type === type && candidate.cells.some((c) => sameCell(c, cell)))
+  if (!instance) {
+    throw new Error(`No Bivalue Oddagon Type ${type} through ${cellName(cell[0], cell[1])} in this example.`)
+  }
+  const [a, b] = instance.loopDigits
+  const x = instance.guardianDigit
+  const loop = instance.cells.map(([r, c]) => [r, c] as const)
+  const n = loop.length
+  const guardians = instance.guardianCells.map(([r, c]) => [r, c] as const)
+  const spotlight = { digits: [a, b, x] }
+  // Each cell to the next, closing the loop.
+  const ring: TutorialLink[] = loop.map(([r, c], i) => {
+    const [nr, nc] = loop[(i + 1) % n]
+    return { from: ref(r, c, a), to: ref(nr, nc, a), kind: 'sees' }
+  })
+  // Try alternating a/b round the loop: the last cell (an even index, as n
+  // is odd) gets a again, next to the first cell's a.
+  const alternating: ColouredCand[] = loop.map(([r, c], i) => {
+    const digit = i % 2 === 0 ? a : b
+    return { ...ref(r, c, digit), color: digit === a ? 'blue' : 'yellow' }
+  })
+  const [lr, lc] = loop[n - 1]
+  const [fr, fc] = loop[0]
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Look',
+      caption:
+        `These ${n} cells can each be ${a} or ${b}` +
+        ` (${cellList(guardians)} can also be ${x}), and each one sees the next, making a loop of ${n}.`,
+      outlineCells: loop,
+      links: ring,
+      spotlight,
+    },
+    {
+      badge: 'Why',
+      caption: `Neighbours in the loop can't match, so a loop of just ${a} and ${b} must alternate. With an odd number of cells, the last one meets the first with the same digit: impossible.`,
+      outlineCells: loop,
+      coloured: alternating,
+      links: [{ from: ref(lr, lc, a), to: ref(fr, fc, a), kind: 'sees' }],
+      spotlight,
+    },
+  ]
+
+  if (type === 1) {
+    const [g] = guardians
+    const solved = [ref(g[0], g[1], x)]
+    frames.push(
+      {
+        badge: 'Spot it',
+        caption: `So some loop cell must be something else, and only ${cellName(g[0], g[1])} has another option: ${x}.`,
+        outlineCells: loop,
+        solved,
+        spotlight,
+      },
+      { badge: 'Result', caption: `So ${cellName(g[0], g[1])} is ${x}.`, outlineCells: loop, solved, spotlight, applied: true },
+    )
+  } else {
+    const eliminated = instance.eliminations.map((e) => ref(e.row, e.col, e.digit))
+    const guardianPips = guardians.map(([r, c]) => ref(r, c, x))
+    frames.push(
+      {
+        badge: 'Spot it',
+        caption: `So some loop cell must be something else. Only ${cellList(guardians)} have another option, ${x}, so one of them is ${x}.`,
+        outlineCells: loop,
+        basis: guardianPips,
+        spotlight,
+      },
+      {
+        badge: 'Eliminate',
+        caption: `Any other cell that sees all of them can't be ${x}.`,
+        outlineCells: loop,
+        basis: guardianPips,
+        eliminated,
+        links: eliminated.flatMap((e) => guardianPips.map((g) => ({ from: e, to: g, kind: 'sees' as const }))),
+        spotlight,
+      },
+      { badge: 'Result', caption: `${x} is removed from ${cellList(eliminated.map((e) => [e.row, e.col] as const))}.`, outlineCells: loop, eliminated, spotlight, applied: true },
+    )
+  }
+  return { id, title, hint, state, frames }
 }
