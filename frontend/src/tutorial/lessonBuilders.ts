@@ -647,12 +647,17 @@ const TECHNIQUE_PHRASE: Record<string, string> = {
   'naked triple': 'a naked triple',
   'naked quad': 'a naked quad',
   'hidden pair': 'a hidden pair',
+  'x-wing': 'an X-Wing',
+  'finned x-wing': 'a Finned X-Wing',
+  swordfish: 'a Swordfish',
+  'finned swordfish': 'a Finned Swordfish',
   UR: 'a Unique Rectangle',
   'bivalue oddagon': 'a Bivalue Oddagon',
   'bug plus one': 'a BUG+1',
   'short single-digit aic': 'a single-digit AIC',
   'short aic': 'a short AIC',
   'generic aic': 'a generic AIC',
+  'als-xz': 'an ALS-xz',
 }
 
 function joinPhrases(items: string[]): string {

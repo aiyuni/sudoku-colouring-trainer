@@ -141,6 +141,9 @@ export interface DragonTargetOptions {
   /** The Optimize Dynamic Dragons setting: unlike plain Optimize (always on
    * here), this one follows the user's setting - it's far costlier. */
   optimizeDynamic?: boolean
+  /** False under the "Disable Dynamic Dragons" setting: only plain Dragon
+   * logs are searched. Defaults to true. */
+  dynamicEnabled?: boolean
 }
 
 function chainKeyOf(chain: MedusaChain): string {
@@ -237,6 +240,9 @@ export class SudokuDragonTargetFinder {
       const plain = this.dragonFinder.extend(chain, board, candidates, { exhaustive: true, optimize: true })
       if (plain) {
         consider('dragon', chainKey, plain.moves)
+      }
+      if (options.dynamicEnabled === false) {
+        continue
       }
       const dynamic = this.dragonFinder.extend(chain, board, candidates, {
         dynamic: true,

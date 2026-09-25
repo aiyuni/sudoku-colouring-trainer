@@ -31,6 +31,7 @@ import {
   type DragonRule3Substep,
   type Rule3Technique,
 } from './sudoku/SudokuDragonFinder'
+import { ALL_FISH_TECHNIQUES, FISH_TECHNIQUE_NAMES, type FishTechnique } from './sudoku/SudokuFishFinder'
 import { foldDragonMoves } from './sudoku/dragonReplay'
 import {
   SudokuDragonTargetFinder,
@@ -99,7 +100,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.3.0-beta'
+const APP_VERSION = 'v0.5.0-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -290,6 +291,13 @@ function findStrongLinks(candidates: CandidateGrid): StrongLink[] {
 export type PuzzleSolvability =
   | { kind: 'solvable' }
   | { kind: 'solvable-brute-force' }
+  /** The fresh-autofill search got stuck, but a second search from the
+   * user's own (accurate, complete) marks solved it - they eliminated
+   * something this app has no technique for (e.g. a Swordfish, done on
+   * another site before importing). Without this the verdict said "brute
+   * force" while the Solve Path tab, which starts from those same marks,
+   * happily solved it. */
+  | { kind: 'solvable-from-marks' }
   /** The technique search ran out of time (or steps) while still making
    * progress - it neither finished nor got stuck, so nothing can be claimed
    * about whether brute force is needed. */
@@ -318,6 +326,7 @@ function derivePuzzleSolvability(
   solveStatus: SolveStatus,
   candidatesAccurate: boolean,
   techniqueSearch: SolvePathResult | 'checking' | null,
+  marksSearch: SolvePathResult | 'checking' | null,
 ): PuzzleSolvability {
   if (solveStatus === 'invalid') {
     return { kind: 'unsolvable', reason: 'inaccurate-placements' }
@@ -342,10 +351,63 @@ function derivePuzzleSolvability(
   if (techniqueSearch && (techniqueSearch.stoppedReason === 'time-budget' || techniqueSearch.stoppedReason === 'step-cap')) {
     return { kind: 'solvable-unknown' }
   }
+  if (marksSearch === 'checking') {
+    return { kind: 'checking' }
+  }
+  if (marksSearch?.solvedFully) {
+    return { kind: 'solvable-from-marks' }
+  }
+  // A marks search that ran out of time doesn't undo what the fresh search
+  // proved: from the puzzle alone, the techniques get stuck.
   return { kind: 'solvable-brute-force' }
 }
 
-const UNSOLVABLE_REASON_TEXT: Record<Extract<PuzzleSolvability, { kind: 'unsolvable' }>['reason'], string> = {
+/** Every legal digit marked in every empty cell of `board` - what "Autofill
+ * all" would give, independent of the user's own marks. */
+function freshAutofillCandidates(board: Board): CandidateGrid {
+  const candidates = createEmptyCandidates()
+  for (const r of NINE) {
+    for (const c of NINE) {
+      if (board[r][c] === 0) {
+        candidates[r][c] = DIGITS.map((d) => SudokuRules.isSafe(board, r, c, d))
+      }
+    }
+  }
+  return candidates
+}
+
+/** Runs one Solve Path search in a Web Worker per distinct `request` object
+ * and returns its result once it's back for *that* request (null while it's
+ * running, or when there's no request). A newer request aborts (terminates)
+ * the search still running for the old one, so at most one runs at a time. */
+function useWorkerSolvePath(
+  request: { board: Board; candidates: CandidateGrid; options: SolvePathOptions } | null,
+): SolvePathResult | null {
+  const [search, setSearch] = useState<{ request: NonNullable<typeof request>; result: SolvePathResult } | null>(null)
+  useEffect(() => {
+    if (!request) {
+      return
+    }
+    const controller = new AbortController()
+    solvePathInWorker(request.board, request.candidates, request.options, controller.signal).then(
+      (result) => setSearch({ request, result }),
+      (error: unknown) => {
+        if (controller.signal.aborted) {
+          return
+        }
+        // A crashed search proves nothing either way - report it the same
+        // as one that ran out of time ("couldn't tell"), not as "needs
+        // brute force".
+        console.error('Solvability search failed', error)
+        setSearch({ request, result: { steps: [], solvedFully: false, stoppedReason: 'time-budget', easySolve: false, log: [] } })
+      },
+    )
+    return () => controller.abort()
+  }, [request])
+  return request && search?.request === request ? search.result : null
+}
+
+const UNSOLVABLE_REASON_TEXT:Record<Extract<PuzzleSolvability, { kind: 'unsolvable' }>['reason'], string> = {
   'inaccurate-candidates': 'inaccurate candidates',
   'multiple-solutions': 'multiple solutions',
   'no-solutions': 'no solutions',
@@ -358,6 +420,8 @@ function solvabilityText(solvability: PuzzleSolvability): string {
       return 'Solvable'
     case 'solvable-brute-force':
       return 'Solvable with brute force'
+    case 'solvable-from-marks':
+      return 'Solvable from your current candidates (a fresh autofill would need brute force)'
     case 'checking':
       return 'Checking whether it can be solved without brute force…'
     case 'solvable-unknown':
@@ -806,6 +870,21 @@ function TechniquePanel({
                   The grid no longer matches this solve path - a Regenerate might be needed.
                 </p>
               )}
+              {solvePath.easySolve && (() => {
+                // Easy Solve always takes the simplest technique available, so
+                // the highest-ranked step is the one the puzzle can't be solved
+                // without (given the enabled techniques) - its real difficulty.
+                // Earliest step wins a tie.
+                let hardestIndex = 0
+                solvePath.steps.forEach((step, index) => {
+                  if (step.instance.techniqueRank > solvePath.steps[hardestIndex].instance.techniqueRank) hardestIndex = index
+                })
+                return (
+                  <p className="solve-path-hardest">
+                    Hardest technique: <b>{solvePath.steps[hardestIndex].instance.name}</b> (Step {hardestIndex + 1})
+                  </p>
+                )
+              })()}
               <ul className="technique-list">
                 {solvePath.steps.map((step, index) => {
                   const isActive = activeSolvePathIndex === index
@@ -1140,6 +1219,7 @@ export default function App() {
   const [showBivalueCells, setShowBivalueCells] = useState(DEFAULT_SETTINGS.showBivalueCells)
   const [gridWhiteMode, setGridWhiteMode] = useState(DEFAULT_SETTINGS.gridWhiteMode)
   const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(DEFAULT_SETTINGS.minBaseMedusaFilter)
+  const [dynamicDragonDisabled, setDynamicDragonDisabled] = useState(DEFAULT_SETTINGS.dynamicDragonDisabled)
   const [allowedRule3Techniques, setAllowedRule3Techniques] = useState<Set<Rule3Technique>>(
     () => new Set(DEFAULT_SETTINGS.allowedRule3Techniques),
   )
@@ -1148,6 +1228,20 @@ export default function App() {
   const [shortSingleDigitAicEnabled, setShortSingleDigitAicEnabled] = useState(
     DEFAULT_SETTINGS.shortSingleDigitAicEnabled,
   )
+  const [xWingEnabled, setXWingEnabled] = useState(DEFAULT_SETTINGS.xWingEnabled)
+  const [finnedXWingEnabled, setFinnedXWingEnabled] = useState(DEFAULT_SETTINGS.finnedXWingEnabled)
+  const [swordfishEnabled, setSwordfishEnabled] = useState(DEFAULT_SETTINGS.swordfishEnabled)
+  const [finnedSwordfishEnabled, setFinnedSwordfishEnabled] = useState(DEFAULT_SETTINGS.finnedSwordfishEnabled)
+  const [alsXzEnabled, setAlsXzEnabled] = useState(DEFAULT_SETTINGS.alsXzEnabled)
+  // The four fish toggles as the one set the engine takes.
+  const enabledFish = useMemo(() => {
+    const enabled = new Set<FishTechnique>()
+    if (xWingEnabled) enabled.add('x-wing')
+    if (finnedXWingEnabled) enabled.add('finned x-wing')
+    if (swordfishEnabled) enabled.add('swordfish')
+    if (finnedSwordfishEnabled) enabled.add('finned swordfish')
+    return enabled
+  }, [xWingEnabled, finnedXWingEnabled, swordfishEnabled, finnedSwordfishEnabled])
   // Invariants, kept by the toggle handlers rather than derived at read
   // time (so the stored state never says something the checkboxes can't):
   //  - genericAicEnabled implies shortAicEnabled implies shortSingleDigitAicEnabled
@@ -1293,11 +1387,24 @@ export default function App() {
   // per-technique checkbox in the Dynamic Dragon Colouring list - turning
   // it off excludes 'short aic' regardless of that checkbox's own state,
   // rather than needing every Dynamic Dragon call site to check both.
+  // Each fish toggle, and ALS-xz's, is the same kind of master switch over
+  // its own Dynamic Dragon checkbox.
   const effectiveAllowedRule3Techniques = useMemo(() => {
-    if (shortAicEnabled && shortSingleDigitAicEnabled && genericAicEnabled) {
+    if (
+      shortAicEnabled &&
+      shortSingleDigitAicEnabled &&
+      genericAicEnabled &&
+      alsXzEnabled &&
+      enabledFish.size === ALL_FISH_TECHNIQUES.length
+    ) {
       return allowedRule3Techniques
     }
     const next = new Set(allowedRule3Techniques)
+    for (const fish of ALL_FISH_TECHNIQUES) {
+      if (!enabledFish.has(fish)) {
+        next.delete(fish)
+      }
+    }
     if (!shortAicEnabled) {
       next.delete('short aic')
     }
@@ -1307,8 +1414,11 @@ export default function App() {
     if (!genericAicEnabled) {
       next.delete('generic aic')
     }
+    if (!alsXzEnabled) {
+      next.delete('als-xz')
+    }
     return next
-  }, [allowedRule3Techniques, shortAicEnabled, shortSingleDigitAicEnabled, genericAicEnabled])
+  }, [allowedRule3Techniques, shortAicEnabled, shortSingleDigitAicEnabled, genericAicEnabled, alsXzEnabled, enabledFish])
 
   // The "solvable / solvable with brute force / unsolvable" status below
   // the grid, split into three memos so the expensive part (a fresh-
@@ -1367,6 +1477,9 @@ export default function App() {
       genericAicEnabled,
       optimizeDragons,
       optimizeDynamicDragons,
+      dynamicDragonDisabled,
+      enabledFish,
+      alsXzEnabled,
     }),
     [
       board,
@@ -1380,6 +1493,9 @@ export default function App() {
       genericAicEnabled,
       optimizeDragons,
       optimizeDynamicDragons,
+      dynamicDragonDisabled,
+      enabledFish,
+      alsXzEnabled,
     ],
   )
   const [analysis, analysisPending] = useSettledValue(liveAnalysisInputs)
@@ -1426,10 +1542,15 @@ export default function App() {
         analysis.genericAicEnabled,
         analysis.optimizeDragons,
         analysis.optimizeDynamicDragons,
+        !analysis.dynamicDragonDisabled,
+        analysis.enabledFish,
+        analysis.alsXzEnabled,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
+      analysis.enabledFish,
+      analysis.alsXzEnabled,
       analysis.board,
       analysis.candidates,
       analysis.minBaseMedusaFilter,
@@ -1441,6 +1562,7 @@ export default function App() {
       analysis.genericAicEnabled,
       analysis.optimizeDragons,
       analysis.optimizeDynamicDragons,
+      analysis.dynamicDragonDisabled,
     ],
   )
   // Looked up by id (rather than kept as its own state) so that if the
@@ -1567,8 +1689,13 @@ export default function App() {
       optimizeDragons,
       optimizeDynamicDragons,
       timeBudgetMs: solvePathTimeoutMs,
+      dynamicDragonEnabled: !dynamicDragonDisabled,
+      enabledFish: [...enabledFish],
+      alsXzEnabled,
     }),
     [
+      enabledFish,
+      alsXzEnabled,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -1579,6 +1706,7 @@ export default function App() {
       optimizeDragons,
       optimizeDynamicDragons,
       solvePathTimeoutMs,
+      dynamicDragonDisabled,
     ],
   )
 
@@ -1590,60 +1718,56 @@ export default function App() {
   // the status line says "Checking…" until the answer comes back. Only the
   // board and settings matter to it, not the user's own candidate marks, so
   // this request object (and with it the search) only changes with those.
+  const freshAutofill = useMemo(() => freshAutofillCandidates(board), [board])
   const solvabilityRequest = useMemo(
     () =>
-      puzzleSolveResult.status === 'solved' && candidatesAccurate ? { board, options: solvePathOptions } : null,
-    [board, puzzleSolveResult, candidatesAccurate, solvePathOptions],
+      puzzleSolveResult.status === 'solved' && candidatesAccurate
+        ? { board, candidates: freshAutofill, options: solvePathOptions }
+        : null,
+    [board, freshAutofill, puzzleSolveResult, candidatesAccurate, solvePathOptions],
   )
-  const [solvabilitySearch, setSolvabilitySearch] = useState<{
-    request: NonNullable<typeof solvabilityRequest>
-    result: SolvePathResult
-  } | null>(null)
-  useEffect(() => {
-    if (!solvabilityRequest) {
-      return
+  const bruteSolvePath = useWorkerSolvePath(solvabilityRequest)
+
+  // Only if that search got genuinely stuck: a second search from the user's
+  // own marks, when they're accurate, complete (every empty cell has at least
+  // one) and have eliminated something the autofill hasn't. Marks imported
+  // from another site can carry eliminations from techniques this app lacks
+  // (a Swordfish, say), and the Solve Path tab - which starts from the live
+  // marks - would then solve a puzzle this status called "brute force". This
+  // one does rerun on mark changes, but only in that already-stuck case.
+  const marksSolvabilityRequest = useMemo(() => {
+    if (!solvabilityRequest || bruteSolvePath?.stoppedReason !== 'stuck') {
+      return null
     }
-    // A newer board/settings change aborts (terminates) the search still
-    // running for the old one, so at most one runs at a time.
-    const controller = new AbortController()
-    const { board: searchBoard, options } = solvabilityRequest
-    const freshCandidates = createEmptyCandidates()
+    let removesSomething = false
     for (const r of NINE) {
       for (const c of NINE) {
-        if (searchBoard[r][c] === 0) {
-          freshCandidates[r][c] = DIGITS.map((d) => SudokuRules.isSafe(searchBoard, r, c, d))
+        if (board[r][c] !== 0) {
+          continue
+        }
+        if (!candidates[r][c].some(Boolean)) {
+          return null
+        }
+        if (freshAutofill[r][c].some((marked, i) => marked && !candidates[r][c][i])) {
+          removesSomething = true
         }
       }
     }
-    solvePathInWorker(searchBoard, freshCandidates, options, controller.signal).then(
-      (result) => setSolvabilitySearch({ request: solvabilityRequest, result }),
-      (error: unknown) => {
-        if (controller.signal.aborted) {
-          return
-        }
-        // A crashed search proves nothing either way - report it the same
-        // as one that ran out of time ("couldn't tell"), not as "needs
-        // brute force".
-        console.error('Solvability search failed', error)
-        setSolvabilitySearch({
-          request: solvabilityRequest,
-          result: { steps: [], solvedFully: false, stoppedReason: 'time-budget', log: [] },
-        })
-      },
-    )
-    return () => controller.abort()
-  }, [solvabilityRequest])
-  const bruteSolvePath =
-    solvabilityRequest && solvabilitySearch?.request === solvabilityRequest ? solvabilitySearch.result : null
+    return removesSomething ? { board, candidates, options: solvabilityRequest.options } : null
+  }, [solvabilityRequest, bruteSolvePath, board, candidates, freshAutofill])
+  const marksSolvePath = useWorkerSolvePath(marksSolvabilityRequest)
+
   const solvabilityChecking = solvabilityRequest !== null && bruteSolvePath === null
+  const marksSolvabilityChecking = marksSolvabilityRequest !== null && marksSolvePath === null
   const solvability = useMemo(
     () =>
       derivePuzzleSolvability(
         puzzleSolveResult.status,
         candidatesAccurate,
         solvabilityChecking ? 'checking' : bruteSolvePath,
+        marksSolvabilityChecking ? 'checking' : marksSolvePath,
       ),
-    [puzzleSolveResult, candidatesAccurate, solvabilityChecking, bruteSolvePath],
+    [puzzleSolveResult, candidatesAccurate, solvabilityChecking, bruteSolvePath, marksSolvabilityChecking, marksSolvePath],
   )
 
   const selectedIsLocked = selected !== null && givens[selected.row][selected.col]
@@ -2393,15 +2517,20 @@ export default function App() {
           optimizeDragons,
           optimizeDynamicDragons,
         )
+        // ALS-xz is never auto-solved, not even inside a Dynamic Dragon
+        // chain - no setting opts back in.
+        const withoutAlsXz = results.filter(
+          ({ moves }) => !moves.some((move) => (move.dynamicTechniques ?? []).includes('als-xz')),
+        )
         if (dynamicDragonAutoSolveIncludesAics) {
-          return results
+          return withoutAlsXz
         }
         // Default: a chain whose steps needed an AIC (either kind) anywhere
         // is left entirely untouched by auto-solve, even if AICs are
         // otherwise enabled for Dynamic Dragon Colouring - the "Dynamic
         // Dragon Colouring auto-solve includes AICs?" setting is what
         // opts back in.
-        return results.filter(
+        return withoutAlsXz.filter(
           ({ moves }) =>
             !moves.some((move) =>
               (move.dynamicTechniques ?? []).some(
@@ -2592,6 +2721,12 @@ export default function App() {
     setShortSingleDigitAicEnabled(DEFAULT_SETTINGS.shortSingleDigitAicEnabled)
     setShortAicEnabled(DEFAULT_SETTINGS.shortAicEnabled)
     setGenericAicEnabled(DEFAULT_SETTINGS.genericAicEnabled)
+    setXWingEnabled(DEFAULT_SETTINGS.xWingEnabled)
+    setFinnedXWingEnabled(DEFAULT_SETTINGS.finnedXWingEnabled)
+    setSwordfishEnabled(DEFAULT_SETTINGS.swordfishEnabled)
+    setFinnedSwordfishEnabled(DEFAULT_SETTINGS.finnedSwordfishEnabled)
+    setAlsXzEnabled(DEFAULT_SETTINGS.alsXzEnabled)
+    setDynamicDragonDisabled(DEFAULT_SETTINGS.dynamicDragonDisabled)
     setAllowedRule3Techniques(new Set(DEFAULT_SETTINGS.allowedRule3Techniques))
     setExhaustiveDragonColouring(DEFAULT_SETTINGS.exhaustiveDragonColouring)
     setOptimizeDragons(DEFAULT_SETTINGS.optimizeDragons)
@@ -2823,6 +2958,7 @@ export default function App() {
       allowedRule3Techniques: effectiveAllowedRule3Techniques,
       aicLimitPerStep: aicLimitPerDragonStep,
       optimizeDynamic: optimizeDynamicDragons,
+      dynamicEnabled: !dynamicDragonDisabled,
     })
 
     const best = search.best
@@ -2848,9 +2984,7 @@ export default function App() {
       if (note) lines.push(note)
       say(
         'info',
-        targets.length === 1
-          ? 'No Dragon or Dynamic Dragon Colouring finds that elimination.'
-          : 'No Dragon or Dynamic Dragon Colouring finds all of those eliminations.',
+        `No ${dynamicDragonDisabled ? 'Dragon Colouring (Dynamic Dragons are disabled)' : 'Dragon or Dynamic Dragon Colouring'} finds ${targets.length === 1 ? 'that elimination' : 'all of those eliminations'}.`,
         lines,
       )
       return
@@ -3271,7 +3405,11 @@ export default function App() {
     const techniqueName = target === 'simple-colouring' ? 'Simple Colouring' : '3D Medusa'
     runPracticePuzzleGeneration(
       `Generating a puzzle that needs ${techniqueName}…`,
-      (signal) => generateDragonPuzzleInParallel({ target, timeBudgetMs: dragonGenerationTimeoutMs }, signal),
+      (signal) =>
+        generateDragonPuzzleInParallel(
+          { target, timeBudgetMs: dragonGenerationTimeoutMs, enabledFish: [...enabledFish], alsXzEnabled },
+          signal,
+        ),
       `New puzzle loaded: ${techniqueName} is the easiest technique that can make progress.`,
     )
   }
@@ -3286,6 +3424,8 @@ export default function App() {
             disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
             disregardAic: dragonGenerationDisregardsAic,
             disregardGenericAic: dragonGenerationDisregardsGenericAic,
+            enabledFish: [...enabledFish],
+            alsXzEnabled,
           },
           signal,
         ),
@@ -3300,6 +3440,8 @@ export default function App() {
       disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
       disregardAic: dragonGenerationDisregardsAic,
       disregardGenericAic: dragonGenerationDisregardsGenericAic,
+      enabledFish: [...enabledFish],
+      alsXzEnabled,
     }
     runPracticePuzzleGeneration(
       'Generating a puzzle that needs Dynamic Dragon Colouring…',
@@ -3333,8 +3475,12 @@ export default function App() {
         Sudoku Colouring Solver/Trainer <span className="app-version">{APP_VERSION}</span>
       </h1>
       <p>
-        Advanced Sudoku solver and trainer emphasizing Colouring techniques. <div></div>
-        For the Colouring enthusiasts!
+        Advanced Sudoku solver and trainer emphasizing Colouring techniques, such as Dragon Colouring. <div></div>
+        For the Colouring enthusiasts, click{' '}
+        <button type="button" className="header-link" onClick={() => setTutorialOpen(true)}>
+          Techniques overview
+        </button>{' '}
+        for a quick overview.
       </p>
     </header>
   )
@@ -3442,8 +3588,12 @@ export default function App() {
               type="button"
               className="dropdown-item"
               onClick={onNewDynamicDragonPuzzle}
-              disabled={busy}
-              title="Generates a puzzle state that includes dynamic Dragon Colouring"
+              disabled={busy || dynamicDragonDisabled}
+              title={
+                dynamicDragonDisabled
+                  ? 'Dynamic Dragons are disabled in Dragon Configuration'
+                  : 'Generates a puzzle state that includes dynamic Dragon Colouring'
+              }
             >
               Dynamic Dragon Colouring practice puzzle
             </button>
@@ -3577,25 +3727,42 @@ export default function App() {
             <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
             <label
               className="menu-checkbox"
-              title="When on, Dynamic Dragons are searched for the fewest colour extensions like Optimize Dragons, but also trying every candidate the Dynamic techniques can force at each step, not just the first one found. Finds much shorter Dynamic Dragons; noticeably slower, especially with AICs enabled. Also applies to Find by elims."
+              title={
+                dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When on, Dynamic Dragons are searched for the fewest colour extensions like Optimize Dragons, but also trying every candidate the Dynamic techniques can force at each step, not just the first one found. Finds much shorter Dynamic Dragons; noticeably slower, especially with AICs enabled. Also applies to Find by elims.'
+              }
             >
-              <input type="checkbox" checked={optimizeDynamicDragons} onChange={toggleOptimizeDynamicDragons} />
+              <input
+                type="checkbox"
+                checked={optimizeDynamicDragons}
+                disabled={dynamicDragonDisabled}
+                onChange={toggleOptimizeDynamicDragons}
+              />
               Optimize Dynamic Dragons
             </label>
             <label
               className="menu-checkbox"
-              title="When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit."
+              title={
+                dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit.'
+              }
             >
-              <input type="checkbox" checked={aicLimitPerDragonStep} onChange={toggleAicLimitPerDragonStep} />
+              <input
+                type="checkbox"
+                checked={aicLimitPerDragonStep}
+                disabled={dynamicDragonDisabled}
+                onChange={toggleAicLimitPerDragonStep}
+              />
               Limit to 1 AIC per step
             </label>
             <label
               className="menu-checkbox"
-              title="When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled in Settings."
+              title={
+                dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled in Settings.'
+              }
             >
               <input
                 type="checkbox"
                 checked={dynamicDragonAutoSolveIncludesAics}
+                disabled={dynamicDragonDisabled}
                 onChange={toggleDynamicDragonAutoSolveIncludesAics}
               />
               Auto-solve includes AICs
@@ -3607,19 +3774,35 @@ export default function App() {
             <p className="dropdown-hint">
               Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
             </p>
+            <label
+              className="menu-checkbox"
+              title="When on, Dynamic Dragon Colouring is not used anywhere - the Techniques list, Solve Path, the Solvable check, Find by elims, auto-solve and puzzle generation - so plain Dragon Colouring is the strongest technique."
+            >
+              <input
+                type="checkbox"
+                checked={dynamicDragonDisabled}
+                onChange={() => setDynamicDragonDisabled((value) => !value)}
+              />
+              Disable Dynamic Dragons
+            </label>
             {ALL_RULE3_TECHNIQUES.map((technique) => {
               const disabledByMasterSwitch =
+                ((ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(technique) &&
+                  !enabledFish.has(technique as FishTechnique)) ||
                 (technique === 'short aic' && !shortAicEnabled) ||
                 (technique === 'generic aic' && !genericAicEnabled) ||
+                (technique === 'als-xz' && !alsXzEnabled) ||
                 (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
               return (
                 <label
                   key={technique}
                   className="menu-checkbox"
                   title={
-                    disabledByMasterSwitch
-                      ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
-                      : undefined
+                    dynamicDragonDisabled
+                      ? 'Dynamic Dragons are disabled, so this has no effect'
+                      : disabledByMasterSwitch
+                        ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
+                        : undefined
                   }
                 >
                   <input
@@ -3629,7 +3812,8 @@ export default function App() {
                       technique === 'naked pair' ||
                       technique === 'hidden single' ||
                       technique === 'locked candidate' ||
-                      disabledByMasterSwitch
+                      disabledByMasterSwitch ||
+                      dynamicDragonDisabled
                     }
                     onChange={() => toggleRule3Technique(technique)}
                   />
@@ -3733,6 +3917,30 @@ export default function App() {
                 onChange={toggleGenericAicEnabled}
               />
               Enable Generic AIC
+            </label>
+            {(
+              [
+                ['x-wing', xWingEnabled, setXWingEnabled],
+                ['finned x-wing', finnedXWingEnabled, setFinnedXWingEnabled],
+                ['swordfish', swordfishEnabled, setSwordfishEnabled],
+                ['finned swordfish', finnedSwordfishEnabled, setFinnedSwordfishEnabled],
+              ] as const
+            ).map(([fish, enabled, setEnabled]) => (
+              <label
+                key={fish}
+                className="menu-checkbox"
+                title={`When on, the solver looks for ${FISH_TECHNIQUE_NAMES[fish]} patterns. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).`}
+              >
+                <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
+                Enable {FISH_TECHNIQUE_NAMES[fish]}
+              </label>
+            ))}
+            <label
+              className="menu-checkbox"
+              title="When on, the solver looks for ALS-xz. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
+            >
+              <input type="checkbox" checked={alsXzEnabled} onChange={() => setAlsXzEnabled((value) => !value)} />
+              Enable ALS-xz
             </label>
           </div>
         </DropdownMenu>
@@ -4395,9 +4603,13 @@ export default function App() {
           <button
             type="button"
             className="autosolve-button wide"
-            disabled={busy || !hasAnyCandidates || filled === 81}
+            disabled={busy || !hasAnyCandidates || filled === 81 || dynamicDragonDisabled}
             onClick={() => runAutoSolve('Dynamic Dragon Colouring', onDynamicDragonColouring)}
-            title="Auto-solve Dynamic Dragons.  Dynamic Dragons that use AIC will be solved based on the Setting."
+            title={
+              dynamicDragonDisabled
+                ? 'Dynamic Dragons are disabled in Dragon Configuration'
+                : 'Auto-solve Dynamic Dragons.  Dynamic Dragons that use AIC will be solved based on the Setting.'
+            }
           >
             Dynamic Dragon
           </button>

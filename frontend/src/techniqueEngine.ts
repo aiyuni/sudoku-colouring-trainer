@@ -6,6 +6,7 @@
  * the main thread.
  */
 import { cloneBoard, cloneCandidates } from './sudoku/boardUtils'
+import { SudokuAlsXzFinder, type AlsXzInstance } from './sudoku/SudokuAlsXzFinder'
 import { SudokuBivalueOddagonFinder } from './sudoku/SudokuBivalueOddagonFinder'
 import { SudokuBugPlusOneFinder } from './sudoku/SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
@@ -17,6 +18,7 @@ import {
 } from './sudoku/SudokuDragonFinder'
 import { foldDragonMoves } from './sudoku/dragonReplay'
 import { formatCandidate, listEffectiveEliminations, type TargetProblem } from './sudoku/SudokuDragonTargetFinder'
+import { FISH_TECHNIQUE_NAMES, SudokuFishFinder, type FishInstance, type FishTechnique } from './sudoku/SudokuFishFinder'
 import { SudokuHiddenPairFinder } from './sudoku/SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './sudoku/SudokuLockedCandidateFinder'
 import { type MassEliminationInstance, SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
@@ -35,8 +37,10 @@ export const lockedCandidateFinder = new SudokuLockedCandidateFinder()
 export const pairFinder = new SudokuPairFinder()
 export const nakedSubsetFinder = new SudokuNakedSubsetFinder()
 export const hiddenPairFinder = new SudokuHiddenPairFinder()
+export const fishFinder = new SudokuFishFinder()
 export const shortAicFinder = new SudokuShortAicFinder()
 export const genericAicFinder = new SudokuGenericAicFinder()
+export const alsXzFinder = new SudokuAlsXzFinder()
 export const uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
 export const bugPlusOneFinder = new SudokuBugPlusOneFinder()
 export const bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
@@ -97,7 +101,9 @@ export interface TechniqueInstance {
  * order buildTechniqueInstances below pushes its blocks in (see CLAUDE.md's
  * documented difficulty order: Single -> LockedCandidate ->
  * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+1 -> BivalueOddagon
- * -> Color -> ShortAic -> GenericAic -> Medusa -> Dragon -> Dynamic Dragon).
+ * -> Color -> X-Wing -> Short Single-Digit AIC -> Finned X-Wing -> Short AIC
+ * -> Swordfish -> Finned Swordfish -> Medusa -> Generic AIC -> ALS-xz -> Dragon
+ * -> Dynamic Dragon).
  * Techniques sharing a tier are equally "simple" as far as this goes - a
  * naked pair is no simpler than a naked quad here, since a solver who can
  * spot one can spot the other; what matters is the category, not which
@@ -111,12 +117,29 @@ export const RANK_UR = 3
 export const RANK_BUG_PLUS_ONE = 4
 export const RANK_BIVALUE_ODDAGON = 5
 export const RANK_SIMPLE_COLOR = 6
-export const RANK_SHORT_SINGLE_DIGIT_AIC = 7
-export const RANK_SHORT_AIC = 8
-export const RANK_GENERIC_AIC = 9
-export const RANK_MEDUSA = 10
-export const RANK_DRAGON = 11
-export const RANK_DYNAMIC_DRAGON = 12
+// The fish interleave with the short AICs, and each fish is its own tier
+// (unlike the subsets above): a Swordfish is genuinely harder to spot than an
+// X-Wing, and a fin harder again.
+export const RANK_X_WING = 7
+export const RANK_SHORT_SINGLE_DIGIT_AIC = 8
+export const RANK_FINNED_X_WING = 9
+export const RANK_SHORT_AIC = 10
+export const RANK_SWORDFISH = 11
+export const RANK_FINNED_SWORDFISH = 12
+export const RANK_MEDUSA = 13
+// Harder than 3D Medusa: a long chain is harder to find than a colouring.
+export const RANK_GENERIC_AIC = 14
+// The one non-colouring technique ranked above Generic AIC.
+export const RANK_ALS_XZ = 15
+export const RANK_DRAGON = 16
+export const RANK_DYNAMIC_DRAGON = 17
+
+const FISH_RANKS: Record<FishTechnique, number> = {
+  'x-wing': RANK_X_WING,
+  'finned x-wing': RANK_FINNED_X_WING,
+  swordfish: RANK_SWORDFISH,
+  'finned swordfish': RANK_FINNED_SWORDFISH,
+}
 
 /** A rejected entry in plain words, for the Find tab. */
 export function describeTargetProblem(problem: TargetProblem): string {
@@ -370,6 +393,9 @@ export function buildTechniqueInstances(
   genericAicEnabled = false,
   optimizeDragons = false,
   optimizeDynamicDragons = false,
+  dynamicDragonEnabled = true,
+  enabledFish: ReadonlySet<FishTechnique> = new Set(),
+  alsXzEnabled = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -552,7 +578,7 @@ export function buildTechniqueInstances(
     instances.push({
       id: `ur-${ur.type.replace(/\s+/g, '').toLowerCase()}-${idSuffix}-${ur.urDigits.join(',')}`,
       name: `Unique Rectangle (${ur.type})`,
-      notation: `${ur.reasonText} => ${conclusion}`,
+      notation: `${ur.reasonText}, thus ${conclusion}`,
       usedCells: [...ur.cells],
       usedCandidates: ur.cells.flatMap(([row, col]) => ur.urDigits.map((digit) => ({ row, col, digit }))),
       eliminatedCandidates: ur.eliminatedCandidates,
@@ -676,74 +702,48 @@ export function buildTechniqueInstances(
 
   instances.push(...rule1Instances, ...rule2Instances)
 
-  // Short Single-Digit AIC (length 3, one digit throughout - a classic
-  // X-chain), Short AIC (everything else this finder can find: length
-  // 5, or the rare length-3 chain that switches digits via a same-cell
-  // link) and Generic AIC (chains longer than that, up to
-  // GENERIC_AIC_MAX_LENGTH links) are three separate techniques, ranked
-  // Simple Colouring < Short Single-Digit AIC < Short AIC < Generic AIC <
-  // 3D Medusa, each with its own settings toggle. The search still runs when either is on - a length-5 chain is
-  // found by continuing through the same length-3 intermediate states
-  // regardless of whether length-3 itself is being surfaced - but nothing
-  // is added to the panel for a kind whose toggle is off.
-  if (shortAicEnabled || shortSingleDigitAicEnabled || genericAicEnabled) {
-    // Every technique instance already found (naked/hidden singles, locked
-    // candidates, naked/hidden pairs and triples/quads, UR, Simple
-    // Colouring) is "easier" than any AIC kind by virtue of running first -
-    // a chain that eliminates nothing beyond what one of those already
-    // covers isn't worth surfacing as its own entry.
-    const easierEliminationKeys = new Set(
-      instances.flatMap((instance) => instance.eliminatedCandidates.map((e) => `${e.row},${e.col},${e.digit}`)),
-    )
-    const isCovered = (aic: ShortAicInstance) =>
-      aic.eliminations.every((e) => easierEliminationKeys.has(`${e.row},${e.col},${e.digit}`))
-
-    const singleDigitInstances: TechniqueInstance[] = []
-    const generalInstances: TechniqueInstance[] = []
-    const genericInstances: TechniqueInstance[] = []
-
-    if (shortAicEnabled || shortSingleDigitAicEnabled) {
-      for (const aic of shortAicFinder.findShortAics(board, candidates)) {
-        if (isCovered(aic)) {
-          continue
-        }
-        const isSingleDigit = classifyShortAic(aic) === 'single-digit'
-        if (isSingleDigit ? !shortSingleDigitAicEnabled : !shortAicEnabled) {
-          continue
-        }
-        const instance = buildAicInstance(
+  // Fish and the short AICs interleave in the difficulty order (X-Wing <
+  // Short Single-Digit AIC < Finned X-Wing < Short AIC < Swordfish < Finned
+  // Swordfish), so they're gathered together and pushed rank by rank. Short
+  // Single-Digit AIC (length 3, one digit throughout - a classic X-chain) and
+  // Short AIC (everything else that finder finds: length 5, or the rare
+  // length-3 chain that switches digits via a same-cell link) are two
+  // techniques with their own toggles, as is each fish. The AIC search still
+  // runs when either AIC toggle is on - a length-5 chain is found by
+  // continuing through the same length-3 intermediate states regardless of
+  // whether length-3 itself is being surfaced - but nothing is added for a
+  // kind whose toggle is off.
+  //
+  // A row whose eliminations easier rows already make in full isn't worth
+  // listing (a Finned X-Wing is very often just a pointing pair seen the long
+  // way round). "Easier" means a strictly lower rank: rows of the same
+  // technique never hide each other.
+  const middleTier: TechniqueInstance[] = []
+  if (enabledFish.size > 0) {
+    for (const fish of fishFinder.find(board, candidates)) {
+      if (enabledFish.has(fish.technique)) {
+        middleTier.push(buildFishInstance(fish))
+      }
+    }
+  }
+  if (shortAicEnabled || shortSingleDigitAicEnabled) {
+    for (const aic of shortAicFinder.findShortAics(board, candidates)) {
+      const isSingleDigit = classifyShortAic(aic) === 'single-digit'
+      if (isSingleDigit ? !shortSingleDigitAicEnabled : !shortAicEnabled) {
+        continue
+      }
+      middleTier.push(
+        buildAicInstance(
           aic,
           isSingleDigit ? 'short-single-digit-aic' : 'short-aic',
           isSingleDigit ? 'Short Single-Digit AIC' : `Short AIC (Type ${aic.eliminationType})`,
-        )
-        if (isSingleDigit) {
-          singleDigitInstances.push(instance)
-        } else {
-          generalInstances.push(instance)
-        }
-      }
+        ),
+      )
     }
-
-    // Generic AIC ranks after the shorter kinds: a long chain that only
-    // reaches what a Short AIC already does isn't listed either.
-    if (genericAicEnabled) {
-      for (const instance of [...singleDigitInstances, ...generalInstances]) {
-        for (const e of instance.eliminatedCandidates) {
-          easierEliminationKeys.add(`${e.row},${e.col},${e.digit}`)
-        }
-      }
-      for (const aic of genericAicFinder.findGenericAics(board, candidates)) {
-        if (isCovered(aic)) {
-          continue
-        }
-        genericInstances.push(
-          buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}, ${aic.length} links)`),
-        )
-      }
-    }
-
-    instances.push(...singleDigitInstances, ...generalInstances, ...genericInstances)
   }
+  // Stable, so each technique keeps the finder's own order.
+  middleTier.sort((a, b) => a.techniqueRank - b.techniqueRank)
+  pushUnlessCoveredByEasier(instances, middleTier)
 
   // 3D Medusa: one row per chain, listing everything that chain proves -
   // its mass elimination (rules 1-2, if any) and every rule 3/4/5
@@ -878,6 +878,27 @@ export function buildTechniqueInstances(
 
   instances.push(...massMedusaInstances, ...otherMedusaInstances)
 
+  // Generic AIC (chains longer than Short AIC's, up to GENERIC_AIC_MAX_LENGTH
+  // links) ranks after 3D Medusa: a long chain that only reaches what any
+  // easier row already does - a Short AIC, a fish, a Medusa rule - isn't
+  // listed.
+  if (genericAicEnabled) {
+    pushUnlessCoveredByEasier(
+      instances,
+      genericAicFinder
+        .findGenericAics(board, candidates)
+        .map((aic) => buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}, ${aic.length} links)`)),
+    )
+  }
+
+  // ALS-xz (singly linked only) ranks after Generic AIC. Every ALS-xz is an
+  // AIC with ALS nodes, and the short ones are often a naked pair, a Short
+  // AIC or a Medusa rule in disguise, so a row an easier one already makes in
+  // full isn't listed.
+  if (alsXzEnabled) {
+    pushUnlessCoveredByEasier(instances, alsXzFinder.find(board, candidates).map(buildAlsXzInstance))
+  }
+
   // Dragon Colouring and Dynamic Dragon Colouring: one instance per stuck
   // Medusa chain the extension turned into something actionable, each
   // carrying its own move log for the Techniques panel's step-by-step
@@ -895,7 +916,9 @@ export function buildTechniqueInstances(
   for (const { chainKey, moves } of dragonExtensions) {
     instances.push(buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', chainKey, moves))
   }
-  const dynamicDragonExtensions = computeStuckDynamicDragonExtensions(
+  // The "Disable Dynamic Dragons" setting: plain Dragon becomes the
+  // strongest technique, here and so in the solve path built on this list.
+  const dynamicDragonExtensions = !dynamicDragonEnabled ? [] : computeStuckDynamicDragonExtensions(
     board,
     candidates,
     'any',
@@ -912,6 +935,78 @@ export function buildTechniqueInstances(
   }
 
   return instances
+}
+
+/** Appends `candidates` (sorted by techniqueRank) to `instances`, except any
+ * whose eliminations rows of a strictly lower rank - everything already in
+ * `instances`, plus lower tiers of `candidates` itself - already make in
+ * full. Only elimination-only rows can be hidden this way; one that solves a
+ * cell is always kept. */
+function pushUnlessCoveredByEasier(instances: TechniqueInstance[], candidates: TechniqueInstance[]): void {
+  const keyOf = (e: TechniqueCandidateRef) => `${e.row},${e.col},${e.digit}`
+  const covered = new Set(instances.flatMap((instance) => instance.eliminatedCandidates.map(keyOf)))
+  let tierRank = -1
+  let tierKeys: string[] = []
+  for (const candidate of candidates) {
+    if (candidate.techniqueRank !== tierRank) {
+      tierKeys.forEach((key) => covered.add(key))
+      tierKeys = []
+      tierRank = candidate.techniqueRank
+    }
+    if (candidate.solvedCandidates.length === 0 && candidate.eliminatedCandidates.every((e) => covered.has(keyOf(e)))) {
+      continue
+    }
+    instances.push(candidate)
+    tierKeys.push(...candidate.eliminatedCandidates.map(keyOf))
+  }
+}
+
+/** A Techniques-panel row for one fish. */
+function buildFishInstance(fish: FishInstance): TechniqueInstance {
+  const eliminatedLabel = fish.eliminations.map((e) => cellRef(e.row, e.col)).join(', ')
+  return {
+    id: `fish-${fish.technique.replace(/s+/g, '-')}-${fish.digit}-${fish.lineKind}-${fish.lines.join('')}-${fish.crossLines.join('')}`,
+    name: FISH_TECHNIQUE_NAMES[fish.technique],
+    notation: `${fish.reasonText}, thus ${eliminatedLabel} cannot be ${fish.digit}`,
+    usedCells: [...fish.cells],
+    usedCandidates: fish.cells.map(([row, col]) => ({ row, col, digit: fish.digit })),
+    eliminatedCandidates: fish.eliminations,
+    solvedCandidates: [],
+    // The fins get the same distinct cell border a UR's reason cells do.
+    medusaHighlightCells: fish.fins.length > 0 ? [...fish.fins] : undefined,
+    techniqueRank: FISH_RANKS[fish.technique],
+  }
+}
+
+/** A Techniques-panel row for one ALS-xz. Both ALS' cells are outlined as the
+ * basis, ALS B's also get the distinct border (so an overlap cell has both);
+ * the RCC's candidates are blue and the Z digits' yellow. */
+function buildAlsXzInstance(als: AlsXzInstance): TechniqueInstance {
+  const alsCells = [...als.alsA.cells, ...als.alsB.cells]
+  const candidatesOf = (digits: readonly number[]): TechniqueCandidateRef[] =>
+    alsCells.flatMap(([row, col]) => digits.map((digit) => ({ row, col, digit })))
+  const eliminationText = als.zDigits
+    .map((z) => {
+      const cells = als.eliminations.filter((e) => e.digit === z).map((e) => cellRef(e.row, e.col))
+      return `${cells.join(', ')} cannot be ${z}`
+    })
+    .join(', ')
+  const cellsKey = (cells: readonly (readonly [number, number])[]) => cells.map(([row, col]) => `${row}${col}`).join('.')
+  return {
+    id: `als-xz-${cellsKey(als.alsA.cells)}-${cellsKey(als.alsB.cells)}-${als.rcc}`,
+    name: 'ALS-xz',
+    notation: `${als.reasonText}, thus ${eliminationText}.`,
+    usedCells: alsCells,
+    usedCandidates: [],
+    eliminatedCandidates: als.eliminations,
+    solvedCandidates: [],
+    // Duplicates (an overlap cell) are harmless: these are only ever
+    // membership-tested, and the grid only paints a candidate that's marked.
+    blueCandidates: candidatesOf([als.rcc]),
+    yellowCandidates: candidatesOf(als.zDigits),
+    medusaHighlightCells: [...als.alsB.cells],
+    techniqueRank: RANK_ALS_XZ,
+  }
 }
 
 export function buildDragonInstance(
@@ -989,9 +1084,14 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
       'UR',
       'bug plus one',
       'bivalue oddagon',
+      'x-wing',
       'short single-digit aic',
+      'finned x-wing',
       'short aic',
+      'swordfish',
+      'finned swordfish',
       'generic aic',
+      'als-xz',
     ] as const
   ).filter((t) => techniquesUsed.has(t))
   return orderedTechniques.length > 0
@@ -1140,6 +1240,10 @@ export interface SolvePathResult {
   steps: SolvePathStep[]
   solvedFully: boolean
   stoppedReason: 'solved' | 'stuck' | 'step-cap' | 'time-budget'
+  /** Whether this path was picked with pickEasiestInstance ("Easy Solve").
+   * Stored rather than read from the live setting, since toggling the
+   * checkbox doesn't regenerate an existing path. */
+  easySolve: boolean
   /** One line per step (plus a final summary), for the "how was this
    * calculated" log window - the console gets the same lines. */
   log: string[]
@@ -1214,6 +1318,9 @@ export function buildSolvePath(
   optimizeDragons = false,
   optimizeDynamicDragons = false,
   timeBudgetMs = SOLVE_PATH_TIME_BUDGET_MS,
+  dynamicDragonEnabled = true,
+  enabledFish: ReadonlySet<FishTechnique> = new Set(),
+  alsXzEnabled = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1257,6 +1364,9 @@ export function buildSolvePath(
       genericAicEnabled,
       optimizeDragons,
       optimizeDynamicDragons,
+      dynamicDragonEnabled,
+      enabledFish,
+      alsXzEnabled,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart
@@ -1301,5 +1411,5 @@ export function buildSolvePath(
     //console.log(`[Solve Path] ${line}`)
  // }
 
-  return { steps, solvedFully, stoppedReason, log }
+  return { steps, solvedFully, stoppedReason, easySolve: easySolveEnabled, log }
 }

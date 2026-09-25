@@ -1,6 +1,7 @@
 import { cloneBoard, cloneCandidates, markedCandidateDigits } from './boardUtils'
 import { SudokuBivalueOddagonFinder, type BivalueOddagonInstance } from './SudokuBivalueOddagonFinder'
 import { SudokuBugPlusOneFinder, type BugPlusOneInstance } from './SudokuBugPlusOneFinder'
+import { ALL_FISH_TECHNIQUES, FISH_TECHNIQUE_NAMES, SudokuFishFinder, type FishInstance, type FishTechnique } from './SudokuFishFinder'
 import { SudokuHiddenPairFinder, type HiddenPairInstance } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder, type LockedCandidateInstance } from './SudokuLockedCandidateFinder'
 import {
@@ -14,6 +15,7 @@ import { SudokuNakedSubsetFinder, type NakedSubsetInstance } from './SudokuNaked
 import { SudokuPairFinder, type NakedPairInstance } from './SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE, SudokuRules } from './SudokuRules'
 import { SudokuGenericAicFinder } from './SudokuGenericAicFinder'
+import { SudokuAlsXzFinder, type AlsXzInstance } from './SudokuAlsXzFinder'
 import {
   buildLinkGraphs,
   classifyShortAic,
@@ -298,12 +300,14 @@ export type Rule3Technique =
   | 'naked triple'
   | 'naked quad'
   | 'hidden pair'
+  | FishTechnique
   | 'UR'
   | 'bivalue oddagon'
   | 'bug plus one'
   | 'short single-digit aic'
   | 'short aic'
   | 'generic aic'
+  | 'als-xz'
 
 /** The Rule3Techniques that are AIC chains (each one's own kind of chain). */
 export type AicTechnique = 'short single-digit aic' | 'short aic' | 'generic aic'
@@ -323,18 +327,44 @@ export const ALL_RULE3_TECHNIQUES: readonly Rule3Technique[] = [
   'UR',
   'bivalue oddagon',
   'bug plus one',
+  'x-wing',
   'short single-digit aic',
+  'finned x-wing',
   'short aic',
+  'swordfish',
+  'finned swordfish',
   'generic aic',
+  'als-xz',
 ]
 
-/** ALL_RULE3_TECHNIQUES minus every AIC kind - the default allowed set for
- * both extend()'s own fallback and the app's initial settings state, since
- * the AIC kinds are all opt-in for Dynamic Dragon Colouring, while Bivalue
- * Oddagon and BUG+1 (like every other non-AIC technique here) default to
- * on. */
+/** The late part of findExtensionRule3Move's simulation, after every
+ * technique above: fish and AIC kinds interleaved in the app's difficulty
+ * order, each one tried in full before the next - then ALS-xz, the one
+ * technique ranked above Generic AIC. */
+const FISH_AND_AIC_RULE3_ORDER: readonly (FishTechnique | AicTechnique | 'als-xz')[] = [
+  'x-wing',
+  'short single-digit aic',
+  'finned x-wing',
+  'short aic',
+  'swordfish',
+  'finned swordfish',
+  'generic aic',
+  'als-xz',
+]
+
+/** ALL_RULE3_TECHNIQUES minus every AIC kind, every fish and ALS-xz - the default
+ * allowed set for both extend()'s own fallback and the app's initial
+ * settings state, since the AIC kinds, fish and ALS-xz are all opt-in for
+ * Dynamic Dragon Colouring (a fish or ALS-xz only even exists as a technique
+ * once it's enabled in Settings), while Bivalue Oddagon and BUG+1 (like every other
+ * technique here) default to on. */
 export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TECHNIQUES.filter(
-  (t) => t !== 'short aic' && t !== 'short single-digit aic' && t !== 'generic aic',
+  (t) =>
+    t !== 'short aic' &&
+    t !== 'short single-digit aic' &&
+    t !== 'generic aic' &&
+    t !== 'als-xz' &&
+    !(ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(t),
 )
 
 interface Rule3ChainStep {
@@ -721,8 +751,10 @@ export class SudokuDragonFinder {
   private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
   private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
+  private readonly fishFinder = new SudokuFishFinder()
   private readonly shortAicFinder = new SudokuShortAicFinder()
   private readonly genericAicFinder = new SudokuGenericAicFinder()
+  private readonly alsXzFinder = new SudokuAlsXzFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
   private readonly bugPlusOneFinder = new SudokuBugPlusOneFinder()
   private readonly bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
@@ -2072,40 +2104,45 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      // AIC chains, shortest kind first: single-digit, then short, then
-      // generic. The generic search only runs when nothing shorter applied
-      // (it's a generator, so it's never started otherwise), and not at
-      // all once the per-step AIC limit is used up.
-      if (!(aicLimitPerStep && aicStepsUsed >= 1) && aicSearchesLeft-- > 0) {
-        // Built at most once and handed to both finders - short and generic
-        // AIC otherwise each rebuild the identical link graph for the same
-        // hypBoard/hypCandidates, and with the per-step limit off this whole
-        // block can run dozens of times per chain. Only built when a finder's
-        // result isn't already cached (see memoFind).
-        let sharedGraph: LinkGraphs | undefined
-        const graph = () => (sharedGraph ??= buildLinkGraphs(hypBoard, hypCandidates))
-        const aicsInOrder = function* (finder: SudokuDragonFinder): Generator<{ aic: ShortAicInstance; technique: AicTechnique }> {
-          if (allowedTechniques.has('short single-digit aic') || allowedTechniques.has('short aic')) {
-            for (const aic of finder.memoFind('shortAic', grid, () => finder.shortAicFinder.findShortAics(hypBoard, hypCandidates, graph()))) {
-              yield { aic, technique: classifyShortAic(aic) === 'single-digit' ? 'short single-digit aic' : 'short aic' }
-            }
-          }
-          if (allowedTechniques.has('generic aic')) {
-            for (const aic of finder.memoFind('genericAic', grid, () => finder.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, graph()))) {
-              yield { aic, technique: 'generic aic' }
-            }
-          }
-        }
-        for (const { aic, technique } of aicsInOrder(this)) {
-          if (!allowedTechniques.has(technique)) {
+      // Fish and AIC chains, interleaved in the difficulty order
+      // (FISH_AND_AIC_RULE3_ORDER): each kind gets first refusal before the
+      // next, and the first one found is applied. A fish is only ever allowed
+      // when enabled in Settings (App's effectiveAllowedRule3Techniques drops
+      // it otherwise), so by default the fish search never runs; ALS-xz,
+      // tried last, is gated the same way. The AIC
+      // searches don't run once the per-step AIC limit is used up, and the
+      // generic one only when nothing before it applied.
+      //
+      // The AIC link graph is built at most once per simulated state and
+      // handed to both AIC finders - short and generic AIC otherwise each
+      // rebuild the identical graph for the same hypBoard/hypCandidates, and
+      // with the per-step limit off this can run dozens of times per chain.
+      // Only built when a finder's result isn't already cached (see
+      // memoFind); the single-digit and short tiers share one memoized
+      // findShortAics result.
+      let sharedGraph: LinkGraphs | undefined
+      const graph = () => (sharedGraph ??= buildLinkGraphs(hypBoard, hypCandidates))
+      // Decided - and counted against MAX_RULE3_ENUMERATION_AIC_SEARCHES - the
+      // first time an AIC tier is reached, so once per simulated state.
+      let aicSearchAllowed: boolean | undefined
+      for (const technique of FISH_AND_AIC_RULE3_ORDER) {
+        let chainStep: Rule3ChainStep
+        if (technique === 'short single-digit aic' || technique === 'short aic' || technique === 'generic aic') {
+          aicSearchAllowed ??= !(aicLimitPerStep && aicStepsUsed >= 1) && aicSearchesLeft-- > 0
+          if (!aicSearchAllowed || !allowedTechniques.has(technique)) {
             continue
           }
-
-          for (const { row, col, digit } of aic.eliminations) {
-            hypCandidates[row][col][digit - 1] = false
+          const aic =
+            technique === 'generic aic'
+              ? this.memoFind('genericAic', grid, () => this.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, graph()))[0]
+              : this.memoFind('shortAic', grid, () => this.shortAicFinder.findShortAics(hypBoard, hypCandidates, graph())).find(
+                  (candidate) => (classifyShortAic(candidate) === 'single-digit') === (technique === 'short single-digit aic'),
+                )
+          if (!aic) {
+            continue
           }
           aicStepsUsed++
-          const chainStep: Rule3ChainStep = {
+          chainStep = {
             technique,
             basisCells: aic.nodes.map((n) => [n.row, n.col] as const),
             affectedCells: uniqueCells(aic.eliminations),
@@ -2114,17 +2151,57 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             summaryName: `a ${this.aicLabel(technique)} (Type ${aic.eliminationType})`,
             aic,
           }
-          if (
-            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
-              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
-            )
-          ) {
-            return moves
+        } else if (technique === 'als-xz') {
+          if (!allowedTechniques.has(technique)) {
+            continue
           }
-          steps.push(chainStep)
-          appliedSomething = true
-          break
+          // Only the simplest one is ever used, so only it is cached - a
+          // grid's full list can run to dozens of instances.
+          const als = this.memoFind('alsXz', grid, () => this.alsXzFinder.find(hypBoard, hypCandidates)[0] ?? null)
+          if (!als) {
+            continue
+          }
+          chainStep = {
+            technique,
+            basisCells: [...als.alsA.cells, ...als.alsB.cells],
+            affectedCells: uniqueCells(als.eliminations),
+            eliminatedCandidates: als.eliminations,
+            clause: this.alsXzClause(als),
+            summaryName: 'an ALS-xz',
+          }
+        } else {
+          if (!allowedTechniques.has(technique)) {
+            continue
+          }
+          const fish = this.memoFind('fish', grid, () => this.fishFinder.find(hypBoard, hypCandidates)).find(
+            (candidate) => candidate.technique === technique,
+          )
+          if (!fish) {
+            continue
+          }
+          chainStep = {
+            technique,
+            basisCells: fish.cells,
+            affectedCells: uniqueCells(fish.eliminations),
+            eliminatedCandidates: fish.eliminations,
+            clause: this.fishClause(fish),
+            summaryName: `a ${FISH_TECHNIQUE_NAMES[technique]}`,
+          }
         }
+
+        for (const { row, col, digit } of chainStep.eliminatedCandidates) {
+          hypCandidates[row][col][digit - 1] = false
+        }
+        if (
+          this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+            emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+          )
+        ) {
+          return moves
+        }
+        steps.push(chainStep)
+        appliedSomething = true
+        break
       }
       if (appliedSomething) {
         continue
@@ -2400,6 +2477,16 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     const cellsLabel = pair.cells.map(([r, c]) => cellRef(r, c)).join(', ')
     const eliminationsLabel = this.formatCandidateGroups(pair.eliminations)
     return `a hidden pair of {${a},${b}} in {${cellsLabel}}, which eliminates ${eliminationsLabel}`
+  }
+
+  private fishClause(fish: FishInstance): string {
+    const eliminationsLabel = this.formatCandidateGroups(fish.eliminations)
+    return `a ${FISH_TECHNIQUE_NAMES[fish.technique]} (${fish.reasonText}), which eliminates ${eliminationsLabel}`
+  }
+
+  private alsXzClause(als: AlsXzInstance): string {
+    const eliminationsLabel = this.formatCandidateGroups(als.eliminations)
+    return `an ALS-xz (${als.reasonText}), which eliminates ${eliminationsLabel}`
   }
 
   private uniqueRectangleClause(ur: UniqueRectangleInstance): string {

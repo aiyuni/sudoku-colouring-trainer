@@ -3,6 +3,7 @@ import { SudokuBivalueOddagonFinder } from './SudokuBivalueOddagonFinder'
 import { SudokuBugPlusOneFinder } from './SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from './SudokuColorFinder'
 import { SudokuDragonFinder } from './SudokuDragonFinder'
+import { SudokuFishFinder, type FishTechnique } from './SudokuFishFinder'
 import { SudokuHiddenPairFinder } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './SudokuLockedCandidateFinder'
 import { type MedusaChain, SudokuMedusaFinder } from './SudokuMedusaFinder'
@@ -10,6 +11,7 @@ import { SudokuNakedSubsetFinder } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import { SudokuGenericAicFinder } from './SudokuGenericAicFinder'
+import { SudokuAlsXzFinder } from './SudokuAlsXzFinder'
 import { classifyShortAic, SudokuShortAicFinder } from './SudokuShortAicFinder'
 import { SudokuSingleFinder } from './SudokuSingleFinder'
 import { SudokuSolver } from './SudokuSolver'
@@ -97,6 +99,8 @@ interface CheckpointTarget {
   requireDynamic: boolean
   forbidPlainDragon: boolean
   disregardKinds: DisregardedAicKinds
+  enabledFish: ReadonlySet<FishTechnique>
+  alsXzEnabled: boolean
 }
 
 /** The technique a generated puzzle state is built around - the easiest
@@ -155,6 +159,17 @@ export interface DragonPuzzleGenerateOptions {
   /** Same again for Generic AIC (see SudokuGenericAicFinder). The UI only
    * lets this be false when disregardAic is too. */
   disregardGenericAic?: boolean
+  /** The fish the player has enabled in Settings (none by default). Unlike
+   * the AIC kinds there's no separate "disregard" choice: an enabled fish is
+   * simply one more technique easier than 3D Medusa (and harder than Simple
+   * Colouring), so a checkpoint where one applies is rejected for the 'medusa'
+   * and 'dragon' targets (it would be the easier move), and the solvability
+   * grind may use it (the player can too). */
+  enabledFish?: readonly FishTechnique[]
+  /** ALS-xz enabled in Settings (off by default) - handled like an enabled
+   * fish, except that it ranks above 3D Medusa and Generic AIC (just below
+   * Dragon), so it only ever rejects a 'dragon' checkpoint. */
+  alsXzEnabled?: boolean
 }
 
 /**
@@ -195,12 +210,14 @@ export class SudokuDragonPuzzleGenerator {
   private readonly pairFinder = new SudokuPairFinder()
   private readonly nakedSubsetFinder = new SudokuNakedSubsetFinder()
   private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
+  private readonly fishFinder = new SudokuFishFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
   private readonly bugPlusOneFinder = new SudokuBugPlusOneFinder()
   private readonly bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
   private readonly colorFinder = new SudokuColorFinder()
   private readonly shortAicFinder = new SudokuShortAicFinder()
   private readonly genericAicFinder = new SudokuGenericAicFinder()
+  private readonly alsXzFinder = new SudokuAlsXzFinder()
   private readonly medusaFinder = new SudokuMedusaFinder()
   private readonly dragonFinder = new SudokuDragonFinder()
 
@@ -265,7 +282,7 @@ export class SudokuDragonPuzzleGenerator {
       return null
     }
     const checkpoint = this.buildRobustCheckpoint(board, target)
-    if (!checkpoint || !this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, this.solveWithDynamic(target))) {
+    if (!checkpoint || !this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, this.solveWithDynamic(target), target)) {
       return null
     }
     return { board: checkpoint.board, givens: computeGivenMask(checkpoint.board), candidates: checkpoint.candidates }
@@ -281,6 +298,8 @@ export class SudokuDragonPuzzleGenerator {
         general: options.disregardAic ?? true,
         generic: options.disregardGenericAic ?? true,
       },
+      enabledFish: new Set(options.enabledFish ?? []),
+      alsXzEnabled: options.alsXzEnabled ?? false,
     }
   }
 
@@ -329,7 +348,7 @@ export class SudokuDragonPuzzleGenerator {
         continue
       }
 
-      if (this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, this.solveWithDynamic(target))) {
+      if (this.isSolvableFromCheckpoint(checkpoint.board, checkpoint.candidates, this.solveWithDynamic(target), target)) {
         // The first, sparsest point where the target technique becomes
         // necessary - and robustly so, surviving a fresh "Autofill all" -
         // while the puzzle is still solvable start to finish with what
@@ -470,7 +489,7 @@ export class SudokuDragonPuzzleGenerator {
    * the app itself will show right after the puzzle loads. */
   private buildRobustCheckpoint(
     clueBoard: Board,
-    { technique, requireDynamic, forbidPlainDragon, disregardKinds }: CheckpointTarget,
+    { technique, requireDynamic, forbidPlainDragon, disregardKinds, enabledFish, alsXzEnabled }: CheckpointTarget,
   ): { board: Board; candidates: CandidateGrid } | null {
     const { board, candidates } = this.solveWithSinglesOnly(clueBoard)
 
@@ -509,6 +528,10 @@ export class SudokuDragonPuzzleGenerator {
     if (simpleColouringApplies) {
       return null
     }
+    // Every fish ranks above Simple Colouring but below 3D Medusa.
+    if (this.anyEnabledFish(board, candidates, enabledFish)) {
+      return null
+    }
     if (technique !== 'medusa' && this.anyBlockingShortAic(board, candidates, disregardKinds)) {
       return null
     }
@@ -519,6 +542,10 @@ export class SudokuDragonPuzzleGenerator {
       return medusaApplies ? { board, candidates } : null
     }
     if (medusaApplies) {
+      return null
+    }
+    // ALS-xz ranks between 3D Medusa (and Generic AIC) and Dragon.
+    if (alsXzEnabled && this.alsXzFinder.find(board, candidates).length > 0) {
       return null
     }
 
@@ -613,11 +640,12 @@ export class SudokuDragonPuzzleGenerator {
     checkpointBoard: Board,
     checkpointCandidates: CandidateGrid,
     useDynamic: boolean,
+    easierTechniques: Pick<CheckpointTarget, 'enabledFish' | 'alsXzEnabled'>,
   ): boolean {
     const board = cloneBoard(checkpointBoard)
     const candidates = cloneCandidates(checkpointCandidates)
     for (;;) {
-      this.grindEasyTechniques(board, candidates)
+      this.grindEasyTechniques(board, candidates, easierTechniques)
       if (this.isFullySolved(board)) {
         return true
       }
@@ -627,7 +655,11 @@ export class SudokuDragonPuzzleGenerator {
     }
   }
 
-  private grindEasyTechniques(board: Board, candidates: CandidateGrid) {
+  private grindEasyTechniques(
+    board: Board,
+    candidates: CandidateGrid,
+    { enabledFish, alsXzEnabled }: Pick<CheckpointTarget, 'enabledFish' | 'alsXzEnabled'>,
+  ) {
     for (;;) {
       if (this.applySingles(board, candidates)) continue
       if (this.applyLockedCandidates(board, candidates)) continue
@@ -639,8 +671,10 @@ export class SudokuDragonPuzzleGenerator {
       if (this.applyBugPlusOne(board, candidates)) continue
       if (this.applyBivalueOddagon(board, candidates)) continue
       if (this.applySimpleColoring(board, candidates)) continue
+      if (this.applyFish(board, candidates, enabledFish)) continue
       if (this.applyShortAic(board, candidates)) continue
       if (this.applyMedusa(board, candidates)) continue
+      if (alsXzEnabled && this.applyAlsXz(board, candidates)) continue
       break
     }
   }
@@ -711,6 +745,42 @@ export class SudokuDragonPuzzleGenerator {
       candidates[row][col][digit - 1] = false
     }
     return true
+  }
+
+  private anyEnabledFish(board: Board, candidates: CandidateGrid, enabledFish: ReadonlySet<FishTechnique>): boolean {
+    return enabledFish.size > 0 && this.fishFinder.find(board, candidates).some((fish) => enabledFish.has(fish.technique))
+  }
+
+  private applyFish(board: Board, candidates: CandidateGrid, enabledFish: ReadonlySet<FishTechnique>): boolean {
+    if (enabledFish.size === 0) {
+      return false
+    }
+    let changed = false
+    for (const fish of this.fishFinder.find(board, candidates)) {
+      if (!enabledFish.has(fish.technique)) {
+        continue
+      }
+      for (const { row, col, digit } of fish.eliminations) {
+        if (candidates[row][col][digit - 1]) {
+          candidates[row][col][digit - 1] = false
+          changed = true
+        }
+      }
+    }
+    return changed
+  }
+
+  private applyAlsXz(board: Board, candidates: CandidateGrid): boolean {
+    let changed = false
+    for (const als of this.alsXzFinder.find(board, candidates)) {
+      for (const { row, col, digit } of als.eliminations) {
+        if (candidates[row][col][digit - 1]) {
+          candidates[row][col][digit - 1] = false
+          changed = true
+        }
+      }
+    }
+    return changed
   }
 
   private applyUniqueRectangleType1(board: Board, candidates: CandidateGrid): boolean {

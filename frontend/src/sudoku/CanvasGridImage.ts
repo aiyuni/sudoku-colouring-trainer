@@ -52,7 +52,7 @@ export class CanvasGridImage implements GridImage {
     return this.gray[y * this.width + x]
   }
 
-  async toCroppedDataUrl(x: number, y: number, w: number, h: number, scale: number): Promise<string> {
+  async toCroppedDataUrl(x: number, y: number, w: number, h: number, scale: number, invert = false): Promise<string> {
     const sx = Math.max(0, Math.round(x))
     const sy = Math.max(0, Math.round(y))
     const sw = Math.max(1, Math.round(w))
@@ -69,6 +69,18 @@ export class CanvasGridImage implements GridImage {
     }
     outCtx.imageSmoothingEnabled = true
     outCtx.drawImage(this.canvas, sx, sy, sw, sh, 0, 0, dw, dh)
+    if (invert) {
+      // Done on the pixels rather than with `ctx.filter = 'invert(1)'`,
+      // which Safari ignores on canvas drawing.
+      const pixels = outCtx.getImageData(0, 0, dw, dh)
+      const data = pixels.data
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = 255 - data[i]
+        data[i + 1] = 255 - data[i + 1]
+        data[i + 2] = 255 - data[i + 2]
+      }
+      outCtx.putImageData(pixels, 0, 0)
+    }
     return out.toDataURL('image/png')
   }
 }

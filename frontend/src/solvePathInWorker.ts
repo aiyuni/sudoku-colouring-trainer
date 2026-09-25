@@ -18,6 +18,9 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, options: Solve
     options.optimizeDragons,
     options.optimizeDynamicDragons,
     options.timeBudgetMs,
+    options.dynamicDragonEnabled,
+    new Set(options.enabledFish),
+    options.alsXzEnabled,
   )
 }
 

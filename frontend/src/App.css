@@ -258,7 +258,24 @@ html.app-busy .busy-cancel,
 .header p {
   margin: 0 0 1rem;
   color: #5b6578;
-  max-width: 40rem;
+  max-width: 60rem;
+}
+
+/* Inline "Techniques overview" link in the header blurb: a button (it opens
+   the overlay, not a URL) dressed as a text link. */
+.header-link {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: #2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.header-link:hover {
+  color: #1d4ed8;
 }
 
 .mode-toggle {
@@ -1357,6 +1374,11 @@ html.app-busy .busy-cancel,
   color: #b45309;
 }
 
+.solve-path-hardest {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
 .technique-list {
   list-style: none;
   margin: 0;
@@ -1762,7 +1784,8 @@ button.primary {
   font-size: 0.9rem;
 }
 
-.solvability-solvable {
+.solvability-solvable,
+.solvability-solvable-from-marks {
   color: #15803d;
 }
 
@@ -1837,7 +1860,16 @@ button.primary {
     color: #cbd5e1;
   }
 
-  .solvability-solvable {
+  .header-link {
+    color: #60a5fa;
+  }
+
+  .header-link:hover {
+    color: #93c5fd;
+  }
+
+  .solvability-solvable,
+  .solvability-solvable-from-marks {
     color: #4ade80;
   }
 

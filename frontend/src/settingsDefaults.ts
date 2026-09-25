@@ -19,6 +19,22 @@ export interface AppSettings {
   shortSingleDigitAicEnabled: boolean
   shortAicEnabled: boolean
   genericAicEnabled: boolean
+  /** The four fish (Settings -> Techniques), each off by default. Their
+   * Dynamic Dragon checkboxes (allowedRule3Techniques) only count while the
+   * fish itself is on - see App's effectiveAllowedRule3Techniques. */
+  xWingEnabled: boolean
+  finnedXWingEnabled: boolean
+  swordfishEnabled: boolean
+  finnedSwordfishEnabled: boolean
+  /** ALS-xz (singly linked), off by default. Its Dynamic Dragon checkbox
+   * ('als-xz' in allowedRule3Techniques, also off by default) only counts
+   * while this is on, like a fish. */
+  alsXzEnabled: boolean
+  /** ON = no Dynamic Dragon Colouring anywhere (Techniques list, solve
+   * path, solvability check, Find by elims, auto-solve, generation), so plain
+   * Dragon is the strongest technique. Named for what ON does, matching its
+   * checkbox. */
+  dynamicDragonDisabled: boolean
   allowedRule3Techniques: readonly Rule3Technique[]
   exhaustiveDragonColouring: boolean
   optimizeDragons: boolean
@@ -43,6 +59,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   shortSingleDigitAicEnabled: false,
   shortAicEnabled: false,
   genericAicEnabled: false,
+  xWingEnabled: false,
+  finnedXWingEnabled: false,
+  swordfishEnabled: false,
+  finnedSwordfishEnabled: false,
+  alsXzEnabled: false,
+  dynamicDragonDisabled: false,
   allowedRule3Techniques: DEFAULT_RULE3_TECHNIQUES,
   exhaustiveDragonColouring: true,
   optimizeDragons: false,
@@ -104,10 +126,15 @@ export const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
   UR: 'Unique Rectangle',
   'bivalue oddagon': 'Bivalue Oddagon',
   'bug plus one': 'BUG+1',
+  'x-wing': 'X-Wing',
   'short single-digit aic': 'Short Single-Digit AIC',
+  'finned x-wing': 'Finned X-Wing',
   'short aic': 'Short AIC (links <= 5)',
+  swordfish: 'Swordfish',
+  'finned swordfish': 'Finned Swordfish',
   // The longest chain is set in one place - see GENERIC_AIC_MAX_LENGTH.
   'generic aic': `Generic AIC (links <= ${GENERIC_AIC_MAX_LENGTH})`,
+  'als-xz': 'ALS-xz',
 }
 
 /** A setting's default as a human-readable string, for the help page:

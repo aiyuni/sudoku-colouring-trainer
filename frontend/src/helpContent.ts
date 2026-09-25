@@ -131,12 +131,20 @@ export const HELP_TABS: HelpTab[] = [
         title: 'Select Dynamic Dragon Colouring techniques',
         items: [
           {
+            name: 'Disable Dynamic Dragons',
+            settingKey: 'dynamicDragonDisabled',
+            description:
+              'ON: Dynamic Dragon Colouring is not used anywhere, so plain Dragon Colouring becomes the strongest ' +
+              'technique the solver can use. Thus, turning it ON or OFF will recheck whether the puzzle is solvable by the solver.',
+          },
+          {
             name: 'Select Dynamic Dragon Colouring techniques',
             //settingKey: 'allowedRule3Techniques',
             description:
               "The most important setting for Dynamic Dragons. Controls the non-colouring techniques Dynamic Dragon may apply under a colour's assumption to extend the Dragon. " +
-              'Hidden Single, Locked Candidates and Naked Pair are always ON. Each AIC kind only takes effect ' +
-              'while that AIC is enabled in Settings.',
+              'Hidden Single, Locked Candidates and Naked Pair are always ON. Each AIC kind, each fish (X-Wing, ' +
+              'Finned X-Wing, Swordfish, Finned Swordfish) and ALS-xz only takes effect while it is enabled in Settings; the ' +
+              'fish and ALS-xz are OFF here by default even then.',
           },
         ],
       },
@@ -178,7 +186,7 @@ export const HELP_TABS: HelpTab[] = [
       },
       {
         title: 'Techniques',
-        intro: 'Enables or disables certain techniques, for both the solver and the generator.  Advanced players may want to enable AICs.  Note that Dragons will find all AICs eliminations.',
+        intro: 'Enables or disables certain techniques for the solver. Advanced players may want to enable AICs or fish.  Note that Plain Dragons will find all AICs eliminations.',
         items: [
           {
             name: 'Enable Short Single-Digit AIC',
@@ -195,6 +203,36 @@ export const HELP_TABS: HelpTab[] = [
             settingKey: 'genericAicEnabled',
             description:
               `AICs longer than a Short AIC, up to ${GENERIC_AIC_MAX_LENGTH} links. Needs Short AIC ON.`,
+          },
+          {
+            name: 'Enable X-Wing',
+            settingKey: 'xWingEnabled',
+            description:
+              'Enable X-Wings to be found by the solver.',
+          },
+          {
+            name: 'Enable Finned X-Wing',
+            settingKey: 'finnedXWingEnabled',
+            description:
+              'Enable Finned X-Wings to be found by the solver.',
+          },
+          {
+            name: 'Enable Swordfish',
+            settingKey: 'swordfishEnabled',
+            description:
+                'Enable Swordfish to be found by the solver.',
+          },
+          {
+            name: 'Enable Finned Swordfish',
+            settingKey: 'finnedSwordfishEnabled',
+            description:
+              'Enable Finned Swordfish to be found by the solver.',
+          },
+          {
+            name: 'Enable ALS-xz',
+            settingKey: 'alsXzEnabled',
+            description:
+              'Enable ALS-xz to be found by the solver.',
           },
         ],
       },
@@ -220,10 +258,8 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Timeout',
             settingKey: 'solvePathTimeoutMs',
             description:
-              'How long Generate/Regenerate keeps searching before it stops and shows the steps found so far. ' +
-              'The "Solvable" check under the grid uses the same limit - if it runs out of time it says it ' +
-              "couldn't tell whether brute force is needed, so raise this if you see that often (slow settings " +
-              'like Optimize Dynamic Dragons or every AIC enabled make each step take longer).\n\n' +
+              'How long the Solver attempts to find the optimal solve path before it stops and shows the steps found so far. ' +
+              'The "Solvable" check under the grid uses the same limit. \n\n Increase this value if you frequently see the solver timing out (Optimize Dynamic Dragons ON with Exhaustive Dragons OFF can take more time).\n\n' +
               'The search runs in the background.',
           },
         ],

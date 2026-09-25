@@ -1,5 +1,6 @@
 import type { Board, CandidateGrid } from './sudoku/types'
 import type { Rule3Technique } from './sudoku/SudokuDragonFinder'
+import type { FishTechnique } from './sudoku/SudokuFishFinder'
 import { buildSolvePath, type SolvePathResult } from './techniqueEngine'
 
 /** Everything buildSolvePath takes besides the grid - plain data, so it
@@ -16,6 +17,12 @@ export interface SolvePathOptions {
   optimizeDragons: boolean
   optimizeDynamicDragons: boolean
   timeBudgetMs: number
+  /** False under the "Disable Dynamic Dragons" setting. */
+  dynamicDragonEnabled: boolean
+  /** The fish enabled in Settings (none by default). */
+  enabledFish: FishTechnique[]
+  /** ALS-xz enabled in Settings (off by default). */
+  alsXzEnabled: boolean
 }
 
 export interface SolvePathWorkerRequest {
@@ -48,6 +55,9 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.optimizeDragons,
         options.optimizeDynamicDragons,
         options.timeBudgetMs,
+        options.dynamicDragonEnabled,
+        new Set(options.enabledFish),
+        options.alsXzEnabled,
       ),
     }
   } catch (error) {
