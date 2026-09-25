@@ -17,5 +17,5 @@ Try it here: https://aiyuni.github.io/sudoku-colouring-trainer/
 * Extremely strong Colouring solver:
   * Shows **every** possible Colouring technique to progress a given Sudoku grid state, sorted by complexity.  
   * Customizable Solve Path: Find the **easiest** solve path, or the **quickest** solve path.
-  * For advanced users/solvers:  implements all traditional AIC and Uniqueness techniques, which Colouring can utilize.  Does not contain Fish! 
+  * For advanced users/solvers:  implements all traditional AIC, Fish, ALS-XZ, and Uniqueness techniques, all of which Colouring can utilize. 
 * Import puzzles via OCR or grid strings from by **[Sudoku.Coach](https://sudoku.coach/)** and **[SudokuWiki](https://www.sudokuwiki.org/)**
