@@ -653,7 +653,7 @@ const TECHNIQUE_PHRASE: Record<string, string> = {
   'finned swordfish': 'a Finned Swordfish',
   UR: 'a Unique Rectangle',
   'bivalue oddagon': 'a Bivalue Oddagon',
-  'bug plus one': 'a BUG+1',
+  'BUG+1': 'a BUG+1',
   'short single-digit aic': 'a single-digit AIC',
   'short aic': 'a short AIC',
   'generic aic': 'a generic AIC',
@@ -863,7 +863,7 @@ export function buildUniqueRectangleLesson(options: UniqueRectangleOptions): Tut
   const { id, title, hint, state, type, corner } = options
   const { board, candidates } = state
   const instance = urFinder
-    .find(board, candidates)
+    .find(board, candidates, { mergeTypes: false })
     .find(
       (candidate) =>
         candidate.type.replace(' aka Hidden Rectangle', '') === type && candidate.cells.some((cell) => sameCell(cell, corner)),
@@ -926,6 +926,93 @@ export function buildUniqueRectangleLesson(options: UniqueRectangleOptions): Tut
       solved.length > 0
         ? { badge: 'Result', caption: `So ${name} must be ${solved[0].digit}.`, outlineCells: cells, solved, spotlight, applied: true }
         : { badge: 'Result', caption: `So ${name} can't be ${a} or ${b}.`, outlineCells: cells, eliminated, spotlight, applied: true },
+    )
+    return { id, title, hint, state, frames }
+  }
+
+  if (type === 'Type 2' || type === 'Type 5') {
+    const extraCells = instance.reasonCells
+    const z = instance.eliminatedCandidates[0].digit
+    const zPips = extraCells.map(([r, c]) => ref(r, c, z))
+    const targets = [...new Map(instance.eliminatedCandidates.map((e) => [`${e.row}.${e.col}`, [e.row, e.col] as TutorialCell])).values()]
+    const seeLinks: TutorialLink[] = eliminated.flatMap((from) => zPips.map((to) => ({ from, to, kind: 'sees' as const })))
+    const all = extraCells.length === 2 ? 'both' : 'all three'
+    frames.push(
+      {
+        badge: 'Spot it',
+        caption: `Only ${cellList(extraCells)} hold anything besides ${a} and ${b}, and in each it's just ${z}. If none of them were ${z}, all four corners would be just ${a} and ${b}, so at least one of them is ${z}.`,
+        outlineCells: cells,
+        basis: zPips,
+        spotlight,
+      },
+      {
+        badge: 'Sees',
+        caption: `${cellList(targets)} ${targets.length === 1 ? 'sees' : 'see'} ${all}, so wherever that ${z} lands, ${targets.length === 1 ? 'it' : 'they'} can't be ${z}.`,
+        outlineCells: cells,
+        basis: zPips,
+        links: seeLinks,
+        eliminated,
+        spotlight,
+      },
+      {
+        badge: 'Result',
+        caption: `So ${cellList(targets)} can't be ${z}.`,
+        outlineCells: cells,
+        eliminated,
+        spotlight,
+        applied: true,
+      },
+    )
+    return { id, title, hint, state, frames }
+  }
+
+  if (type === 'Type 3') {
+    const [x, y] = instance.reasonCells
+    const subsetCells = (instance.subsetCells ?? []).map(([r, c]) => [r, c] as const)
+    const extras = [...new Set([x, y].flatMap((cell) => digitsOf(cell).filter((d) => d !== a && d !== b)))].sort((p, q) => p - q)
+    const subsetDigits = [...new Set([...extras, ...subsetCells.flatMap(digitsOf)])].sort((p, q) => p - q)
+    const extraPips = [x, y].flatMap(([r, c]) => extras.filter((d) => candidates[r][c][d - 1]).map((d) => ref(r, c, d)))
+    const subsetPips = subsetCells.flatMap(([r, c]) => digitsOf([r, c]).map((d) => ref(r, c, d)))
+    // Every house the whole subset lies in (a row subset may sit in one box too).
+    const houses = sharedUnits(x, y).filter((unit) => subsetCells.every((cell) => unit.cells.some((u) => sameCell(u, cell))))
+    const housePhrase = joinPhrases(houses.map(unitPhrase))
+    const pairNames = `${cellName(x[0], x[1])} and ${cellName(y[0], y[1])}`
+    const subsetSpotlight = { digits: [a, b, ...subsetDigits] }
+    frames.push(
+      {
+        badge: 'Merge',
+        caption: `Only ${pairNames} hold anything besides ${a} and ${b}. They can't both be ${a} or ${b} (that's the deadly pattern), so one of them is ${extras.slice(0, -1).join(', ')} or ${extras[extras.length - 1]}: treat the two as one cell holding just {${extras.join(',')}}.`,
+        outlineCells: cells,
+        basis: extraPips,
+        spotlight: subsetSpotlight,
+      },
+      {
+        badge: 'Subset',
+        caption: `In ${housePhrase}, that merged cell plus ${cellList(subsetCells)} make ${subsetCells.length + 1} cells holding only the ${subsetDigits.length} digits ${subsetDigits.join(', ')}: a naked subset, so those digits all go in these cells.`,
+        outlineCells: cells,
+        greenCells: [x, y, ...subsetCells],
+        unitCells: houses.flatMap((unit) => unit.cells),
+        basis: [...extraPips, ...subsetPips],
+        spotlight: subsetSpotlight,
+      },
+      {
+        badge: 'Why',
+        caption: `So none of ${subsetDigits.join(', ')} can go anywhere else in ${housePhrase}.`,
+        outlineCells: cells,
+        greenCells: [x, y, ...subsetCells],
+        unitCells: houses.flatMap((unit) => unit.cells),
+        basis: [...extraPips, ...subsetPips],
+        eliminated,
+        spotlight: subsetSpotlight,
+      },
+      {
+        badge: 'Result',
+        caption: `So ${joinPhrases(instance.eliminatedCandidates.map((e) => `${cellName(e.row, e.col)} can't be ${e.digit}`))}.`,
+        outlineCells: cells,
+        eliminated,
+        spotlight: subsetSpotlight,
+        applied: true,
+      },
     )
     return { id, title, hint, state, frames }
   }

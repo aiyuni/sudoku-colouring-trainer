@@ -83,7 +83,8 @@ export interface DragonExtendOptions {
    * every dragon colour has been promoted to its medusa colour.
    *
    * Never changes *whether* a chain yields a result (that is decided by the
-   * first elimination, exactly as when false), only how much it reports, so
+   * first elimination - or a side covering every empty cell, a 'solution'
+   * either way - exactly as when false), only how much it reports, so
    * callers that only need to know if a chain resolves can leave it off. */
   exhaustive?: boolean
   /** Optimize Dragons - defaults to false (the original behaviour: the two
@@ -303,7 +304,7 @@ export type Rule3Technique =
   | FishTechnique
   | 'UR'
   | 'bivalue oddagon'
-  | 'bug plus one'
+  | 'BUG+1'
   | 'short single-digit aic'
   | 'short aic'
   | 'generic aic'
@@ -326,7 +327,7 @@ export const ALL_RULE3_TECHNIQUES: readonly Rule3Technique[] = [
   'hidden pair',
   'UR',
   'bivalue oddagon',
-  'bug plus one',
+  'BUG+1',
   'x-wing',
   'short single-digit aic',
   'finned x-wing',
@@ -957,12 +958,23 @@ export class SudokuDragonFinder {
         return { moves }
       }
 
-      if (continuing) {
+      // A side covering the whole grid is checked with or without exhaustive,
+      // before the first elimination too: otherwise a chain whose side fills
+      // the grid without any elimination on the way dead-ends below (the
+      // other side has nothing left to extend) and returns null, while the
+      // same colouring reached after an exhaustive-mode elimination would be
+      // reported as the solution - so Exhaustive ON resolved chains OFF
+      // couldn't, and solved puzzles OFF called brute force. Only while no
+      // elimination is pending, so the first elimination stays the same
+      // on/off (with exhaustive off one would already have returned above).
+      if (continuing || eliminationMoves.length === 0) {
         const solutionMove = this.findColouringSolutionMove(nodeMap, board)
         if (solutionMove) {
           moves.push(solutionMove)
           return { moves }
         }
+      }
+      if (continuing) {
         if (!Array.from(nodeMap.values()).some((n) => !isPrimary(n.color))) {
           // Every dragon colour has been promoted to its medusa colour.
           return { moves: moves.slice(0, lastEliminationEnd) }
@@ -1151,11 +1163,14 @@ export class SudokuDragonFinder {
         if (eliminationMoves.length > 0 && (!exhaustive || isMassElimination)) {
           return { kind: 'final', moves: eliminationMoves }
         }
-        if (continuing) {
+        // Same as extend(): a solution counts before the first elimination too.
+        if (continuing || eliminationMoves.length === 0) {
           const solutionMove = this.findColouringSolutionMove(state.nodeMap, board)
           if (solutionMove) {
             return { kind: 'solution', move: solutionMove }
           }
+        }
+        if (continuing) {
           if (!Array.from(state.nodeMap.values()).some((n) => !isPrimary(n.color))) {
             return { kind: 'dead-end' }
           }
@@ -2002,7 +2017,8 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             }
             const chainStep: Rule3ChainStep = {
               technique: 'UR',
-              basisCells: ur.cells,
+              // Type 3 also rests on the naked-subset cells outside the rectangle.
+              basisCells: [...ur.cells, ...(ur.subsetCells ?? [])],
               affectedCells: uniqueCells(ur.eliminatedCandidates),
               eliminatedCandidates: ur.eliminatedCandidates,
               clause: this.uniqueRectangleClause(ur),
@@ -2025,7 +2041,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      if (allowedTechniques.has('bug plus one')) {
+      if (allowedTechniques.has('BUG+1')) {
         // Never a mid-chain antecedent - a BUG+1 is either the whole
         // grid's one escape-hatch cell (and directly forces its own
         // solution) or it doesn't apply at all, unlike every other
@@ -2036,7 +2052,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             primary,
             steps,
             {
-              technique: 'bug plus one',
+              technique: 'BUG+1',
               basisCells: [bugPlusOne.cell],
               affectedCells: [],
               eliminatedCandidates: [],
@@ -2625,7 +2641,8 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     return { id: '', kind: 'promotion', description, colored, eliminated: [], solved: [] }
   }
 
-  /** Exhaustive mode only: if one side's nodes (primary or dragon) between
+  /** Checked whenever no elimination is pending (not only in exhaustive
+   * mode - see extend's loop): if one side's nodes (primary or dragon) between
    * them cover every empty cell, assuming that side true fills the whole
    * grid. Callers must already have ruled out a mass elimination (which
    * would show that side contradicting itself), so what's left is a

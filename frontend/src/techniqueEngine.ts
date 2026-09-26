@@ -5,7 +5,7 @@
  * App.tsx so solvePath.worker.ts can run the (up to many seconds) search off
  * the main thread.
  */
-import { cloneBoard, cloneCandidates } from './sudoku/boardUtils'
+import { cloneBoard, cloneCandidates, markedCandidateDigits } from './sudoku/boardUtils'
 import { SudokuAlsXzFinder, type AlsXzInstance } from './sudoku/SudokuAlsXzFinder'
 import { SudokuBivalueOddagonFinder } from './sudoku/SudokuBivalueOddagonFinder'
 import { SudokuBugPlusOneFinder } from './sudoku/SudokuBugPlusOneFinder'
@@ -579,8 +579,15 @@ export function buildTechniqueInstances(
       id: `ur-${ur.type.replace(/\s+/g, '').toLowerCase()}-${idSuffix}-${ur.urDigits.join(',')}`,
       name: `Unique Rectangle (${ur.type})`,
       notation: `${ur.reasonText}, thus ${conclusion}`,
-      usedCells: [...ur.cells],
-      usedCandidates: ur.cells.flatMap(([row, col]) => ur.urDigits.map((digit) => ({ row, col, digit }))),
+      usedCells: [...ur.cells, ...(ur.subsetCells ?? [])],
+      usedCandidates: [
+        ...ur.cells.flatMap(([row, col]) => ur.urDigits.map((digit) => ({ row, col, digit }))),
+        // Type 3's naked-subset partners: every mark they hold is part of
+        // the subset.
+        ...(ur.subsetCells ?? []).flatMap(([row, col]) =>
+          markedCandidateDigits(candidates[row][col]).map((digit) => ({ row, col, digit })),
+        ),
+      ],
       eliminatedCandidates: ur.eliminatedCandidates,
       solvedCandidates: ur.solvedCandidates,
       medusaHighlightCells: [...ur.reasonCells],
@@ -1082,7 +1089,7 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
       'naked quad',
       'hidden pair',
       'UR',
-      'bug plus one',
+      'BUG+1',
       'bivalue oddagon',
       'x-wing',
       'short single-digit aic',

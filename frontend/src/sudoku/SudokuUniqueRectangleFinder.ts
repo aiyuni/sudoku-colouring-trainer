@@ -4,7 +4,16 @@ import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
 import { sudokuUnits, type Cell } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
-export type UniqueRectangleTypeName = 'Type 1' | 'Type 4' | 'Type 7a' | 'Type 7b' | 'Type 7c' | 'Type 7d'
+export type UniqueRectangleTypeName =
+  | 'Type 1'
+  | 'Type 2'
+  | 'Type 3'
+  | 'Type 4'
+  | 'Type 5'
+  | 'Type 7a'
+  | 'Type 7b'
+  | 'Type 7c'
+  | 'Type 7d'
 
 /** One found instance of any Unique Rectangle type - a single shape (see
  * SudokuUniqueRectangleFinder's own doc comment for what "deadly pattern"
@@ -34,10 +43,16 @@ export interface UniqueRectangleInstance {
   /** The two candidates common to all four cells. */
   urDigits: readonly [number, number]
   /** The cell(s) this instance's own reasoning is specifically anchored on
-   * - a subset of `cells` (Type 1's one extra-candidate cell, Type 4's two
-   * non-bivalue cells, Type 7a-7d's strong-link cell(s)) - highlighted
+   * - a subset of `cells` (Type 1's one extra-candidate cell, Types 2/3/5's
+   * extra-candidate corners, Type 4's two non-bivalue cells, Type 7a-7d's
+   * strong-link cell(s)) - highlighted
    * distinctly from the rest of the rectangle in the Techniques panel. */
   reasonCells: readonly Cell[]
+  /** Type 3 only: the cells *outside* the rectangle that complete its naked
+   * subset with the two extra-candidate corners (see findType3) - part of
+   * the basis, but not UR cells, so kept apart from `cells`/`reasonCells`.
+   * Absent for every other type. */
+  subsetCells?: readonly Cell[]
   /** Plain-English fragment naming the type and stating the specific basis
    * for it (see the interface doc comment above) - no "which eliminates
    * ..."/"is not ..." suffix, callers append their own conclusion. */
@@ -93,6 +108,50 @@ function cellsLabel(cells: readonly Cell[]): string {
   return cells.map(([r, c]) => cellRef(r, c)).join(', ')
 }
 
+function bitCount(mask: number): number {
+  let count = 0
+  for (let m = mask; m !== 0; m &= m - 1) {
+    count++
+  }
+  return count
+}
+
+/** "row 6" / "column 3" / "box 5" for one of sudokuUnits()'s houses. */
+function houseLabel(house: readonly Cell[]): string {
+  const [[r0, c0]] = house
+  if (house.every(([r]) => r === r0)) {
+    return `row ${r0 + 1}`
+  }
+  if (house.every(([, c]) => c === c0)) {
+    return `column ${c0 + 1}`
+  }
+  return `box ${Math.floor(r0 / BOX_SIZE) * BOX_SIZE + Math.floor(c0 / BOX_SIZE) + 1}`
+}
+
+/** Every unsolved cell outside the rectangle that still has `digit` marked
+ * and sees every one of `targets` - where a digit that must land on one of
+ * `targets` can't go. */
+function cellsSeeingAll(
+  board: Board,
+  candidates: CandidateGrid,
+  rectangle: readonly Cell[],
+  targets: readonly Cell[],
+  digit: number,
+): Cell[] {
+  const out: Cell[] = []
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (board[r][c] !== 0 || !candidates[r][c][digit - 1] || rectangle.some(([rr, rc]) => rr === r && rc === c)) {
+        continue
+      }
+      if (targets.every((target) => sameUnit([r, c], target))) {
+        out.push([r, c])
+      }
+    }
+  }
+  return out
+}
+
 function otherDigit(pair: readonly [number, number], digit: number): number {
   return pair[0] === digit ? pair[1] : pair[0]
 }
@@ -118,16 +177,22 @@ function otherDigit(pair: readonly [number, number], digit: number): number {
 /** Simplest-first order the difficulty order treats as one tier, but a
  * consumer that wants "try easiest first" (Dynamic Dragon's Extension
  * Rule 3, matching how it tries every other technique) still needs a
- * concrete order - Type 1 is the most recognisable shape, then the ones
- * needing only local structure (4, 7a), then the ones chaining further
- * (7b), then the ones needing to check every unit a cell touches (7c, 7d). */
+ * concrete order - Type 1 is the most recognisable shape, then the "one
+ * shared extra candidate" ones (2, and 5, its diagonal/three-corner
+ * variant), then the ones needing only local structure (4, 7a), then the
+ * ones chaining further (7b), then the ones needing to check every unit a
+ * cell touches (7c, 7d). Type 3 sits right after 4: it needs a whole naked
+ * subset spotted around the rectangle, but no chaining. */
 const TYPE_PRIORITY: Record<UniqueRectangleTypeName, number> = {
   'Type 1': 0,
-  'Type 4': 1,
-  'Type 7a': 2,
-  'Type 7b': 3,
-  'Type 7c': 4,
-  'Type 7d': 5,
+  'Type 2': 1,
+  'Type 5': 2,
+  'Type 4': 3,
+  'Type 3': 4,
+  'Type 7a': 5,
+  'Type 7b': 6,
+  'Type 7c': 7,
+  'Type 7d': 8,
 }
 
 /** A single-type instance's `type` is a literal key into TYPE_PRIORITY
@@ -173,7 +238,12 @@ function dedupeByKey<T>(items: readonly T[], key: (item: T) => string): T[] {
 }
 
 export class SudokuUniqueRectangleFinder {
-  find(board: Board, candidates: CandidateGrid): UniqueRectangleInstance[] {
+  /** `mergeTypes: false` skips `mergeSameRectangle`, so every instance keeps
+   * its own single type and only its own eliminations - for the How It Works
+   * lessons, which teach one type at a time from positions where another
+   * type often fires on the same rectangle too. Everything that applies
+   * eliminations wants the default (see mergeSameRectangle for why). */
+  find(board: Board, candidates: CandidateGrid, { mergeTypes = true }: { mergeTypes?: boolean } = {}): UniqueRectangleInstance[] {
     const instances: UniqueRectangleInstance[] = []
 
     for (let r1 = 0; r1 < BOARD_SIZE - 1; r1++) {
@@ -202,6 +272,8 @@ export class SudokuUniqueRectangleFinder {
             for (const pair of this.commonDigitPairs(candidates, cells)) {
               const pairInstances: UniqueRectangleInstance[] = []
               this.findType1(candidates, cells, pair, pairInstances)
+              this.findType2Or5(board, candidates, cells, pair, pairInstances)
+              this.findType3(board, candidates, cells, pair, pairInstances)
               this.findType4(board, candidates, cells, pair, pairInstances)
               this.findType7a(board, candidates, cells, pair, pairInstances)
               this.findType7b(board, candidates, cells, pair, pairInstances)
@@ -214,7 +286,8 @@ export class SudokuUniqueRectangleFinder {
       }
     }
 
-    return this.mergeSameRectangle(this.dedupe(instances)).sort((a, b) => priorityOf(a.type) - priorityOf(b.type))
+    const deduped = this.dedupe(instances)
+    return (mergeTypes ? this.mergeSameRectangle(deduped) : deduped).sort((a, b) => priorityOf(a.type) - priorityOf(b.type))
   }
 
   /** Different reasoning paths (a different bivalue cell, a different
@@ -337,6 +410,9 @@ export class SudokuUniqueRectangleFinder {
         cells: first.cells,
         urDigits: first.urDigits,
         reasonCells: dedupeByKey(sorted.flatMap((i) => i.reasonCells), cellKey),
+        ...(sorted.some((i) => i.subsetCells) && {
+          subsetCells: dedupeByKey(sorted.flatMap((i) => i.subsetCells ?? []), cellKey),
+        }),
         reasonText: `UR ${combinedType} of {${first.urDigits[0]},${first.urDigits[1]}} at ${cellsLabel(first.cells)}, where ${clauses.join('; and where ')}`,
         eliminatedCandidates: dedupeByKey(sorted.flatMap((i) => i.eliminatedCandidates), eliminationKey),
         solvedCandidates: dedupeByKey(sorted.flatMap((i) => i.solvedCandidates), eliminationKey),
@@ -409,6 +485,162 @@ export class SudokuUniqueRectangleFinder {
         ],
         solvedCandidates: [],
       })
+    }
+  }
+
+  /** Types 2 and 5: every non-bivalue corner holds the pair plus the *same*
+   * single extra candidate Z, and nothing else. If none of them were Z, each
+   * would be one of the pair and all four corners would be the deadly
+   * pattern - so at least one of them is Z, and Z can't go in any cell that
+   * sees all of them. Type 2 is that with two corners sharing a row or
+   * column (HoDoKu's "two non diagonal cells"); Type 5 is the same logic
+   * with two diagonal corners or three corners, which just leaves fewer
+   * cells seeing them all. Four extra corners is never reported - no cell
+   * outside the rectangle can see all four. With one extra corner this is
+   * Type 1 instead, so that case is left to findType1.
+   */
+  private findType2Or5(
+    board: Board,
+    candidates: CandidateGrid,
+    cells: readonly [Cell, Cell, Cell, Cell],
+    pair: readonly [number, number],
+    out: UniqueRectangleInstance[],
+  ): void {
+    const [a, b] = pair
+    const cellDigits = cells.map(([r, c]) => markedCandidateDigits(candidates[r][c]))
+    const extraIndices = cellDigits.flatMap((digits, i) => (digits.length > 2 ? [i] : []))
+    if (extraIndices.length !== 2 && extraIndices.length !== 3) {
+      return
+    }
+    const extrasPerCell = extraIndices.map((i) => cellDigits[i].filter((d) => d !== a && d !== b))
+    const z = extrasPerCell[0][0]
+    if (!extrasPerCell.every((extras) => extras.length === 1 && extras[0] === z)) {
+      return
+    }
+    const extraCells = extraIndices.map((i) => cells[i])
+    const isType2 = extraCells.length === 2 && sameUnit(extraCells[0], extraCells[1])
+    const eliminations = cellsSeeingAll(board, candidates, cells, extraCells, z).map(([r, c]) => ({ row: r, col: c, digit: z }))
+    if (eliminations.length === 0) {
+      return
+    }
+    const type: UniqueRectangleTypeName = isType2 ? 'Type 2' : 'Type 5'
+    out.push({
+      type,
+      cells,
+      urDigits: pair,
+      reasonCells: extraCells,
+      reasonText: `UR ${type} of {${a},${b}} at ${cellsLabel(cells)}, where ${z} is the only extra candidate in ${cellsLabel(extraCells)}, so one of them is ${z}`,
+      eliminatedCandidates: eliminations,
+      solvedCandidates: [],
+    })
+  }
+
+  /** Type 3: exactly two corners have extra candidates, and they share a row
+   * or column (the other two hold only the pair). They can't both be one of
+   * the pair (deadly pattern), so at least one of them is one of their extra
+   * digits E - which lets the two be counted as one "virtual cell" holding
+   * just E. If, in a house containing both, that virtual cell plus N other
+   * cells hold only N+1 digits between them, it's a naked subset: those
+   * N+1 digits are all placed within it, so they leave every other cell of
+   * that house (and of any other house the whole subset also sits in - the
+   * "locked" case, e.g. a row subset that's all in one box too).
+   *
+   * No cap on N beyond "leave at least one cell to eliminate from": a big
+   * subset is still the same argument, and real positions do need one (the
+   * reference example uses a 4-extra-digit virtual cell plus 4 other cells
+   * of the row). Only the smallest subset per house that eliminates
+   * something is reported, so the wording names as few cells as it can.
+   * A single shared extra digit is Type 2 instead (N = 0), so E must have
+   * at least two digits.
+   */
+  private findType3(
+    board: Board,
+    candidates: CandidateGrid,
+    cells: readonly [Cell, Cell, Cell, Cell],
+    pair: readonly [number, number],
+    out: UniqueRectangleInstance[],
+  ): void {
+    const [a, b] = pair
+    const cellDigits = cells.map(([r, c]) => markedCandidateDigits(candidates[r][c]))
+    const extraIndices = cellDigits.flatMap((digits, i) => (digits.length > 2 ? [i] : []))
+    if (extraIndices.length !== 2) {
+      return
+    }
+    const [x, y] = extraIndices.map((i) => cells[i]) as [Cell, Cell]
+    if (!sameUnit(x, y)) {
+      return
+    }
+    let extraMask = 0
+    for (const i of extraIndices) {
+      for (const d of cellDigits[i]) {
+        if (d !== a && d !== b) {
+          extraMask |= 1 << d
+        }
+      }
+    }
+    if (bitCount(extraMask) < 2) {
+      return
+    }
+
+    const maskOf = ([r, c]: Cell) => markedCandidateDigits(candidates[r][c]).reduce((mask, d) => mask | (1 << d), 0)
+    for (const unit of sharedUnitsOf(x, y)) {
+      // The other two UR corners are never in a house with both x and y
+      // (that would put all four in one row/column/box), so this is just
+      // "every other unsolved cell of the house".
+      const others = unit.filter(([r, c]) => board[r][c] === 0 && !(r === x[0] && c === x[1]) && !(r === y[0] && c === y[1]))
+      const otherMasks = others.map(maskOf)
+      found: for (let size = 1; size < others.length; size++) {
+        for (let chosen = 1; chosen < 1 << others.length; chosen++) {
+          if (bitCount(chosen) !== size) {
+            continue
+          }
+          let digitMask = extraMask
+          for (let i = 0; i < others.length; i++) {
+            if (chosen & (1 << i)) {
+              digitMask |= otherMasks[i]
+            }
+          }
+          if (bitCount(digitMask) !== size + 1) {
+            continue
+          }
+          const subsetCells = others.filter((_, i) => chosen & (1 << i))
+          const allSubsetCells = [x, y, ...subsetCells]
+          // Every house the whole subset sits in, not just this one.
+          const houses = sudokuUnits().filter((house) =>
+            allSubsetCells.every(([sr, sc]) => house.some(([r, c]) => r === sr && c === sc)),
+          )
+          const eliminations: CandidateElimination[] = []
+          const seen = new Set<string>()
+          for (const house of houses) {
+            for (const [r, c] of house) {
+              if (board[r][c] !== 0 || allSubsetCells.some(([sr, sc]) => sr === r && sc === c) || seen.has(`${r}.${c}`)) {
+                continue
+              }
+              seen.add(`${r}.${c}`)
+              for (let d = 1; d <= 9; d++) {
+                if (digitMask & (1 << d) && candidates[r][c][d - 1]) {
+                  eliminations.push({ row: r, col: c, digit: d })
+                }
+              }
+            }
+          }
+          if (eliminations.length === 0) {
+            continue
+          }
+          const digitsLabel = (mask: number) => [1, 2, 3, 4, 5, 6, 7, 8, 9].filter((d) => mask & (1 << d)).join(',')
+          out.push({
+            type: 'Type 3',
+            cells,
+            urDigits: pair,
+            reasonCells: [x, y],
+            subsetCells,
+            reasonText: `UR Type 3 of {${a},${b}} at ${cellsLabel(cells)}, where the extras {${digitsLabel(extraMask)}} of ${cellsLabel([x, y])} form a naked subset {${digitsLabel(digitMask)}} with ${cellsLabel(subsetCells)} in ${houses.map(houseLabel).join(' and ')}`,
+            eliminatedCandidates: eliminations,
+            solvedCandidates: [],
+          })
+          break found
+        }
+      }
     }
   }
 

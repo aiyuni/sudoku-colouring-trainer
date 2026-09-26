@@ -125,7 +125,7 @@ export const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
   'hidden pair': 'Hidden Pair',
   UR: 'Unique Rectangle',
   'bivalue oddagon': 'Bivalue Oddagon',
-  'bug plus one': 'BUG+1',
+  'BUG+1': 'BUG+1',
   'x-wing': 'X-Wing',
   'short single-digit aic': 'Short Single-Digit AIC',
   'finned x-wing': 'Finned X-Wing',

@@ -85,9 +85,11 @@ export function buildBasicsGroups(): LessonGroup[] {
   ]
 }
 
-/** Abusing Uniqueness: one sub-tab per technique. Every position here was
- * mined from real solves as the first stuck point after the Basics, and each
- * needs no pencil marks removed - a plain autofill of the board shows it. */
+/** Abusing Uniqueness: one sub-tab per technique. Most positions here were
+ * mined from real solves as the first stuck point after the Basics, and need
+ * no pencil marks removed - a plain autofill of the board shows them. UR
+ * Types 2, 3 and 5 are mid-solve positions (from Sudoku.Coach states), so
+ * they list the marks already removed. */
 export function buildUniquenessGroups(): LessonGroup[] {
   return [
     {
@@ -104,6 +106,38 @@ export function buildUniquenessGroups(): LessonGroup[] {
       ),
     },
     {
+      title: 'UR Type 2',
+      blurb: 'Two side-by-side corners share one extra candidate, so one of them is it.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-2',
+          title: 'UR Type 2',
+          state: decodePuzzleState(
+            '200901600000006003000405000036000509504093800900050370381562497000849135459317200',
+            'r1c3-8 r2c2-7 r2c8-1 r2c8-2 r3c1-1 r3c2-1 r3c2-7 r3c5-2 r3c8-8 r3c9-8 r4c5-8 r6c4-2',
+          ),
+          type: 'Type 2',
+          corner: [4, 7],
+        }),
+      ),
+    },
+    {
+      title: 'UR Type 3',
+      blurb: 'Two side-by-side extra corners act as one cell in a naked subset.',
+      lessons: safely(() =>
+        buildUniqueRectangleLesson({
+          id: 'ur-3',
+          title: 'UR Type 3',
+          state: decodePuzzleState(
+            '000730504035800060040105300060001030403000000050090000974010852582900613316582007',
+            'r2c1-1 r3c1-2 r4c5-2 r4c5-4 r5c5-2 r6c6-4 r6c7-1 r6c9-1',
+          ),
+          type: 'Type 3',
+          corner: [5, 3],
+        }),
+      ),
+    },
+    {
       title: 'UR Type 4',
       blurb: 'One pair digit is locked into the two extra corners, so the other pair digit leaves them.',
       lessons: safely(() =>
@@ -115,6 +149,38 @@ export function buildUniquenessGroups(): LessonGroup[] {
           corner: [6, 1],
         }),
       ),
+    },
+    {
+      title: 'UR Type 5',
+      blurb: 'Type 2 with the shared extra candidate in diagonal corners, or in three corners.',
+      lessons: [
+        ...safely(() =>
+          buildUniqueRectangleLesson({
+            id: 'ur-5-diagonal',
+            title: 'UR Type 5 (diagonal)',
+            hint: 'The extra candidate is in two diagonal corners.',
+            state: decodePuzzleState(
+              '980510460502640918461089070795008146148006320326104800854061030600400081210800604',
+              'r5c5-9 r6c9-9 r7c4-2 r7c9-7 r8c5-5 r8c6-7 r8c7-2 r9c5-5 r9c6-7',
+            ),
+            type: 'Type 5',
+            corner: [4, 4],
+          }),
+        ),
+        ...safely(() =>
+          buildUniqueRectangleLesson({
+            id: 'ur-5-three',
+            title: 'UR Type 5 (three corners)',
+            hint: 'The extra candidate is in three corners.',
+            state: decodePuzzleState(
+              '002037004903401287407092310005086400708320001000900008209048100004003800830009040',
+              'r1c2-6 r1c4-5 r1c7-5 r3c2-6 r4c2-1 r5c2-6 r6c2-1 r6c2-6 r6c5-5 r6c7-6 r6c8-6 r8c5-5 r8c9-5 r9c4-1 r9c4-7',
+            ),
+            type: 'Type 5',
+            corner: [0, 6],
+          }),
+        ),
+      ],
     },
     {
       title: 'UR Type 7a',
@@ -175,7 +241,7 @@ export function buildUniquenessGroups(): LessonGroup[] {
         buildBugPlusOneLesson(
           'bug-plus-one',
           'BUG+1',
-          'Bivalue Universal Grave, plus one.',
+          'BUG+1 (avoiding an Binary Universal Grave)',
           decodePuzzleState('086307250205608703734521869802736500053284607647915382561473928328169475479852136'),
         ),
       ),
