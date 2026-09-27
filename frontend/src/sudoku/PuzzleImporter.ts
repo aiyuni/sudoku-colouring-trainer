@@ -11,6 +11,8 @@ export type ImportResult =
   | { ok: true; board: Board; givens: boolean[][]; candidates: CandidateGrid }
   | { ok: false; error: string }
 
+export type PuzzleStringFormat = 'plain' | 'sudoku-coach' | 'sudokuwiki'
+
 interface SudokuCoachState {
   gridSize?: number
   givenDigits?: string
@@ -34,13 +36,26 @@ interface SudokuCoachState {
 export class PuzzleImporter {
   async import(raw: string): Promise<ImportResult> {
     const trimmed = raw.trim()
+    switch (this.detectFormat(trimmed)) {
+      case 'sudoku-coach':
+        return this.importSudokuCoachState(trimmed)
+      case 'sudokuwiki':
+        return this.importSudokuWikiBoard(trimmed)
+      case 'plain':
+        return this.importGivensOnly(trimmed)
+    }
+  }
+
+  /** Which of the formats above `import` will treat `raw` as. */
+  detectFormat(raw: string): PuzzleStringFormat {
+    const trimmed = raw.trim()
     if (trimmed.startsWith(STATE_PREFIX)) {
-      return this.importSudokuCoachState(trimmed)
+      return 'sudoku-coach'
     }
     if (trimmed.includes('|') && trimmed.includes('\n')) {
-      return this.importSudokuWikiBoard(trimmed)
+      return 'sudokuwiki'
     }
-    return this.importGivensOnly(trimmed)
+    return 'plain'
   }
 
   private importGivensOnly(raw: string): ImportResult {

@@ -30,6 +30,9 @@ jobs:
           # Project site: https://<user>.github.io/sudoku-solver/
           # For a user site repo named <user>.github.io, change this to /
           VITE_BASE: /${{ github.event.repository.name }}/
+          # Import analytics endpoint (analytics/ Worker). A repo *variable*,
+          # not a secret - it's a public URL. Unset = analytics disabled.
+          VITE_ANALYTICS_URL: ${{ vars.VITE_ANALYTICS_URL }}
         run: |
           npm ci
           npm run build

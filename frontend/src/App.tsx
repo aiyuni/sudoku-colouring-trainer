@@ -22,6 +22,7 @@ import {
   sanitizeCandidateColors,
 } from './sudoku/boardUtils'
 import { CanvasGridImage } from './sudoku/CanvasGridImage'
+import { reportImport } from './importAnalytics'
 import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
@@ -3162,6 +3163,7 @@ export default function App() {
       return
     }
     commitGrid({ board: result.board, givens: result.givens, candidates: result.candidates })
+    reportImport(result.board, { importType: 'string', sourceFormat: importer.detectFormat(importText) })
     setHighlightedDigit(null)
     setImportText('')
     setStatus('Puzzle imported. Click Solve to check it.')
@@ -3218,6 +3220,7 @@ export default function App() {
             givens: result.board.map((row) => row.map(() => false)),
             candidates: result.candidates,
           })
+          reportImport(result.board, { importType: 'ocr' })
           setHighlightedDigit(null)
           const parts = [`read ${solvedCount} solved cell${solvedCount === 1 ? '' : 's'}`]
           if (unrecognizedCount > 0) {

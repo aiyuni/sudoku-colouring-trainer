@@ -1,0 +1,22 @@
+# Cloudflare Worker that records puzzle imports into D1. Deployed separately
+# from the GitHub Pages frontend - see README.md in this folder.
+name = "sudoku-analytics"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Workers' default *.workers.dev URL; the frontend reaches it through the
+# VITE_ANALYTICS_URL build variable.
+workers_dev = true
+
+[vars]
+# Comma-separated origins allowed to POST imports (CORS). Anything else is
+# rejected, so a random site can't point its users at this endpoint.
+ALLOWED_ORIGINS = "https://aiyuni.github.io,http://localhost:5173,http://127.0.0.1:5173"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sudoku-analytics"
+# Filled in from the output of `npx wrangler d1 create sudoku-analytics`.
+# Not a secret: it only identifies the database inside your own account.
+database_id = "4c3fa1f8-52bf-4630-9170-d5e991337d87"
+migrations_dir = "migrations"
