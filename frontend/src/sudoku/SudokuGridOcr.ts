@@ -196,6 +196,19 @@ function inkBoundingBox(image: GridImage, rect: Rect, threshold: number): Rect |
   return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
 }
 
+/** Fraction of `rect`'s pixels that are ink. */
+function inkDensity(image: GridImage, rect: Rect, threshold: number): number {
+  let ink = 0
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      if (isInk(image, x, y, threshold)) {
+        ink++
+      }
+    }
+  }
+  return ink / (rect.w * rect.h)
+}
+
 /** Connected ink components within `rect`, each as a bounding box - two ink
  * pixels are linked if within `radius` of each other (not just touching),
  * so a font whose glyph has a small gap (an antialiased "4", a serif
@@ -444,8 +457,20 @@ export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecog
       // digit) - never one component that happens to span the full
       // height, since candidate pips have real gaps between them and a
       // merge radius of only 2px.
+      //
+      // A candidate highlighted with a filled circle (Sudoku.Coach's
+      // green/red technique markers) is the exception: the fill is lighter
+      // than the digit inside it but still well under the white
+      // background's Otsu split, so the whole disc reads as ink - and two
+      // circled candidates stacked or side by side touch and merge into one
+      // component as tall as a solved digit (even a lone circle only just
+      // misses the height cutoff). A glyph is strokes around empty space,
+      // though: real solved digits measured at most ~0.56 of their bounding
+      // box inked (a bold "8"), a disc ~0.79. The aspect guard keeps a
+      // plain-bar "1", which is just as solid, from being mistaken for one.
       const largest = components.reduce((a, b) => (b.h > a.h ? b : a))
-      const isSolvedDigit = components.length === 1 && largest.h > interior.h * 0.38
+      const isFilledHighlight = largest.w >= largest.h * 0.35 && inkDensity(image, largest, threshold) > 0.7
+      const isSolvedDigit = components.length === 1 && largest.h > interior.h * 0.38 && !isFilledHighlight
 
       if (isSolvedDigit) {
         // Tesseract needs real breathing room around an isolated glyph -

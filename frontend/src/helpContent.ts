@@ -119,6 +119,15 @@ export const HELP_TABS: HelpTab[] = [
               'harder for a human to find.',
           },
           {
+            name: 'Max techniques per step',
+            settingKey: 'maxTechniquesPerDragonStep',
+            description:
+              'The most technique applications a single Dynamic Dragon step may chain to find its new colour, whatever ' +
+              'the techniques are (e.g. at 3, neither 4 Locked Candidates nor 2 Locked Candidates + 2 ALS-xz are ' +
+              'allowed). Naked and hidden singles do not count. Only the techniques the step actually relies on (the ' +
+              'ones its substeps show) are counted. \n\nInfinite: no limit.',
+          },
+          {
             name: 'Auto-solve includes AICs',
             settingKey: 'dynamicDragonAutoSolveIncludesAics',
             description:
@@ -142,7 +151,7 @@ export const HELP_TABS: HelpTab[] = [
             //settingKey: 'allowedRule3Techniques',
             description:
               "The most important setting for Dynamic Dragons. Controls the non-colouring techniques Dynamic Dragon may apply under a colour's assumption to extend the Dragon. " +
-              'Hidden Single, Locked Candidates and Naked Pair are always ON. Each AIC kind, each fish (X-Wing, ' +
+              'Locked Candidates and Naked Pair are always ON (Hidden Single is not listed: it is part of plain Dragons too, so it is always used). Each AIC kind, each fish (X-Wing, ' +
               'Finned X-Wing, Swordfish, Finned Swordfish) and ALS-xz only takes effect while it is enabled in Settings; the ' +
               'fish and ALS-xz are OFF here by default even then.',
           },
@@ -154,16 +163,18 @@ export const HELP_TABS: HelpTab[] = [
     label: 'Settings',
     intro: 'The ⚙ Settings menu.  Controls the non-Dragon techniques the solver uses.',
     sections: [
-      {
-        title: 'Keyboard input',
-        items: [
-          {
-            name: 'Toggle input',
-            settingKey: 'keyboardMode',
-            description: 'Whether typing a digit places a solution or toggles a candidate.',
-          },
-        ],
-      },
+      // Keyboard input is no longer in Settings - it is the "Use as Keyboard
+      // Input" switch in the Solution / Candidates group headers.
+      // {
+      //   title: 'Keyboard input',
+      //   items: [
+      //     {
+      //       name: 'Toggle input',
+      //       settingKey: 'keyboardMode',
+      //       description: 'Whether typing a digit places a solution or toggles a candidate.',
+      //     },
+      //   ],
+      // },
       {
         title: 'Display & hints',
         items: [

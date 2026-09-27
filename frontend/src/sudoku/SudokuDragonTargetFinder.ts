@@ -138,6 +138,7 @@ export interface DragonTargetSearch {
 export interface DragonTargetOptions {
   allowedRule3Techniques?: ReadonlySet<Rule3Technique>
   aicLimitPerStep?: boolean
+  maxTechniquesPerStep?: number
   /** The Optimize Dynamic Dragons setting: unlike plain Optimize (always on
    * here), this one follows the user's setting - it's far costlier. */
   optimizeDynamic?: boolean
@@ -251,6 +252,7 @@ export class SudokuDragonTargetFinder {
         optimizeDynamic: options.optimizeDynamic,
         allowedRule3Techniques: options.allowedRule3Techniques,
         aicLimitPerStep: options.aicLimitPerStep,
+        maxTechniquesPerStep: options.maxTechniquesPerStep,
       })
       if (dynamic && dynamic.moves.some((move) => move.kind === 'extension-rule3')) {
         consider('dynamic', chainKey, dynamic.moves)

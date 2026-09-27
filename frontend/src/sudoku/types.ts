@@ -16,11 +16,30 @@ export type CandidateColor =
   | 'darkGreen'
   | 'tan'
 
-/** candidateColors[row][col][digit - 1] is the colour painted on that
- * candidate, or null if unpainted. Only meaningful where the matching
- * CandidateGrid entry is true - a candidate that's off or solved away
- * shouldn't still carry a colour. */
-export type CandidateColorGrid = (CandidateColor | null)[][][]
+/** How a painted colour is drawn on its candidate pip. */
+export type CandidatePaintShape = 'circle' | 'square' | 'diamond'
+
+/** One colour painted on a candidate. The shape is captured when it's
+ * painted (from that swatch's shape setting at the time), so changing a
+ * swatch's shape later only affects what gets painted from then on -
+ * unlike the swatch's hex, which is looked up at render time, so
+ * recolouring a swatch still recolours everything painted with it. */
+export interface CandidatePaintLayer {
+  readonly color: CandidateColor
+  readonly shape: CandidatePaintShape
+}
+
+/** The paint on one candidate: a single colour, or two (multicolour) -
+ * the first fills the bottom-left half of the pip, the second the
+ * top-right half. Treated as immutable: replace it, never push onto it,
+ * since cloneCandidateColors only copies the outer arrays. */
+export type CandidatePaint = readonly [CandidatePaintLayer] | readonly [CandidatePaintLayer, CandidatePaintLayer]
+
+/** candidateColors[row][col][digit - 1] is the paint on that candidate,
+ * or null if unpainted. Only meaningful where the matching CandidateGrid
+ * entry is true - a candidate that's off or solved away shouldn't still
+ * carry a colour. */
+export type CandidateColorGrid = (CandidatePaint | null)[][][]
 
 export const SAMPLE_PUZZLE: Board = [
   [5, 3, 0, 0, 7, 0, 0, 0, 0],

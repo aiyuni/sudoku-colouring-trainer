@@ -40,6 +40,9 @@ export interface AppSettings {
   optimizeDragons: boolean
   optimizeDynamicDragons: boolean
   aicLimitPerDragonStep: boolean
+  /** Dynamic Dragon: most technique applications one extension may chain
+   * (MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS); Infinity = no limit. */
+  maxTechniquesPerDragonStep: number
   dynamicDragonAutoSolveIncludesAics: boolean
   dragonGenerationDisregardsSingleDigitAic: boolean
   dragonGenerationDisregardsAic: boolean
@@ -70,6 +73,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   optimizeDragons: false,
   optimizeDynamicDragons: false,
   aicLimitPerDragonStep: true,
+  maxTechniquesPerDragonStep: Infinity,
   dynamicDragonAutoSolveIncludesAics: false,
   dragonGenerationDisregardsSingleDigitAic: true,
   dragonGenerationDisregardsAic: true,
@@ -137,6 +141,9 @@ export const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
   'als-xz': 'ALS-xz',
 }
 
+/** The "Max techniques per step" dropdown's choices (Dynamic Dragon). */
+export const MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS: readonly number[] = [1, 2, 3, 4, 5, Infinity]
+
 /** A setting's default as a human-readable string, for the help page:
  * on/off for checkboxes, the option's own label for choices, the technique
  * names for the Dynamic Dragon technique set. */
@@ -153,6 +160,9 @@ export function describeDefault(key: keyof AppSettings): string {
   }
   if (key === 'solvePathTimeoutMs') {
     return SOLVE_PATH_TIMEOUT_OPTIONS.find((option) => option.ms === value)?.label ?? `${Number(value) / 1000} seconds`
+  }
+  if (key === 'maxTechniquesPerDragonStep') {
+    return value === Infinity ? 'Infinite' : String(value)
   }
   if (Array.isArray(value)) {
     return value.map((technique) => RULE3_TECHNIQUE_LABELS[technique as Rule3Technique]).join(', ')

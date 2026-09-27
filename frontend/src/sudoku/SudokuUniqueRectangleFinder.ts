@@ -750,7 +750,7 @@ export class SudokuUniqueRectangleFinder {
             cells,
             urDigits: pair,
             reasonCells: [A, N],
-            reasonText: `UR Type 7a of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where bivalue ${digit}${cellRef(...A)} is strongly linked to ${digit}${cellRef(...N)}`,
+            reasonText: `UR Type 7a of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where ${digit}${cellRef(...A)} is strongly linked to ${digit}${cellRef(...N)}`,
             eliminatedCandidates: [{ row: otherN[0], col: otherN[1], digit }],
             solvedCandidates: [],
           })
@@ -811,7 +811,7 @@ export class SudokuUniqueRectangleFinder {
               cells,
               urDigits: pair,
               reasonCells: [A, B, cells[cIndex]],
-              reasonText: `UR Type 7b of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where bivalue ${X}${cellRef(...A)} strong links ${X}${cellRef(...B)} and ${Y}${cellRef(...B)} strong links ${Y}${cellRef(...cells[cIndex])}`,
+              reasonText: `UR Type 7b of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where ${X}${cellRef(...A)} strong links ${X}${cellRef(...B)} and ${Y}${cellRef(...B)} strong links ${Y}${cellRef(...cells[cIndex])}`,
               eliminatedCandidates: [{ row: D[0], col: D[1], digit: X }],
               solvedCandidates: [],
             })
@@ -890,7 +890,7 @@ export class SudokuUniqueRectangleFinder {
           cells,
           urDigits: pair,
           reasonCells: [A, cells[aOwnPartnerIndex]],
-          reasonText: `UR Type 7c of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where bivalue ${cellRef(...A)}'s ${ownDigit} is strongly linked to ${cellRef(...cells[aOwnPartnerIndex])}`,
+          reasonText: `UR Type 7c of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where ${cellRef(...A)}'s ${ownDigit} is strongly linked to ${cellRef(...cells[aOwnPartnerIndex])}`,
           eliminatedCandidates: [{ row: target[0], col: target[1], digit: ownDigit }],
           solvedCandidates: [],
         })

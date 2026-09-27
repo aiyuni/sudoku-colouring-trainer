@@ -23,6 +23,9 @@ export interface SolvePathOptions {
   enabledFish: FishTechnique[]
   /** ALS-xz enabled in Settings (off by default). */
   alsXzEnabled: boolean
+  /** Dynamic Dragon's "Max techniques per step" (Infinity = no limit;
+   * structured clone keeps Infinity intact). */
+  maxTechniquesPerDragonStep: number
 }
 
 export interface SolvePathWorkerRequest {
@@ -58,6 +61,7 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.dynamicDragonEnabled,
         new Set(options.enabledFish),
         options.alsXzEnabled,
+        options.maxTechniquesPerDragonStep,
       ),
     }
   } catch (error) {

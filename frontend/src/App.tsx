@@ -49,7 +49,16 @@ import { SudokuRules } from './sudoku/SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
 import { type SingleAssignment } from './sudoku/SudokuSingleFinder'
 import { SudokuSolver } from './sudoku/SudokuSolver'
-import { SAMPLE_PUZZLE, type Board, type CandidateColor, type CandidateColorGrid, type CandidateGrid } from './sudoku/types'
+import {
+  SAMPLE_PUZZLE,
+  type Board,
+  type CandidateColor,
+  type CandidateColorGrid,
+  type CandidateGrid,
+  type CandidatePaint,
+  type CandidatePaintLayer,
+  type CandidatePaintShape,
+} from './sudoku/types'
 import HelpModal from './HelpModal'
 import TutorialPage from './tutorial/TutorialPage'
 import { useCompactLayout } from './useCompactLayout'
@@ -61,6 +70,7 @@ import {
   DEFAULT_SETTINGS,
   DRAGON_GENERATION_TIMEOUT_OPTIONS,
   SOLVE_PATH_TIMEOUT_OPTIONS,
+  MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS,
   MIN_BASE_MEDUSA_CANDIDATES,
   RULE3_TECHNIQUE_LABELS,
 } from './settingsDefaults'
@@ -101,7 +111,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.5.0-beta'
+const APP_VERSION = 'v0.7.0-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -196,6 +206,93 @@ function loadCustomSwatchColors(): Record<CandidateColor, string> {
     // fall back to defaults silently.
   }
   return colors
+}
+
+const CANDIDATE_SWATCH_SHAPES_STORAGE_KEY = 'sudoku-solver-candidate-swatch-shapes'
+
+/** Every colour paints as a circle until the user switches it to a square. */
+function defaultSwatchShapes(): Record<CandidateColor, CandidatePaintShape> {
+  return Object.fromEntries(DEFAULT_CANDIDATE_COLOR_SWATCHES.map((s) => [s.id, 'circle'])) as Record<
+    CandidateColor,
+    CandidatePaintShape
+  >
+}
+
+/** Same fallback rules as loadCustomSwatchColors, for each colour's shape. */
+function loadCustomSwatchShapes(): Record<CandidateColor, CandidatePaintShape> {
+  const shapes = defaultSwatchShapes()
+  try {
+    const raw = localStorage.getItem(CANDIDATE_SWATCH_SHAPES_STORAGE_KEY)
+    if (!raw) {
+      return shapes
+    }
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object') {
+      for (const swatch of DEFAULT_CANDIDATE_COLOR_SWATCHES) {
+        const value = (parsed as Record<string, unknown>)[swatch.id]
+        if (typeof value === 'string' && (CANDIDATE_PAINT_SHAPES as readonly string[]).includes(value)) {
+          shapes[swatch.id] = value as CandidatePaintShape
+        }
+      }
+    }
+  } catch {
+    // Same as the colours: fall back to defaults silently.
+  }
+  return shapes
+}
+
+const CANDIDATE_PAINT_SHAPES: readonly CandidatePaintShape[] = ['circle', 'square', 'diamond']
+
+/** The painted colour(s) behind a candidate's digit, one span per layer
+ * (the shape itself is CSS: .paint-shape-circle/-square/-diamond). A
+ * diamond needs clip-path, which the old single-element border-radius
+ * trick couldn't combine with a half-circle or half-square, so each layer
+ * is its own element instead. With two layers the pip is split along a
+ * backslash diagonal (top-left to bottom-right corner): each layer is
+ * wrapped in a triangle clip - the first layer's shape shows only in the
+ * bottom-left triangle, the second's only in the top-right - so any two
+ * shapes combine, each half still recognizable by hue and shape. */
+function renderCandidatePaint(paint: CandidatePaint, hexes: Record<CandidateColor, string>): ReactNode {
+  const [first, second] = paint
+  const shapeSpan = (layer: CandidatePaintLayer) => (
+    <span className={`paint-shape paint-shape-${layer.shape}`} style={{ backgroundColor: hexes[layer.color] }} />
+  )
+  if (second === undefined) {
+    return <span className="paint-layer">{shapeSpan(first)}</span>
+  }
+  return (
+    <>
+      <span className="paint-layer paint-layer-bottom-left">{shapeSpan(first)}</span>
+      <span className="paint-layer paint-layer-top-right">{shapeSpan(second)}</span>
+    </>
+  )
+}
+
+/** What clicking a candidate with `layer` (the selected colour, in its
+ * swatch's current shape) turns its paint into:
+ * - unpainted -> that colour;
+ * - already holds that colour in that shape -> that colour comes off (the
+ *   other half, if any, becomes the whole pip; otherwise it's unpainted);
+ * - already holds that colour in a different shape -> reshaped in place, so
+ *   an old candidate can be brought in line with a new shape setting
+ *   without first clearing it;
+ * - painted one other colour -> multicolour, old colour bottom-left, new
+ *   top-right;
+ * - already two other colours -> the new colour replaces the top-right half,
+ *   so the first colour stays put and the second can be swapped freely. */
+function nextCandidatePaint(current: CandidatePaint | null, layer: CandidatePaintLayer): CandidatePaint | null {
+  if (!current) {
+    return [layer]
+  }
+  const index = current.findIndex((l) => l.color === layer.color)
+  if (index >= 0) {
+    if (current[index].shape !== layer.shape) {
+      return current.length === 1 ? [layer] : index === 0 ? [layer, current[1]!] : [current[0], layer]
+    }
+    const rest = current.filter((l) => l.color !== layer.color)
+    return rest.length > 0 ? [rest[0]] : null
+  }
+  return [current[0], layer]
 }
 
 interface StrongLink {
@@ -1197,6 +1294,7 @@ export default function App() {
   const [keyboardMode, setKeyboardMode] = useState<'solution' | 'candidate'>(DEFAULT_SETTINGS.keyboardMode)
   const [paintColor, setPaintColor] = useState<CandidateColor | null>(null)
   const [swatchColors, setSwatchColors] = useState<Record<CandidateColor, string>>(loadCustomSwatchColors)
+  const [swatchShapes, setSwatchShapes] = useState<Record<CandidateColor, CandidatePaintShape>>(loadCustomSwatchShapes)
 
   // Persists a customized swatch colour across reloads - loadCustomSwatchColors
   // reads this same key back on next mount.
@@ -1208,6 +1306,14 @@ export default function App() {
       // colour still works for this session, it just won't persist.
     }
   }, [swatchColors])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CANDIDATE_SWATCH_SHAPES_STORAGE_KEY, JSON.stringify(swatchShapes))
+    } catch {
+      // As above - works for this session, just won't persist.
+    }
+  }, [swatchShapes])
 
   const candidateColorSwatches = useMemo(
     () => DEFAULT_CANDIDATE_COLOR_SWATCHES.map((swatch) => ({ ...swatch, hex: swatchColors[swatch.id] })),
@@ -1263,6 +1369,7 @@ export default function App() {
     DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon,
   )
   const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
+  const [maxTechniquesPerDragonStep, setMaxTechniquesPerDragonStep] = useState(DEFAULT_SETTINGS.maxTechniquesPerDragonStep)
   const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
   const [optimizeDragons, setOptimizeDragons] = useState(DEFAULT_SETTINGS.optimizeDragons)
   const [optimizeDynamicDragons, setOptimizeDynamicDragons] = useState(DEFAULT_SETTINGS.optimizeDynamicDragons)
@@ -1305,7 +1412,7 @@ export default function App() {
   )
 
   const hasAnyPaintedColor = useMemo(
-    () => candidateColors.some((row) => row.some((cell) => cell.some((color) => color !== null))),
+    () => candidateColors.some((row) => row.some((cell) => cell.some((paint) => paint !== null))),
     [candidateColors],
   )
 
@@ -1474,6 +1581,7 @@ export default function App() {
       shortAicEnabled,
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
+      maxTechniquesPerDragonStep,
       exhaustiveDragonColouring,
       genericAicEnabled,
       optimizeDragons,
@@ -1490,6 +1598,7 @@ export default function App() {
       shortAicEnabled,
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
+      maxTechniquesPerDragonStep,
       exhaustiveDragonColouring,
       genericAicEnabled,
       optimizeDragons,
@@ -1546,6 +1655,7 @@ export default function App() {
         !analysis.dynamicDragonDisabled,
         analysis.enabledFish,
         analysis.alsXzEnabled,
+        analysis.maxTechniquesPerDragonStep,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
@@ -1559,6 +1669,7 @@ export default function App() {
       analysis.shortAicEnabled,
       analysis.shortSingleDigitAicEnabled,
       analysis.aicLimitPerDragonStep,
+      analysis.maxTechniquesPerDragonStep,
       analysis.exhaustiveDragonColouring,
       analysis.genericAicEnabled,
       analysis.optimizeDragons,
@@ -1693,6 +1804,7 @@ export default function App() {
       dynamicDragonEnabled: !dynamicDragonDisabled,
       enabledFish: [...enabledFish],
       alsXzEnabled,
+      maxTechniquesPerDragonStep,
     }),
     [
       enabledFish,
@@ -1701,6 +1813,7 @@ export default function App() {
       shortAicEnabled,
       shortSingleDigitAicEnabled,
       aicLimitPerDragonStep,
+      maxTechniquesPerDragonStep,
       exhaustiveDragonColouring,
       genericAicEnabled,
       easySolveEnabled,
@@ -2488,13 +2601,15 @@ export default function App() {
     setStatus(`${label} ${parts.join(' and ')}.`)
   }
 
-  function onDragonColouringBivalueSeeded() {
-    runDragonColouring(
-      (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring, optimizeDragons),
-      'bivalue-seeded',
-      'Dragon Colouring (bivalue-seeded)',
-    )
-  }
+  // Commented out along with its "Dragon (bivalue)" auto-solve button below;
+  // left in place (rather than deleted) so the button can be restored.
+  // function onDragonColouringBivalueSeeded() {
+  //   runDragonColouring(
+  //     (b, c, f) => computeStuckDragonExtensions(b, c, f, 0, exhaustiveDragonColouring, optimizeDragons),
+  //     'bivalue-seeded',
+  //     'Dragon Colouring (bivalue-seeded)',
+  //   )
+  // }
 
   function onDragonColouringAny() {
     runDragonColouring(
@@ -2517,6 +2632,7 @@ export default function App() {
           exhaustiveDragonColouring,
           optimizeDragons,
           optimizeDynamicDragons,
+          maxTechniquesPerDragonStep,
         )
         // ALS-xz is never auto-solved, not even inside a Dynamic Dragon
         // chain - no setting opts back in.
@@ -2735,6 +2851,7 @@ export default function App() {
     setEasySolveEnabled(DEFAULT_SETTINGS.easySolveEnabled)
     setSolvePathTimeoutMs(DEFAULT_SETTINGS.solvePathTimeoutMs)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
+    setMaxTechniquesPerDragonStep(DEFAULT_SETTINGS.maxTechniquesPerDragonStep)
     setDynamicDragonAutoSolveIncludesAics(DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics)
     setDragonGenerationDisregardsSingleDigitAic(DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic)
     setDragonGenerationDisregardsAic(DEFAULT_SETTINGS.dragonGenerationDisregardsAic)
@@ -2742,6 +2859,7 @@ export default function App() {
     setDynamicDragonPuzzleForbidsPlainDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon)
     setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
     setSwatchColors(defaultSwatchColors())
+    setSwatchShapes(defaultSwatchShapes())
     showToast('Settings reset to defaults.')
   }
 
@@ -2958,6 +3076,7 @@ export default function App() {
     const search = dragonTargetFinder.find(board, candidates, targets, {
       allowedRule3Techniques: effectiveAllowedRule3Techniques,
       aicLimitPerStep: aicLimitPerDragonStep,
+      maxTechniquesPerStep: maxTechniquesPerDragonStep,
       optimizeDynamic: optimizeDynamicDragons,
       dynamicEnabled: !dynamicDragonDisabled,
     })
@@ -3123,22 +3242,30 @@ export default function App() {
     setSwatchColors((current) => ({ ...current, [id]: hex }))
   }
 
+  function onSetSwatchShape(id: CandidateColor, shape: CandidatePaintShape) {
+    setSwatchShapes((current) => ({ ...current, [id]: shape }))
+  }
+
   /** Un-paints every manually coloured candidate on the board - the
    * swatch colours themselves (and which one is selected) are untouched. */
   function onClearAllCandidateColors() {
     commitGrid({ board, givens, candidates, candidateColors: createEmptyCandidateColors() })
   }
 
-  /** Paints (or, on a repeat click with the same colour, un-paints) one
-   * candidate - a manual annotation only, never touched by any solving
-   * technique or auto-solve. Only meaningful with a paint colour selected
-   * and an actual candidate under the click. */
+  /** Paints one candidate with the selected colour - or un-paints it, or
+   * splits it into two colours; see nextCandidatePaint. A manual annotation
+   * only, never touched by any solving technique or auto-solve. Only
+   * meaningful with a paint colour selected and an actual candidate under
+   * the click. */
   function onCandidatePipClick(row: number, col: number, digit: number) {
     if (!paintColor || !candidates[row][col][digit - 1]) {
       return
     }
     const nextColors = cloneCandidateColors(candidateColors)
-    nextColors[row][col][digit - 1] = nextColors[row][col][digit - 1] === paintColor ? null : paintColor
+    nextColors[row][col][digit - 1] = nextCandidatePaint(nextColors[row][col][digit - 1], {
+      color: paintColor,
+      shape: swatchShapes[paintColor],
+    })
     commitGrid({ board, givens, candidates, candidateColors: nextColors })
   }
 
@@ -3757,6 +3884,27 @@ export default function App() {
               Limit to 1 AIC per step
             </label>
             <label
+              className="menu-select"
+              title={
+                dynamicDragonDisabled
+                  ? 'Dynamic Dragons are disabled, so this has no effect'
+                  : 'The most technique applications (of any kind) a single Dynamic Dragon Colouring step may chain to find its new colour. Naked and hidden singles do not count.'
+              }
+            >
+              Max techniques per step
+              <select
+                value={maxTechniquesPerDragonStep}
+                disabled={dynamicDragonDisabled}
+                onChange={(event) => setMaxTechniquesPerDragonStep(Number(event.target.value))}
+              >
+                {MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS.map((max) => (
+                  <option key={max} value={max}>
+                    {max === Infinity ? 'Infinite' : max}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label
               className="menu-checkbox"
               title={
                 dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled in Settings.'
@@ -3788,7 +3936,9 @@ export default function App() {
               />
               Disable Dynamic Dragons
             </label>
-            {ALL_RULE3_TECHNIQUES.map((technique) => {
+            {/* Hidden Single isn't listed: it's part of plain Dragon Colouring
+                too, so it isn't a Dynamic Dragon choice (always on, see extend()). */}
+            {ALL_RULE3_TECHNIQUES.filter((technique) => technique !== 'hidden single').map((technique) => {
               const disabledByMasterSwitch =
                 ((ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(technique) &&
                   !enabledFish.has(technique as FishTechnique)) ||
@@ -3813,7 +3963,6 @@ export default function App() {
                     checked={allowedRule3Techniques.has(technique)}
                     disabled={
                       technique === 'naked pair' ||
-                      technique === 'hidden single' ||
                       technique === 'locked candidate' ||
                       disabledByMasterSwitch ||
                       dynamicDragonDisabled
@@ -3845,6 +3994,8 @@ export default function App() {
             </button>
           </div>
           <div className="dropdown-divider" />
+          {/* Keyboard input moved out of Settings: it is now the "Use as
+              Keyboard Input" switch in the Solution / Candidates group headers.
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">Keyboard input</h3>
             <button
@@ -3857,6 +4008,7 @@ export default function App() {
             </button>
           </div>
           <div className="dropdown-divider" />
+          */}
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">Display &amp; hints</h3>
             <label className="menu-checkbox">
@@ -4165,10 +4317,7 @@ export default function App() {
                         // annotation - it only shows through when no
                         // technique highlight is already claiming this
                         // pip's background, so the two never fight.
-                        const paintedColorId = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
-                        const paintedHex = paintedColorId
-                          ? candidateColorSwatches.find((s) => s.id === paintedColorId)?.hex
-                          : undefined
+                        const paint = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
                         return (
                           <span
                             key={digit}
@@ -4185,12 +4334,11 @@ export default function App() {
                               isTechniqueOrange ? 'technique-orange' : '',
                               isTechniqueAic ? 'technique-aic' : '',
                               isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
-                              paintedHex ? 'candidate-painted' : '',
+                              paint ? 'candidate-painted' : '',
                               active && paintColor ? 'paint-target' : '',
                             ]
                               .filter(Boolean)
                               .join(' ')}
-                            style={paintedHex ? { backgroundColor: paintedHex } : undefined}
                             onClick={
                               active && paintColor
                                 ? (event) => {
@@ -4200,6 +4348,7 @@ export default function App() {
                                 : undefined
                             }
                           >
+                            {paint && renderCandidatePaint(paint, swatchColors)}
                             {active ? digit : ''}
                           </span>
                         )
@@ -4312,6 +4461,33 @@ export default function App() {
     </>
   )
 
+  // The Solution and Candidates groups each carry one of these switches; they
+  // are two views of the single keyboardMode setting, so exactly one is ever
+  // on and clicking either just flips the mode. Lives here rather than in
+  // Settings so it is visible right next to the pads it affects.
+  const keyboardInputToggle = (mode: 'solution' | 'candidate') => {
+    const active = keyboardMode === mode
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={active}
+        className={['keyboard-input-toggle', mode, active ? 'active' : ''].join(' ')}
+        onClick={toggleKeyboardMode}
+        title={
+          active
+            ? `Typing 1-9 on your keyboard ${mode === 'solution' ? 'places a solution digit' : 'toggles a candidate'}. Click to switch the keyboard to ${mode === 'solution' ? 'candidates' : 'solutions'}.`
+            : `Click to make typing 1-9 on your keyboard ${mode === 'solution' ? 'place solution digits' : 'toggle candidates'} instead.`
+        }
+      >
+        <span className="keyboard-input-toggle-track" aria-hidden="true">
+          <span className="keyboard-input-toggle-knob" />
+        </span>
+        <span className="keyboard-input-toggle-label">Keyboard Input</span>
+      </button>
+    )
+  }
+
   const solutionGroup = (
     <section className="control-group solution-group">
       {/* Each group's one "undo this section" action sits in the header,
@@ -4320,6 +4496,7 @@ export default function App() {
           cost a whole row of height per group. */}
       <div className="control-header">
         <h2 className="control-label">Solution</h2>
+        {keyboardInputToggle('solution')}
         <button
           type="button"
           className="control-header-action"
@@ -4342,6 +4519,7 @@ export default function App() {
     <section className="control-group candidate-group">
       <div className="control-header">
         <h2 className="control-label">Candidates</h2>
+        {keyboardInputToggle('candidate')}
         <button
           type="button"
           className="control-header-action"
@@ -4349,7 +4527,7 @@ export default function App() {
           onClick={() => selected && clearCandidates(selected.row, selected.col)}
           title="Remove every candidate from the selected cell"
         >
-          Clear cell
+          Clear
         </button>
       </div>
       <DigitPad
@@ -4396,41 +4574,69 @@ export default function App() {
       </div>
       <div className="paint-swatches">
         {candidateColorSwatches.map((swatch) => (
-          <div key={swatch.id} className="paint-swatch-wrapper">
-            <button
-              type="button"
-              className={['paint-swatch', paintColor === swatch.id ? 'active' : ''].filter(Boolean).join(' ')}
-              style={{ backgroundColor: swatch.hex }}
-              aria-pressed={paintColor === swatch.id}
-              aria-label={swatch.label}
-              title={swatch.label}
-              onClick={() => onSelectPaintColor(swatch.id)}
-            />
-            {/* A small "edit" badge pinned to the swatch's corner, rather
-                than a separate strip below it - the previous layout read
-                as a decorative sliver, not a control, so customizing a
-                colour went undiscovered. The pencil icon is a
-                pointer-events-none overlay purely for the visual cue;
-                the actual native colour-picker input sits right beneath
-                it, same size and position, and still owns the click. */}
-            <span className="paint-swatch-edit-icon" aria-hidden="true">
-              ✎
-            </span>
-            <input
-              type="color"
-              className="paint-swatch-color-input"
-              value={swatch.hex}
-              onChange={(event) => onSwatchColorChange(swatch.id, event.target.value)}
-              aria-label={`Customize ${swatch.label} colour`}
-              title={`Customize ${swatch.label} colour`}
-            />
+          <div key={swatch.id} className="paint-swatch-item">
+            <div className="paint-swatch-wrapper">
+              <button
+                type="button"
+                className={['paint-swatch', paintColor === swatch.id ? 'active' : ''].filter(Boolean).join(' ')}
+                style={{ backgroundColor: swatch.hex }}
+                aria-pressed={paintColor === swatch.id}
+                aria-label={swatch.label}
+                title={swatch.label}
+                onClick={() => onSelectPaintColor(swatch.id)}
+              />
+              {/* A small "edit" badge pinned to the swatch's corner, rather
+                  than a separate strip below it - the previous layout read
+                  as a decorative sliver, not a control, so customizing a
+                  colour went undiscovered. The pencil icon is a
+                  pointer-events-none overlay purely for the visual cue;
+                  the actual native colour-picker input sits right beneath
+                  it, same size and position, and still owns the click. */}
+              <span className="paint-swatch-edit-icon" aria-hidden="true">
+                ✎
+              </span>
+              <input
+                type="color"
+                className="paint-swatch-color-input"
+                value={swatch.hex}
+                onChange={(event) => onSwatchColorChange(swatch.id, event.target.value)}
+                aria-label={`Customize ${swatch.label} colour`}
+                title={`Customize ${swatch.label} colour`}
+              />
+            </div>
+            {/* Shape picker: both options always visible side by side, the
+                chosen one filled in this colour and the other just a grey
+                outline - a single flip-toggle badge (tried first) only
+                showed one shape, so it wasn't clear what it was or what
+                clicking it would do. */}
+            <div className="paint-shape-picker" role="group" aria-label={`${swatch.label} shape`}>
+              {CANDIDATE_PAINT_SHAPES.map((shape) => {
+                const selectedShape = swatchShapes[swatch.id] === shape
+                return (
+                  <button
+                    key={shape}
+                    type="button"
+                    className={['paint-shape-option', selectedShape ? 'selected' : ''].filter(Boolean).join(' ')}
+                    aria-pressed={selectedShape}
+                    aria-label={`${swatch.label}: ${shape}`}
+                    title={`Paint ${swatch.label.toLowerCase()} as a ${shape}`}
+                    onClick={() => onSetSwatchShape(swatch.id, shape)}
+                  >
+                    <span
+                      className={`paint-shape-glyph paint-shape-glyph-${shape}`}
+                      style={selectedShape ? { backgroundColor: swatch.hex } : undefined}
+                    />
+                  </button>
+                )
+              })}
+            </div>
           </div>
         ))}
       </div>
       <p className="paint-hint">
         {paintColor
-          ? 'Click a candidate to colour or uncolour it.'
-          : 'Pick a colour, then click candidates to colour them.'}
+          ? 'Click a candidate to colour it. A second colour performs multi-colouring; the same colour again removes it.'
+          : 'Pick a colour, then click candidates to colour them. Shapes can be changed anytime; ✎ changes the colour.'}
       </p>
     </section>
   )
@@ -4585,7 +4791,7 @@ export default function App() {
           >
             3D Medusa
           </button>
-          <button
+          {/* <button
             type="button"
             className="autosolve-button"
             disabled={busy || !hasAnyCandidates || filled === 81}
@@ -4593,7 +4799,7 @@ export default function App() {
             title="Auto-solve Non-dynamic Dragons that uses a Medusa base that consists of at least 1 bivalue cell"
           >
             Dragon (bivalue)
-          </button>
+          </button> */}
           <button
             type="button"
             className="autosolve-button"
@@ -4601,11 +4807,11 @@ export default function App() {
             onClick={() => runAutoSolve('Dragon Colouring (any Medusa)', onDragonColouringAny)}
             title="Auto-solve Non-dynamic Dragons that use any Medusa base"
           >
-            Dragon (any Medusa)
+            Plain Dragon
           </button>
           <button
             type="button"
-            className="autosolve-button wide"
+            className="autosolve-button"
             disabled={busy || !hasAnyCandidates || filled === 81 || dynamicDragonDisabled}
             onClick={() => runAutoSolve('Dynamic Dragon Colouring', onDynamicDragonColouring)}
             title={

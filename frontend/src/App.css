@@ -1015,13 +1015,51 @@ html.app-busy .busy-cancel,
   transform: translateY(-50%) rotate(-45deg);
 }
 
-/* A manually painted candidate colour - background comes from an inline
-   style (the user's chosen swatch), this just gives it the same pill shape
-   as every other candidate highlight. */
+/* A manually painted candidate colour. The colour itself is drawn by
+   child .paint-layer spans (renderCandidatePaint in App.tsx) sitting
+   behind the digit: isolation gives the pip its own stacking context so
+   z-index: -1 puts them under the digit text but still inside the pip. */
 .candidate.candidate-painted {
+  position: relative;
+  isolation: isolate;
   color: #1f2937;
-  border-radius: 999px;
   margin: 1px;
+}
+
+.paint-layer {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Two-colour split along a backslash diagonal (top-left to bottom-right). */
+.paint-layer-bottom-left {
+  clip-path: polygon(0 0, 0 100%, 100% 100%);
+}
+
+.paint-layer-top-right {
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.paint-shape {
+  position: absolute;
+  inset: 0;
+}
+
+.paint-shape-circle {
+  border-radius: 50%;
+}
+
+.paint-shape-square {
+  border-radius: 3px;
+}
+
+/* Slightly larger than the pip so the diamond's tips reach past the
+   1px margin - otherwise it reads noticeably smaller than a circle. */
+.paint-shape-diamond {
+  inset: -1px;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
 }
 
 .candidate.paint-target {
@@ -1034,6 +1072,76 @@ html.app-busy .busy-cancel,
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.25rem;
+}
+
+.paint-swatch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* Two-segment circle/square picker under each swatch. The selected
+   segment's glyph is filled with the swatch colour (a preview of how the
+   candidates will look); the other is a hollow grey outline. */
+.paint-shape-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  height: 1.1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.paint-shape-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.paint-shape-option + .paint-shape-option {
+  border-left: 1px solid #d1d5db;
+}
+
+.paint-shape-option:hover {
+  background: #f3f4f6;
+}
+
+.paint-shape-option.selected {
+  background: #e5e7eb;
+}
+
+.paint-shape-glyph {
+  width: 0.6rem;
+  height: 0.6rem;
+  box-sizing: border-box;
+  border: 1.5px solid #9ca3af;
+}
+
+.paint-shape-option.selected .paint-shape-glyph {
+  border-color: #1f2937;
+}
+
+.paint-shape-glyph-circle {
+  border-radius: 50%;
+}
+
+.paint-shape-glyph-square {
+  border-radius: 1px;
+}
+
+/* A rotated square rather than a clip-path, so it keeps its outline; a
+   touch smaller so its diagonal matches the others' width. */
+.paint-shape-glyph-diamond {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 1px;
+  transform: rotate(45deg);
 }
 
 .paint-swatch-wrapper {
@@ -1542,6 +1650,87 @@ html.app-busy .busy-cancel,
 
 .control-header-action:disabled {
   opacity: 0.45;
+}
+
+/* "Use as Keyboard Input" switch in the Solution / Candidates headers, sat
+   between the title and the reset action. Exactly one of the two is on. */
+.keyboard-input-toggle {
+  flex: 0 1 auto;
+  margin-inline: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.18rem 0.55rem 0.18rem 0.25rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.keyboard-input-toggle-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.keyboard-input-toggle-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background-color 0.15s;
+}
+
+.keyboard-input-toggle-knob {
+  position: absolute;
+  top: 0.1rem;
+  left: 0.1rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.3);
+  transition: transform 0.15s;
+}
+
+.keyboard-input-toggle.active .keyboard-input-toggle-knob {
+  transform: translateX(0.7rem);
+}
+
+.keyboard-input-toggle.solution.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.keyboard-input-toggle.solution.active .keyboard-input-toggle-track {
+  background: #2563eb;
+}
+
+.keyboard-input-toggle.candidate.active {
+  border-color: #94a3b8;
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.keyboard-input-toggle.candidate.active .keyboard-input-toggle-track {
+  background: #475569;
+}
+
+@media (hover: hover) {
+  .keyboard-input-toggle:not(.active):hover {
+    border-color: #94a3b8;
+    color: #334155;
+  }
 }
 
 .control-pad {
@@ -2166,6 +2355,31 @@ button.primary {
     box-shadow: 0 0 0 2px #1a2434, 0 0 0 4px #e2e8f0;
   }
 
+  .paint-shape-picker,
+  .paint-shape-option + .paint-shape-option {
+    border-color: #475569;
+  }
+
+  .paint-shape-picker {
+    background: #1e293b;
+  }
+
+  .paint-shape-option:hover {
+    background: #273449;
+  }
+
+  .paint-shape-option.selected {
+    background: #334155;
+  }
+
+  .paint-shape-glyph {
+    border-color: #64748b;
+  }
+
+  .paint-shape-option.selected .paint-shape-glyph {
+    border-color: #e2e8f0;
+  }
+
   .paint-hint {
     color: #94a3b8;
   }
@@ -2217,6 +2431,35 @@ button.primary {
     border-color: #7f1d1d;
     background: #3b1212;
     color: #fca5a5;
+  }
+
+  .keyboard-input-toggle {
+    border-color: #475569;
+    color: #94a3b8;
+  }
+
+  .keyboard-input-toggle-track {
+    background: #475569;
+  }
+
+  .keyboard-input-toggle.solution.active {
+    border-color: #1e3a5f;
+    background: #16233a;
+    color: #93c5fd;
+  }
+
+  .keyboard-input-toggle.solution.active .keyboard-input-toggle-track {
+    background: #3b82f6;
+  }
+
+  .keyboard-input-toggle.candidate.active {
+    border-color: #64748b;
+    background: #1a2434;
+    color: #e2e8f0;
+  }
+
+  .keyboard-input-toggle.candidate.active .keyboard-input-toggle-track {
+    background: #94a3b8;
   }
 
   .candidate-bulk-actions {
@@ -2610,6 +2853,11 @@ button.primary {
   margin-bottom: 0;
 }
 
+.compact-layout .keyboard-input-toggle {
+  min-height: 2.25rem;
+  font-size: 0.78rem;
+}
+
 .compact-layout .control-header-action {
   min-height: 2.25rem;
   padding-inline: 0.9rem;
@@ -2640,6 +2888,25 @@ button.primary {
 .compact-layout .paint-swatch {
   width: 100%;
   height: var(--compact-touch);
+}
+
+/* Nine colours share one row on a phone, so three side-by-side shape
+   buttons would each be ~12px wide - stack them instead. */
+.compact-layout .paint-shape-picker {
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(3, 1.3rem);
+  height: auto;
+}
+
+.compact-layout .paint-shape-option + .paint-shape-option {
+  border-left: none;
+  border-top: 1px solid #d1d5db;
+}
+
+@media (prefers-color-scheme: dark) {
+  .compact-layout .paint-shape-option + .paint-shape-option {
+    border-top-color: #475569;
+  }
 }
 
 .compact-layout .paint-swatch-color-input,

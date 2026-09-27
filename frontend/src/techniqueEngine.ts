@@ -225,6 +225,7 @@ export function computeStuckDynamicDragonExtensions(
   exhaustive = true,
   optimize = false,
   optimizeDynamic = false,
+  maxTechniquesPerStep = Infinity,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -255,6 +256,7 @@ export function computeStuckDynamicDragonExtensions(
       dynamic: true,
       allowedRule3Techniques,
       aicLimitPerStep,
+      maxTechniquesPerStep,
       exhaustive,
       optimize: optimize || optimizeDynamic,
       optimizeDynamic,
@@ -396,6 +398,7 @@ export function buildTechniqueInstances(
   dynamicDragonEnabled = true,
   enabledFish: ReadonlySet<FishTechnique> = new Set(),
   alsXzEnabled = false,
+  maxTechniquesPerDragonStep = Infinity,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -935,6 +938,7 @@ export function buildTechniqueInstances(
     exhaustiveDragon,
     optimizeDragons,
     optimizeDynamicDragons,
+    maxTechniquesPerDragonStep,
   )
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
@@ -1328,6 +1332,7 @@ export function buildSolvePath(
   dynamicDragonEnabled = true,
   enabledFish: ReadonlySet<FishTechnique> = new Set(),
   alsXzEnabled = false,
+  maxTechniquesPerDragonStep = Infinity,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1374,6 +1379,7 @@ export function buildSolvePath(
       dynamicDragonEnabled,
       enabledFish,
       alsXzEnabled,
+      maxTechniquesPerDragonStep,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart

@@ -21,6 +21,7 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, options: Solve
     options.dynamicDragonEnabled,
     new Set(options.enabledFish),
     options.alsXzEnabled,
+    options.maxTechniquesPerDragonStep,
   )
 }
 

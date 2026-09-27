@@ -69,6 +69,12 @@ export interface DragonExtendOptions {
    * be an AIC (either kind) - defaults to true. False allows as many as
    * the chain needs. */
   aicLimitPerStep?: boolean
+  /** The most technique applications (of any kind, AICs included) one
+   * Extension Rule 3 move may lean on - its relevant antecedents plus the
+   * technique that finally forces the new colour, i.e. its technique
+   * substeps. Hidden singles and the closing single candidate never count.
+   * Defaults to Infinity (no limit). */
+  maxTechniquesPerStep?: number
   /** Exhaustive Dragon Colouring - defaults to false, which stops at the
    * first elimination found (the original behaviour).
    *
@@ -817,12 +823,15 @@ export class SudokuDragonFinder {
     // one resets this to null and the next promotion rebuilds it.
     let strongLinkGraph: StrongLinkGraph | null = null
 
-    // 'naked pair' is enforced as always-on here rather than trusted from
-    // the caller, since it's the one technique the settings UI itself never
-    // lets the user exclude.
+    // 'naked pair' and 'hidden single' are enforced as always-on here rather
+    // than trusted from the caller, since the settings UI never lets the user
+    // exclude either ('hidden single' isn't even listed there: it's part of
+    // plain Dragon Colouring too, so it's no Dynamic Dragon choice).
     const allowedRule3Techniques = new Set(options.allowedRule3Techniques ?? DEFAULT_RULE3_TECHNIQUES)
     allowedRule3Techniques.add('naked pair')
+    allowedRule3Techniques.add('hidden single')
     const aicLimitPerStep = options.aicLimitPerStep ?? true
+    const maxTechniquesPerStep = options.maxTechniquesPerStep ?? Infinity
 
     if (options.optimize) {
       return this.extendOptimized(
@@ -834,6 +843,7 @@ export class SudokuDragonFinder {
         exhaustive,
         allowedRule3Techniques,
         aicLimitPerStep,
+        maxTechniquesPerStep,
         options.optimizeDynamic ?? false,
       )
     }
@@ -882,6 +892,7 @@ export class SudokuDragonFinder {
               primary,
               allowedRule3Techniques,
               aicLimitPerStep,
+              maxTechniquesPerStep,
             )
           : null)
       sideNothing[side] = found ? null : { sideNodes, version: candidatesVersion }
@@ -1078,6 +1089,7 @@ export class SudokuDragonFinder {
     exhaustive: boolean,
     allowedRule3Techniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
+    maxTechniquesPerStep: number,
     optimizeDynamic: boolean,
   ): DragonResult | null {
     // Same meaning as in extend(): fixed within a phase, changed only when
@@ -1113,6 +1125,7 @@ export class SudokuDragonFinder {
             primary,
             allowedRule3Techniques,
             aicLimitPerStep,
+            maxTechniquesPerStep,
           )
         : null)
 
@@ -1300,13 +1313,13 @@ export class SudokuDragonFinder {
       if (everyRule3) {
         if (cached.rule3All === undefined && everyRule3SimulationsLeft > 0) {
           everyRule3SimulationsLeft--
-          cached.rule3All = this.extensionRule3Moves(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, Infinity)
+          cached.rule3All = this.extensionRule3Moves(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep, Infinity)
         }
         fresh = cached.rule3All
       } else {
         if (cached.rule3 === undefined && fallbackRule3SimulationsLeft > 0) {
           fallbackRule3SimulationsLeft--
-          cached.rule3 = this.findExtensionRule3Move(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep)
+          cached.rule3 = this.findExtensionRule3Move(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep)
         }
         fresh = cached.rule3 === undefined ? undefined : cached.rule3 ? [cached.rule3] : []
       }
@@ -1748,8 +1761,9 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     primary: PrimaryColor,
     allowedTechniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
+    maxTechniquesPerStep: number,
   ): DragonMove | null {
-    return this.extensionRule3Moves(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, 1)[0] ?? null
+    return this.extensionRule3Moves(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, maxTechniquesPerStep, 1)[0] ?? null
   }
 
   /** Every Extension Rule 3 move for this side, up to `limit`. With
@@ -1760,7 +1774,9 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
    * "newly forced" checks from then on - so every candidate the simulation
    * reaches becomes its own move, each explained by only the steps it
    * depended on (buildRule3CombinedMove prunes the rest). The AIC limit
-   * covers the whole simulation, so no move ever leans on more than it. */
+   * covers the whole simulation, so no move ever leans on more than it.
+   * `maxTechniquesPerStep` instead caps each move's own (pruned) chain -
+   * see emit. */
   private extensionRule3Moves(
     nodeMap: Map<string, DragonNode>,
     board: Board,
@@ -1768,6 +1784,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     primary: PrimaryColor,
     allowedTechniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
+    maxTechniquesPerStep: number,
     limit: number,
   ): DragonMove[] {
     const moves: DragonMove[] = []
@@ -1781,7 +1798,20 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
      * anyway, recolouring the other side's dragon node (e.g. orange ->
      * dark blue): that side silently lost a candidate it implied, and the
      * per-side "found nothing" memo, which assumes a side's nodes only grow,
-     * could go stale. Now they're skipped and the simulation carries on. */
+     * could go stale. Now they're skipped and the simulation carries on.
+     *
+     * A move leaning on more than `maxTechniquesPerStep` techniques is
+     * dropped the same way. Its technique count is its dynamicTechniques -
+     * the relevant antecedents plus the final technique, hidden singles
+     * excluded - not every application the simulation made on the way: a
+     * step that never touched what this conclusion rests on isn't "used" by
+     * it (and the substep player would never show it). The simulation
+     * carries on, since a later candidate may rest on a shorter chain. The
+     * dropped candidate still goes into `known` - the forced-cell scans
+     * would otherwise find it again forever - and it can't come back
+     * cheaper: steps only accumulate, so its relevant chain only grows.
+     * (A direct solve - UR Type 1, BUG+1, Oddagon Type 1 - reaching that
+     * same candidate by a shorter route is lost; rare enough to accept.) */
     const emit = (move: DragonMove): boolean => {
       const [n] = move.colored
       const key = nodeKey(n.row, n.col, n.digit)
@@ -1789,6 +1819,9 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         return false
       }
       known.set(key, n)
+      if ((move.dynamicTechniques?.length ?? 0) > maxTechniquesPerStep) {
+        return false
+      }
       moves.push(move)
       return moves.length >= limit
     }
