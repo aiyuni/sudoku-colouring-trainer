@@ -25,12 +25,17 @@ export function reportImport(board: Board, report: ImportReport): void {
     const puzzle = board.flat().map((v) => (v >= 1 && v <= 9 ? String(v) : '0')).join('')
     const body = JSON.stringify({ puzzle, ...report })
     // text/plain keeps this a CORS "simple request" (no preflight), and
-    // sendBeacon survives the tab being closed right after an import.
-    const blob = new Blob([body], { type: 'text/plain' })
-    if (navigator.sendBeacon?.(ANALYTICS_URL, blob)) {
-      return
-    }
-    void fetch(ANALYTICS_URL, { method: 'POST', body: blob, keepalive: true, mode: 'cors' }).catch(() => {})
+    // keepalive lets it finish even if the tab closes right after an import.
+    // Deliberately not sendBeacon: content blockers filter beacon ("ping")
+    // requests as a type, which silently dropped imports from browsers
+    // running one.
+    void fetch(ANALYTICS_URL, {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'text/plain' },
+      keepalive: true,
+      mode: 'cors',
+    }).catch(() => {})
   } catch {
     // Analytics must never affect the app.
   }

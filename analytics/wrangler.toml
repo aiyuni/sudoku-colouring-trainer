@@ -1,6 +1,9 @@
 # Cloudflare Worker that records puzzle imports into D1. Deployed separately
 # from the GitHub Pages frontend - see README.md in this folder.
-name = "sudoku-analytics"
+# The name becomes the public hostname (<name>.<account>.workers.dev). It
+# was "sudoku-analytics" at first, but content blockers drop requests to
+# hostnames containing "analytics", which silently lost imports.
+name = "sudoku-trainer-api"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 

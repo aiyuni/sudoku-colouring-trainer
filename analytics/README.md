@@ -27,11 +27,12 @@ npm install
 npx wrangler login
 npx wrangler d1 create sudoku-analytics   # copy the printed database_id into wrangler.toml
 npm run migrate:remote                     # creates the table
-npm run deploy                             # prints https://sudoku-analytics.<you>.workers.dev
+npm run deploy                             # prints https://sudoku-trainer-api.<you>.workers.dev
 ```
 
 Then in GitHub, go to repo **Settings → Secrets and variables → Actions → Variables**
-and add `VITE_ANALYTICS_URL` = `https://sudoku-analytics.<you>.workers.dev/import`.
+and add `VITE_ANALYTICS_URL` = the URL `npm run deploy` printed, plus `/import`
+(e.g. `https://sudoku-trainer-api.aiyuni.workers.dev/import`, not a placeholder).
 Rebuild or redeploy the site. If the variable is unset, the frontend sends nothing.
 
 If the site moves to another origin, add it to `ALLOWED_ORIGINS` in `wrangler.toml`
