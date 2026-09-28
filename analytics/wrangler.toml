@@ -11,8 +11,15 @@ compatibility_date = "2025-09-01"
 # VITE_ANALYTICS_URL build variable.
 workers_dev = true
 
+# The /admin dashboard's script and stylesheet, bundled as plain strings
+# (see src/adminPage.ts).
+[[rules]]
+type = "Text"
+globs = ["**/*.admin.js", "**/*.admin.css"]
+fallthrough = true
+
 [vars]
-# Comma-separated origins allowed to POST imports (CORS). Anything else is
+# Comma-separated origins allowed to POST imports and usage batches (CORS). Anything else is
 # rejected, so a random site can't point its users at this endpoint.
 ALLOWED_ORIGINS = "https://aiyuni.github.io,http://localhost:5173,http://127.0.0.1:5173"
 

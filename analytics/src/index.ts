@@ -1,17 +1,24 @@
-// Records every puzzle import from the frontend into D1.
+// Records every puzzle import from the frontend into D1 (POST /import), usage
+// analytics batches (POST /sync, see usage.ts) and serves the private usage
+// dashboard (/admin, see admin.ts).
 //
 // The frontend only ever sends { puzzle, importType, sourceFormat, device }
 // (`device` = a few browser hints, see src/device.ts) - the timestamp,
 // country, validity and device description are all decided here, the device
 // mainly from the request's own User-Agent header, and the page never holds
-// a credential (the D1 binding lives only on this Worker). There is deliberately no read endpoint: the data is
-// only reachable through `wrangler d1 execute` / the Cloudflare dashboard.
+// a credential (the D1 binding lives only on this Worker). The only read
+// access is /admin, behind the ADMIN_PASSWORD secret, plus `wrangler d1
+// execute` / the Cloudflare dashboard.
 import { SudokuSolver } from '../../frontend/src/sudoku/SudokuSolver'
+import { handleAdmin } from './admin'
 import { describeDevice, parseHints, type DeviceHints } from './device'
+import { handleSync } from './usage'
 
 interface Env {
   DB: D1Database
   ALLOWED_ORIGINS: string
+  /** Worker secret for /admin (`npx wrangler secret put ADMIN_PASSWORD`). */
+  ADMIN_PASSWORD?: string
 }
 
 type ImportType = 'ocr' | 'string'
@@ -27,14 +34,18 @@ const solver = new SudokuSolver()
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url)
+    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+      // Same-origin only: no CORS headers are ever added here.
+      return handleAdmin(request, env)
+    }
     const origin = request.headers.get('Origin') ?? ''
     const allowed = env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
     const cors: Record<string, string> = allowed.includes(origin)
       ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
       : {}
 
-    const url = new URL(request.url)
-    if (url.pathname !== '/import') {
+    if (url.pathname !== '/import' && url.pathname !== '/sync') {
       return new Response(null, { status: 404 })
     }
     if (request.method === 'OPTIONS') {
@@ -50,6 +61,10 @@ export default {
     // missing/unknown one means it didn't come from our page.
     if (!allowed.includes(origin)) {
       return new Response(null, { status: 403 })
+    }
+
+    if (url.pathname === '/sync') {
+      return new Response(null, { status: await handleSync(request, env.DB, ctx), headers: cors })
     }
 
     const text = await request.text()

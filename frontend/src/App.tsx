@@ -24,6 +24,7 @@ import {
 } from './sudoku/boardUtils'
 import { CanvasGridImage } from './sudoku/CanvasGridImage'
 import { reportImport } from './importAnalytics'
+import { AREA_LAYER, trackEvent, trackSettingsChanges, useAnalyticsArea } from './usageTracking'
 import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
@@ -548,6 +549,19 @@ const SHOW_SHORT_AIC_AUTOSOLVE = false
 /** The touch layout's dock tabs (see useCompactLayout) - each shows one or
  * two of the desktop layout's side-column blocks under/beside the grid. */
 type CompactSection = 'techniques' | 'input' | 'colour' | 'solve' | 'import'
+
+const TECHNIQUE_PANEL_TAB_LABELS: Record<TechniquePanelTab, string> = {
+  techniques: 'Techniques',
+  'solve-path': 'Solve Path',
+  find: 'Find by elims',
+  autocomplete: 'Autocomplete Colours',
+}
+
+/** A technique's name without the digit or rule details some names carry
+ * ("Simple Colouring Rule 1 (5)"), so analytics groups by technique. */
+function techniqueTrackingName(name: string): string {
+  return name.replace(/\s*\(\d\)$/, '').replace(/^3D Medusa Rules? .*$/, '3D Medusa')
+}
 
 const COMPACT_SECTIONS: Array<{ id: CompactSection; label: string }> = [
   { id: 'techniques', label: 'Techniques' },
@@ -1392,6 +1406,8 @@ interface DropdownMenuProps {
   /** Close as soon as one of the panel's `.dropdown-item` buttons is used -
    * for a plain action menu, as opposed to a panel of toggles. */
   closeOnItemClick?: boolean
+  /** The menu's name in usage analytics (time spent with it open). */
+  trackingName: string
   children: ReactNode
 }
 
@@ -1467,9 +1483,11 @@ function DropdownMenu({
   align = 'left',
   ariaLabel,
   closeOnItemClick = false,
+  trackingName,
   children,
 }: DropdownMenuProps) {
   const [open, setOpen] = useState(false)
+  useAnalyticsArea(`Menu › ${trackingName}`, AREA_LAYER.menu, open)
   const containerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -2073,6 +2091,58 @@ export default function App() {
         : techniquePanelTab === 'autocomplete'
           ? autocompleteInstance
           : activeTechnique
+
+  // Usage analytics (usageTracking.ts): which part of the solver the user
+  // is in - the dock tab on a touch layout, else the Techniques-panel tab
+  // plus the technique being studied on it. Menus and overlays stack above.
+  const solverArea =
+    compact && compactSection !== 'techniques'
+      ? `Solver › ${COMPACT_SECTIONS.find((section) => section.id === compactSection)?.label ?? compactSection}`
+      : techniquePanelTab === 'techniques' && !techniquesRevealed
+        ? 'Solver › Playing (techniques hidden)'
+        : highlightedTechnique
+          ? `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]} › ${techniqueTrackingName(highlightedTechnique.name)}`
+          : `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]}`
+  useAnalyticsArea(solverArea, AREA_LAYER.solver)
+  useEffect(() => {
+    trackSettingsChanges({
+      keyboardMode,
+      showStrongLinks,
+      showBivalueCells,
+      gridWhiteMode,
+      minBaseMedusaFilter,
+      shortSingleDigitAicEnabled,
+      shortAicEnabled,
+      genericAicEnabled,
+      xWingEnabled,
+      finnedXWingEnabled,
+      swordfishEnabled,
+      finnedSwordfishEnabled,
+      alsXzEnabled,
+      dynamicDragonDisabled,
+      allowedRule3Techniques,
+      exhaustiveDragonColouring,
+      optimizeDragons,
+      optimizeDynamicDragons,
+      aicLimitPerDragonStep,
+      maxTechniquesPerDragonStep,
+      dynamicDragonAutoSolveIncludesAics,
+      dragonGenerationDisregardsSingleDigitAic,
+      dragonGenerationDisregardsAic,
+      dragonGenerationDisregardsGenericAic,
+      dynamicDragonPuzzleForbidsPlainDragon,
+      dragonGenerationTimeoutMs,
+      easySolveEnabled,
+      solvePathTimeoutMs,
+    })
+  })
+  const gridFilled = board.every((row) => row.every((value) => value !== 0)) && conflictedCells.size === 0
+  useEffect(() => {
+    if (gridFilled) {
+      trackEvent('puzzle', 'Grid filled')
+    }
+  }, [gridFilled])
+
   // The move currently on screen (current main step, clamped) - everything
   // below keys off this one move and, when it chained more than one
   // technique together, how many of its substeps are currently revealed.
@@ -2344,14 +2414,29 @@ export default function App() {
    * status messages; one that still escapes is reported generically. */
   function runBusyTask(kind: BusyTaskKind, task: BusyTask, work: () => void | Promise<void>) {
     const id = nextBusyTaskId++
-    setBusyTasks((current) => [...current, { ...task, id, kind }])
+    // Usage analytics: what was run, how it ended and how long it took.
+    const startedAt = performance.now()
+    let outcome = 'completed'
+    const onCancel = task.onCancel
+    const tracked: BusyTask = onCancel
+      ? {
+          ...task,
+          onCancel: () => {
+            outcome = 'cancelled'
+            onCancel()
+          },
+        }
+      : task
+    setBusyTasks((current) => [...current, { ...tracked, id, kind }])
     afterPaint(async () => {
       try {
         await work()
       } catch {
+        outcome = 'failed'
         setStatus(`${task.title.replace(/…$/, '')} failed.`)
       } finally {
         setBusyTasks((current) => current.filter((t) => t.id !== id))
+        trackEvent('task', `${kind}: ${task.title.replace(/…$/, '')}`, outcome, Math.round(performance.now() - startedAt))
       }
     })
   }
@@ -2367,6 +2452,7 @@ export default function App() {
     setActiveSolvePathIndex(null)
     setHistoryIndex(nextIndex)
     setStatus('Undid last action.')
+    trackEvent('board', 'Undo')
   }
 
   function redo() {
@@ -2380,6 +2466,7 @@ export default function App() {
     setActiveSolvePathIndex(null)
     setHistoryIndex(nextIndex)
     setStatus('Redid last action.')
+    trackEvent('board', 'Redo')
   }
 
   function setCellValue(row: number, col: number, value: number) {
@@ -2398,6 +2485,7 @@ export default function App() {
     SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, value)
 
     commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    trackEvent('board', 'Digit placed')
   }
 
   function clearCell(row: number, col: number) {
@@ -2412,6 +2500,7 @@ export default function App() {
     nextCandidates[row][col] = Array(9).fill(false)
 
     commitGrid({ board: nextBoard, givens, candidates: nextCandidates })
+    trackEvent('board', 'Cell cleared')
   }
 
   function toggleCandidate(row: number, col: number, digit: number) {
@@ -2426,6 +2515,7 @@ export default function App() {
     nextCandidates[row][col] = cell
 
     commitGrid({ board, givens, candidates: nextCandidates })
+    trackEvent('board', 'Candidate toggled')
   }
 
   function clearCandidates(row: number, col: number) {
@@ -3298,6 +3388,12 @@ export default function App() {
   }
 
   function onSelectTechnique(id: string) {
+    if (id !== activeTechniqueId) {
+      const selected = techniqueInstances.find((t) => t.id === id)
+      if (selected) {
+        trackEvent('technique', 'Selected', techniqueTrackingName(selected.name))
+      }
+    }
     setActiveTechniqueId((current) => (current === id ? null : id))
     setDragonStepIndex(0)
     setDragonSubstepIndex(null)
@@ -3367,6 +3463,7 @@ export default function App() {
     const next = applyTechniqueEffect(board, candidates, { eliminatedCandidates, solvedCandidates })
     commitGrid({ board: next.board, givens, candidates: next.candidates })
     setStatus(`Applied ${activeTechnique.name}.`)
+    trackEvent('technique', 'Applied', techniqueTrackingName(activeTechnique.name))
   }
 
   /** Applies the selected solve-path step's own precomputed effect
@@ -3394,6 +3491,7 @@ export default function App() {
     }
     const remainingSolvePath = { ...solvePath, steps: solvePath.steps.slice(activeSolvePathIndex + 1) }
     commitGrid({ board: curBoard, givens, candidates: curCandidates }, remainingSolvePath)
+    trackEvent('solve path', 'Steps applied', null, stepsToApply.length)
     setActiveSolvePathIndex(null)
     const lastStep = stepsToApply[stepsToApply.length - 1]
     setStatus(
@@ -3997,6 +4095,7 @@ export default function App() {
       shape: swatchShapes[paintColor],
     })
     commitGrid({ board, givens, candidates, candidateColors: nextColors })
+    trackEvent('board', 'Candidate painted')
   }
 
   function cellAriaLabel(row: number, col: number, value: number): string {
@@ -4405,6 +4504,7 @@ export default function App() {
           </>
         )}
         <DropdownMenu
+          trackingName="Generate Puzzle"
           label={
             <>
               {generating ? (
@@ -4558,6 +4658,7 @@ export default function App() {
         </DropdownMenu>
 
         <DropdownMenu
+          trackingName="Dragon Configuration"
           label={
             phone ? (
               '🐉'
@@ -4724,6 +4825,7 @@ export default function App() {
         </DropdownMenu>
 
         <DropdownMenu
+          trackingName="Settings"
           label={phone ? '⚙' : '⚙ Settings'}
           ariaLabel={phone ? 'Settings' : undefined}
           buttonClassName="settings-trigger"
@@ -4848,6 +4950,7 @@ export default function App() {
         </DropdownMenu>
         {phone && (
           <DropdownMenu
+          trackingName="More"
             label="⋯"
             ariaLabel="More"
             buttonClassName="more-trigger"

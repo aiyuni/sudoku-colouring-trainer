@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { AREA_LAYER, useAnalyticsArea } from './usageTracking'
 import { HELP_QUICKSTART, HELP_QUICKSTART_HEADING, HELP_TABS, HELP_TITLE } from './helpContent'
 import { describeDefault } from './settingsDefaults'
 
@@ -43,6 +44,7 @@ export default function HelpModal({ onClose, onOpenTutorial }: HelpModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const [tabIndex, setTabIndex] = useState(0)
   const tab = HELP_TABS[tabIndex]
+  useAnalyticsArea(`Help › ${tab.label}`, AREA_LAYER.dialog)
   // The setup effect below runs once, on open. Reading onClose through a ref
   // keeps it from re-running (and re-grabbing focus) whenever the parent
   // happens to pass a new function identity on a re-render.

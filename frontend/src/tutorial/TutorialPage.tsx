@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AREA_LAYER, useAnalyticsArea } from '../usageTracking'
 import TutorialGrid from './TutorialGrid'
 import {
   buildBasicsGroups,
@@ -168,10 +169,24 @@ export function LessonPlayer({ lesson, initialStep = 0 }: LessonPlayerProps) {
 /** A tab that teaches several techniques: one sub-tab per technique, so the
  * reader can jump straight to the one they want. A group whose every example
  * was skipped (see `safely` in tutorialExamples.ts) gets no sub-tab. */
-function GroupTabs({ groups, label, render }: { groups: LessonGroup[]; label: string; render: (group: LessonGroup) => ReactNode }) {
+function GroupTabs({
+  groups,
+  label,
+  tab,
+  render,
+}: {
+  groups: LessonGroup[]
+  label: string
+  /** The page tab this sits on, for usage analytics. */
+  tab: TabId
+  render: (group: LessonGroup) => ReactNode
+}) {
   const shown = groups.filter((group) => group.lessons.length > 0)
   const [index, setIndex] = useState(0)
   const group = shown[Math.min(index, shown.length - 1)]
+  // Which technique of this tab is being read (the tab itself is tracked by
+  // TutorialPage, one layer down).
+  useAnalyticsArea(`How It Works › ${TABS.find((t) => t.id === tab)?.label ?? tab} › ${group?.title ?? 'none'}`, AREA_LAYER.tutorialSection, !!group)
   if (!group) {
     return <p className="tutorial-empty">These examples aren't available right now.</p>
   }
@@ -206,6 +221,7 @@ function BasicsView() {
     <GroupTabs
       groups={groups}
       label="Basic techniques"
+      tab="basics"
       render={(group) => (
         <section className="tutorial-card">
           {group.lessons.map((lesson) => (
@@ -241,6 +257,7 @@ function UniquenessView() {
     <GroupTabs
       groups={groups}
       label="Uniqueness techniques"
+      tab="uniqueness"
       render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
     />
   )
@@ -321,6 +338,7 @@ export default function TutorialPage({ onClose, initialTab = 'basics' }: Tutoria
   }, [tab])
 
   const current = TABS.find((t) => t.id === tab)!
+  useAnalyticsArea(`How It Works › ${current.label}`, AREA_LAYER.tutorial)
 
   return (
     <div className="tutorial-page" role="dialog" aria-modal="true" aria-labelledby="tutorial-title" ref={contentRef}>
