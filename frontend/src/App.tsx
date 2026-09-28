@@ -28,7 +28,10 @@ import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
 import {
   ALL_RULE3_TECHNIQUES,
+  type DragonColor,
+  type DragonExtendOptions,
   type DragonMove,
+  type DragonNode,
   type DragonRule3Substep,
   type Rule3Technique,
 } from './sudoku/SudokuDragonFinder'
@@ -49,6 +52,7 @@ import { SudokuRules } from './sudoku/SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
 import { type SingleAssignment } from './sudoku/SudokuSingleFinder'
 import { SudokuSolver } from './sudoku/SudokuSolver'
+import { autocompleteMedusa, type MedusaSeed } from './sudoku/SudokuMedusaAutocompleter'
 import {
   SAMPLE_PUZZLE,
   type Board,
@@ -97,6 +101,8 @@ import {
   computeGenericAicEliminations,
   buildTechniqueInstances,
   buildDragonInstance,
+  buildMedusaChainInstance,
+  autocompleteDragon,
   dynamicDragonLabel,
   fullTechniqueEffect,
   countEffectiveEliminations,
@@ -111,7 +117,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.7.1-beta'
+const APP_VERSION = 'v0.8.0-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -529,7 +535,7 @@ function solvabilityText(solvability: PuzzleSolvability): string {
   }
 }
 
-type TechniquePanelTab = 'techniques' | 'solve-path' | 'find'
+type TechniquePanelTab = 'techniques' | 'solve-path' | 'find' | 'autocomplete'
 
 /** The Short AIC (length <= 5) Auto-solve button is hidden - Short
  * Single-Digit and Generic cover the useful ends of the AIC range there -
@@ -752,6 +758,249 @@ function FindPanel({
   )
 }
 
+/** What the "Autocomplete Colours" tab is currently showing - same shape and
+ * same staleness rule as FindResult: a `found` result is tied to the grid it
+ * was worked out on. */
+/** Which Autocomplete Colours button a result came from - each section
+ * shows its own result (step player included) right under its button. */
+type AutocompleteSource = 'medusa' | 'plain-dragon' | 'dynamic-dragon'
+
+type AutocompleteResult =
+  | { kind: 'message'; source: AutocompleteSource; tone: 'error' | 'info'; title: string; lines: string[] }
+  | {
+      kind: 'found'
+      source: AutocompleteSource
+      instance: TechniqueInstance
+      summary: string
+      /** Autocomplete medusa only: "row,col,digit" of every candidate in the
+       * finished Medusa - these keep showing the user's own paint rather
+       * than the solved/eliminated highlight, so the result reads in their
+       * two colours (the text says which one is true). */
+      chainKeys?: string[]
+      /** Autocomplete Dragon only. The grid shows the move log's colouring
+       * at the current step in the user's own swatches (`rolePaint`, one
+       * per Dragon colour) instead of Dragon's fixed four highlight colours;
+       * the first `checkedMoves` moves are the user's own colouring. */
+      dragon?: { checkedMoves: number; rolePaint: Record<DragonColor, CandidatePaintLayer>; dynamic: boolean }
+      boardBefore: Board
+      candidatesBefore: CandidateGrid
+    }
+
+/** The two painted colours "Autocomplete Colours" treats as the Medusa's two
+ * sides: the first two swatches, in the Colour section's order, that are on
+ * the grid - so light blue and light yellow whenever both are used. */
+interface MedusaColourSwatch {
+  id: CandidateColor
+  label: string
+  hex: string
+}
+
+interface AutocompletePanelData {
+  /** Every colour painted on the grid, in the Colour section's order - the
+   * first two are the Medusa colours, any others the dragon colours. */
+  paintedSwatches: MedusaColourSwatch[]
+  onAutocomplete: () => void
+  onAutocompleteDragon: () => void
+  onAutocompleteDynamicDragon: () => void
+  /** Settings -> "disable Dynamic Dragons": Autocomplete Dynamic Dragon is
+   * unavailable, like every other Dynamic Dragon feature. */
+  dynamicDragonDisabled: boolean
+  result: AutocompleteResult | null
+  /** False once the grid has changed since a `found` result was computed. */
+  resultIsCurrent: boolean
+}
+
+/** Dragon Colouring's text names its four colours by its own fixed labels
+ * (see colorLabel in SudokuDragonFinder.ts); Autocomplete Dragon shows them
+ * in the user's own swatches, so its text is renamed to match - in one pass,
+ * so a renamed colour is never renamed again. */
+function renameDragonColours(text: string, roleSwatch: Record<DragonColor, { label: string }>): string {
+  const byLabel: Record<string, DragonColor> = {
+    'light blue': 'blue',
+    yellow: 'yellow',
+    'dark blue': 'darkBlue',
+    orange: 'orange',
+  }
+  return text.replace(/\b(light blue|dark blue|yellow|orange)\b/g, (label) => roleSwatch[byLabel[label]].label.toLowerCase())
+}
+
+function ColourChip({ swatch }: { swatch: MedusaColourSwatch }) {
+  return (
+    <span className="autocomplete-colour">
+      <span className="autocomplete-colour-dot" style={{ backgroundColor: swatch.hex }} aria-hidden="true" />
+      {swatch.label.toLowerCase()}
+    </span>
+  )
+}
+
+/** "Autocomplete Colours": the user starts a colouring by hand and this
+ * finishes it. Autocomplete medusa: two colours, a 3D Medusa - checked (see
+ * autocompleteMedusa), the rest of the chain painted in the same two
+ * colours, and what the finished Medusa proves shown the way the Techniques
+ * list shows a Medusa row. Autocomplete Dragon (Plain): three or four colours,
+ * a Medusa plus dragon colours - checked and carried on (autocompleteDragon)
+ * and shown like a Dragon row, step player included, in the user's colours. */
+function AutocompletePanel({
+  paintedSwatches,
+  onAutocomplete,
+  onAutocompleteDragon,
+  onAutocompleteDynamicDragon,
+  dynamicDragonDisabled,
+  result,
+  resultIsCurrent,
+  dragonStepIndex,
+  onDragonStep,
+  dragonSubstepIndex,
+  onDragonSubstep,
+}: AutocompletePanelData & {
+  dragonStepIndex: number
+  onDragonStep: (delta: number) => void
+  dragonSubstepIndex: number | null
+  onDragonSubstep: (delta: number) => void
+}) {
+  const paintedColourCount = paintedSwatches.length
+  const medusaColours = paintedColourCount >= 2 ? paintedSwatches.slice(0, 2) : null
+  const dragonColours = paintedSwatches.slice(2)
+  const disabledReason =
+    paintedColourCount === 0
+      ? 'Colour at least one candidate in each of two Medusa colours to autocomplete the Medusa.'
+      : paintedColourCount === 1
+        ? 'Only one colour is coloured on the grid - colour at least one candidate in a second colour to start the Medusa.'
+        : null
+  const dragonDisabledReason =
+    paintedColourCount < 3
+      ? 'Colour candidates in at least 3 colours to autocomplete the Dragon: the two Medusa colours, plus 1+ dragon colours.'
+      : paintedColourCount > 4
+        ? `There are ${paintedColourCount} colours on the grid - a Dragon can only have 3 or 4 (two Medusa colours and one or two dragon colours).`
+        : null
+  const dynamicDisabledReason = dynamicDragonDisabled
+    ? 'Dynamic Dragons are disabled in Settings.'
+    : dragonDisabledReason
+  const moves = result?.kind === 'found' ? result.instance.moves : undefined
+  const buttonName: Record<AutocompleteSource, string> = {
+    medusa: 'Autocomplete medusa',
+    'plain-dragon': 'Autocomplete Dragon (Plain)',
+    'dynamic-dragon': 'Autocomplete Dynamic Dragon',
+  }
+  // The latest result, shown under the button that produced it (one at a
+  // time - it's also what the grid highlights and Apply commits).
+  const resultFor = (source: AutocompleteSource) =>
+    result?.source !== source ? null : result.kind === 'message' ? (
+      <div className={`find-message find-message-${result.tone}`} role="status">
+        <strong>{result.title}</strong>
+        {result.lines.length > 0 && (
+          <ul>
+            {result.lines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    ) : resultIsCurrent ? (
+      <div className="find-result">
+        <p className="find-summary">{result.summary}</p>
+        <div className="technique-item active find-item">
+          <span className="technique-name">{result.instance.name}</span>
+          <span className="technique-notation">{result.instance.notation}</span>
+          {moves && (
+            <DragonStepper
+              moves={moves}
+              stepIndex={Math.min(dragonStepIndex, moves.length - 1)}
+              onDragonStep={onDragonStep}
+              substepIndex={dragonSubstepIndex}
+              onSubstep={onDragonSubstep}
+            />
+          )}
+        </div>
+        <p className="technique-empty">
+          Click Apply to make these {result.instance.solvedCandidates.length > 0 ? 'placements and eliminations' : 'eliminations'}.
+        </p>
+      </div>
+    ) : (
+      <p className="solve-path-stale-warning">The grid or colouring has changed - press {buttonName[source]} again.</p>
+    )
+  return (
+    <div className="find-panel">
+      <div className="experimental-label">experimental</div>
+      <p className="autocomplete-heading">3D Medusa</p>
+            <p className="technique-empty">
+         Start a 3D Medusa by colouring candidates in two colours, and this will check your colouring, colour the rest of the Medusa for you, and show what it proves. </p>
+      {medusaColours && (
+        <p className="technique-empty">
+          Medusa colours: <ColourChip swatch={medusaColours[0]} /> and <ColourChip swatch={medusaColours[1]} />
+          {paintedColourCount > 2 && ' (the first two colours in the Colour section that are on the grid; other colours are ignored)'}.
+        </p>
+      )}
+      <div className="find-form">
+        <button
+          type="button"
+          className="find-button"
+          disabled={disabledReason !== null}
+          title={disabledReason ?? undefined}
+          onClick={onAutocomplete}
+        >
+          Autocomplete medusa
+        </button>
+      </div>
+      {disabledReason && <p className="technique-empty">{disabledReason}</p>}
+      {resultFor('medusa')}
+
+      <p className="autocomplete-heading">Dragon (Plain)</p>
+      <p className="technique-empty">
+        Start a plain Dragon by colouring the Medusa set and its dragon colours (dragons colours are dark blue and orange by default). Then click the button to checks your colouring, continues your Dragon extensions, and shows the end result, step-by-step.
+      </p>
+      {medusaColours && dragonColours.length > 0 && dragonColours.length <= 2 && (
+        <p className="technique-empty">
+          Medusa colours: <ColourChip swatch={medusaColours[0]} /> and <ColourChip swatch={medusaColours[1]} />; dragon{' '}
+          {dragonColours.length === 1 ? (
+            <>
+              colour: <ColourChip swatch={dragonColours[0]} /> (which side it belongs to is worked out from your colouring).
+            </>
+          ) : (
+            <>
+              colours: <ColourChip swatch={dragonColours[0]} /> and <ColourChip swatch={dragonColours[1]} />.
+            </>
+          )}
+        </p>
+      )}
+      <div className="find-form">
+        <button
+          type="button"
+          className="find-button"
+          disabled={dragonDisabledReason !== null}
+          title={dragonDisabledReason ?? undefined}
+          onClick={onAutocompleteDragon}
+        >
+          Autocomplete Dragon (Plain)
+        </button>
+      </div>
+      {dragonDisabledReason && <p className="technique-empty">{dragonDisabledReason}</p>}
+      {resultFor('plain-dragon')}
+
+      <p className="autocomplete-heading">Dynamic Dragon</p>
+      <p className="technique-empty">
+        Start a Dynamic Dragon by colouring the Medusa set and its dragon colours. Then click the button to checks your colouring, continues your Dynamic Dragon extensions (based on the Dynamic Dragon configurations), and shows the end result, step-by-step.
+      </p>
+      <div className="find-form">
+        <button
+          type="button"
+          className="find-button"
+          disabled={dynamicDisabledReason !== null}
+          title={dynamicDisabledReason ?? undefined}
+          onClick={onAutocompleteDynamicDragon}
+        >
+          Autocomplete Dynamic Dragon
+        </button>
+      </div>
+      {dynamicDisabledReason && dynamicDisabledReason !== dragonDisabledReason && (
+        <p className="technique-empty">{dynamicDisabledReason}</p>
+      )}
+      {resultFor('dynamic-dragon')}
+
+    </div>
+  )
+}
+
 interface TechniquePanelProps {
   tab: TechniquePanelTab
   onTabChange: (tab: TechniquePanelTab) => void
@@ -775,6 +1024,7 @@ interface TechniquePanelProps {
   onToggleSolvePathLog: () => void
   solvability: PuzzleSolvability
   find: FindPanelData
+  autocomplete: AutocompletePanelData
   easySolveEnabled: boolean
   onToggleEasySolve: () => void
   solvePathTimeoutMs: number
@@ -821,6 +1071,7 @@ function TechniquePanel({
   //onToggleSolvePathLog,
   solvability,
   find,
+  autocomplete,
   easySolveEnabled,
   onToggleEasySolve,
   solvePathTimeoutMs,
@@ -857,6 +1108,16 @@ function TechniquePanel({
             title="Find by eliminations (experimental): find the Dragon that eliminates candidates you choose."
           >
             Find by elims
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'autocomplete'}
+            className={['technique-tab', tab === 'autocomplete' ? 'active' : ''].filter(Boolean).join(' ')}
+            onClick={() => onTabChange('autocomplete')}
+            title="Autocomplete Colours: finish a 3D Medusa you started painting and see what it proves."
+          >
+            Find by colours
           </button>
         </div>
         <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
@@ -921,6 +1182,14 @@ function TechniquePanel({
           </ul>
         </>
         )
+      ) : tab === 'autocomplete' ? (
+        <AutocompletePanel
+          {...autocomplete}
+          dragonStepIndex={dragonStepIndex}
+          onDragonStep={onDragonStep}
+          dragonSubstepIndex={dragonSubstepIndex}
+          onDragonSubstep={onDragonSubstep}
+        />
       ) : tab === 'find' ? (
         <FindPanel
           {...find}
@@ -1274,7 +1543,7 @@ function DropdownMenu({
   )
 }
 
-type BusyTaskKind = 'solve' | 'generate' | 'ocr' | 'solve-path' | 'find' | 'auto-solve'
+type BusyTaskKind = 'solve' | 'generate' | 'ocr' | 'solve-path' | 'find' | 'auto-solve' | 'autocomplete'
 
 interface RunningBusyTask extends BusyTask {
   id: number
@@ -1308,6 +1577,7 @@ export default function App() {
   const [techniquesRevealed, setTechniquesRevealed] = useState(false)
   const [findInput, setFindInput] = useState('')
   const [findResult, setFindResult] = useState<FindResult | null>(null)
+  const [autocompleteResult, setAutocompleteResult] = useState<AutocompleteResult | null>(null)
   const [activeSolvePathIndex, setActiveSolvePathIndex] = useState<number | null>(null)
   // Deliberately state, not a useMemo off [board, candidates]: the whole
   // point is this does NOT recompute on every grid change - only Generate/
@@ -1439,6 +1709,20 @@ export default function App() {
     () => candidateColors.some((row) => row.some((cell) => cell.some((paint) => paint !== null))),
     [candidateColors],
   )
+
+  // Every colour painted on the grid, in the Colour section's swatch order -
+  // Autocomplete Colours takes the first two as the Medusa's two sides.
+  const paintedSwatches = useMemo(() => {
+    const present = new Set<CandidateColor>()
+    for (const row of candidateColors) {
+      for (const cell of row) {
+        for (const paint of cell) {
+          paint?.forEach((layer) => present.add(layer.color))
+        }
+      }
+    }
+    return candidateColorSwatches.filter((swatch) => present.has(swatch.id))
+  }, [candidateColors, candidateColorSwatches])
 
   const strongLinks = useMemo(
     () => (showStrongLinks ? findStrongLinks(candidates) : []),
@@ -1719,12 +2003,30 @@ export default function App() {
     boardsEqual(board, findResult.boardBefore) &&
     candidatesEqual(candidates, findResult.candidatesBefore)
   const findInstance = findResult?.kind === 'found' && findResultIsCurrent ? findResult.instance : null
+  const autocompleteResultIsCurrent =
+    autocompleteResult?.kind === 'found' &&
+    boardsEqual(board, autocompleteResult.boardBefore) &&
+    candidatesEqual(candidates, autocompleteResult.candidatesBefore)
+  const autocompleteInstance =
+    autocompleteResult?.kind === 'found' && autocompleteResultIsCurrent ? autocompleteResult.instance : null
+  const autocompleteChainKeys = useMemo(
+    () =>
+      techniquePanelTab === 'autocomplete' &&
+      autocompleteResult?.kind === 'found' &&
+      autocompleteResultIsCurrent &&
+      autocompleteResult.chainKeys
+        ? new Set(autocompleteResult.chainKeys)
+        : null,
+    [techniquePanelTab, autocompleteResult, autocompleteResultIsCurrent],
+  )
   const highlightedTechnique =
     techniquePanelTab === 'solve-path'
       ? (activeSolvePathIndex !== null ? (solvePath?.steps[activeSolvePathIndex]?.instance ?? null) : null)
       : techniquePanelTab === 'find'
         ? findInstance
-        : activeTechnique
+        : techniquePanelTab === 'autocomplete'
+          ? autocompleteInstance
+          : activeTechnique
   // The move currently on screen (current main step, clamped) - everything
   // below keys off this one move and, when it chained more than one
   // technique together, how many of its substeps are currently revealed.
@@ -1756,6 +2058,31 @@ export default function App() {
       highlightedTechnique?.moves ? foldDragonMoves(highlightedTechnique.moves, dragonStepIndex, atFinalSubstep) : null,
     [highlightedTechnique, dragonStepIndex, atFinalSubstep],
   )
+  // Autocomplete Dragon shows the step player's colouring in the user's own
+  // swatches: every candidate coloured at the current step gets its Dragon
+  // colour's swatch, drawn as paint instead of the fixed light blue/yellow/
+  // dark blue/orange highlight, and nothing else shows paint meanwhile (so
+  // rewinding really takes colours off). "row,col,digit" -> paint.
+  const autocompleteDragonPaint = useMemo(() => {
+    const dragon =
+      techniquePanelTab === 'autocomplete' && autocompleteResult?.kind === 'found' && autocompleteResultIsCurrent
+        ? autocompleteResult.dragon
+        : undefined
+    if (!dragon || !dragonHighlight) {
+      return null
+    }
+    const paintByKey = new Map<string, CandidatePaint>()
+    const add = (refs: Array<{ row: number; col: number; digit: number }>, color: DragonColor) => {
+      for (const ref of refs) {
+        paintByKey.set(`${ref.row},${ref.col},${ref.digit}`, [dragon.rolePaint[color]])
+      }
+    }
+    add(dragonHighlight.blueCandidates, 'blue')
+    add(dragonHighlight.yellowCandidates, 'yellow')
+    add(dragonHighlight.darkBlueCandidates, 'darkBlue')
+    add(dragonHighlight.orangeCandidates, 'orange')
+    return paintByKey
+  }, [techniquePanelTab, autocompleteResult, autocompleteResultIsCurrent, dragonHighlight])
   // Dynamic Dragon Colouring's non-colouring technique(s) (a naked pair, a
   // Unique Rectangle, ...) only apply at their own single step - unlike the
   // colours/eliminations above, this isn't cumulative across main steps, so
@@ -3181,11 +3508,333 @@ export default function App() {
     setStatus(`Applied ${findInstance.name}: removed ${removed} candidate${removed === 1 ? '' : 's'}.`)
   }
 
+  /** Autocomplete Colours: finishes the 3D Medusa the user started painting.
+   * The first two painted colours (paintedSwatches) are its two sides; their
+   * paint is checked as a valid start (autocompleteMedusa), the rest of the
+   * chain is painted in the same colours as one undoable step - the user's
+   * own paint is never touched - and the finished chain goes through the
+   * exact same Medusa rules 1-5 as a Techniques-list Medusa row
+   * (buildMedusaChainInstance). */
+  function onAutocompleteMedusa() {
+    const say = (tone: 'error' | 'info', title: string, lines: string[] = []) =>
+      setAutocompleteResult({ kind: 'message', source: 'medusa', tone, title, lines })
+    if (paintedSwatches.length < 2) {
+      return
+    }
+    const [first, second] = paintedSwatches
+    const colorNames = { blue: first.label.toLowerCase(), yellow: second.label.toLowerCase() }
+
+    const seeds: MedusaSeed[] = []
+    const problems: string[] = []
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        for (let digit = 1; digit <= 9; digit++) {
+          const paint = candidateColors[row][col][digit - 1]
+          const hasFirst = paint?.some((layer) => layer.color === first.id) ?? false
+          const hasSecond = paint?.some((layer) => layer.color === second.id) ?? false
+          if (hasFirst && hasSecond) {
+            problems.push(
+              `${formatCandidate({ row, col, digit })} is painted both ${colorNames.blue} and ${colorNames.yellow}, but a candidate can only be on one side of a Medusa.`,
+            )
+          } else if (hasFirst || hasSecond) {
+            seeds.push({ row, col, digit, color: hasFirst ? 'blue' : 'yellow' })
+          }
+        }
+      }
+    }
+
+    const outcome = autocompleteMedusa(medusaFinder, board, candidates, seeds, colorNames)
+    if (outcome.kind === 'invalid') {
+      problems.push(...outcome.problems)
+    }
+    if (problems.length > 0 || outcome.kind === 'invalid') {
+      say('error', 'The current Medusa is invalid.', problems.slice(0, 5))
+      setStatus('The current Medusa is invalid.')
+      return
+    }
+
+    if (outcome.added.length > 0) {
+      const nextColors = cloneCandidateColors(candidateColors)
+      for (const node of outcome.added) {
+        const swatch = node.color === 'blue' ? first : second
+        const layer = { color: swatch.id, shape: swatchShapes[swatch.id] }
+        // A candidate already painted some other (non-Medusa) colour keeps
+        // it, as the first half of a multicolour pip.
+        const existing = nextColors[node.row][node.col][node.digit - 1]
+        nextColors[node.row][node.col][node.digit - 1] = existing ? [existing[0], layer] : [layer]
+      }
+      commitGrid({ board, givens, candidates, candidateColors: nextColors })
+    }
+
+    const total = outcome.chain.candidates.length
+    const colouredText =
+      outcome.added.length === 0
+        ? `Your Medusa was already fully coloured (${total} candidates).`
+        : `Coloured ${outcome.added.length} more candidate${outcome.added.length === 1 ? '' : 's'} (${total} in the whole Medusa).`
+    const built = buildMedusaChainInstance(outcome.chain, board, candidates, colorNames)
+    if (!built) {
+      say('info', 'Continuing the current Medusa does not lead to any eliminations or placements.', [colouredText])
+      setStatus('Continuing the current Medusa does not lead to any eliminations or placements.')
+      return
+    }
+
+    setAutocompleteResult({
+      kind: 'found',
+      source: 'medusa',
+      // No blue/yellow highlight: the chain is now painted in the user's own
+      // colours, which show through wherever nothing else is highlighted.
+      instance: { ...built.instance, blueCandidates: undefined, yellowCandidates: undefined },
+      summary: colouredText,
+      chainKeys: outcome.chain.candidates.map((c) => `${c.row},${c.col},${c.digit}`),
+      boardBefore: board,
+      candidatesBefore: candidates,
+    })
+    setStatus(`Autocompleted the Medusa: ${built.instance.name}.`)
+  }
+
+  /** Autocomplete Dragon (Plain) / Autocomplete Dynamic Dragon: carries on
+   * the Dragon Colouring the user started painting - plain, or Dynamic with
+   * exactly the options the solver's Dynamic Dragons use
+   * (computeStuckDynamicDragonExtensions). The first two painted colours (Colour section
+   * order) are the Medusa's two sides and the rest (one or two) their dragon
+   * colours. With two dragon colours the first goes with the first Medusa
+   * colour; with one, whose side it is isn't known up front - both readings
+   * are tried (orange's own side first, as Dragon's default dragon colours
+   * are dark blue for light blue and orange for yellow) and the one that
+   * checks out is used, as is swapping two dragon colours that only check
+   * out the other way round. The checking and carrying on is
+   * autocompleteDragon; this maps the user's swatches onto Dragon's four
+   * colours and back, in the text (renameDragonColours) and on the grid. */
+  function onAutocompleteDragon(dynamic: boolean) {
+    const source: AutocompleteSource = dynamic ? 'dynamic-dragon' : 'plain-dragon'
+    const say = (tone: 'error' | 'info', title: string, lines: string[] = []) =>
+      setAutocompleteResult({ kind: 'message', source, tone, title, lines })
+    if (paintedSwatches.length < 3 || paintedSwatches.length > 4) {
+      return
+    }
+    const [medusaA, medusaB, ...extra] = paintedSwatches
+    const assignments: Array<{ darkBlue?: MedusaColourSwatch; orange?: MedusaColourSwatch }> =
+      extra.length === 2
+        ? [
+            { darkBlue: extra[0], orange: extra[1] },
+            { darkBlue: extra[1], orange: extra[0] },
+          ]
+        : extra[0].id === 'rust'
+          ? [{ orange: extra[0] }, { darkBlue: extra[0] }]
+          : [{ darkBlue: extra[0] }, { orange: extra[0] }]
+    // A Dragon colour the user hasn't used (one dragon colour painted) still
+    // needs a swatch if the Dragon grows that side: Dragon's default for it
+    // (dark blue / orange) when that isn't already taken, else the first
+    // swatch not on the grid.
+    const unusedSwatch = (preferred: CandidateColor) => {
+      const used = new Set(paintedSwatches.map((swatch) => swatch.id))
+      return (
+        candidateColorSwatches.find((swatch) => swatch.id === preferred && !used.has(swatch.id)) ??
+        candidateColorSwatches.find((swatch) => !used.has(swatch.id))!
+      )
+    }
+
+    const problems: string[] = []
+    const paintedCells: Array<{ row: number; col: number; digit: number; color: CandidateColor }> = []
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        for (let digit = 1; digit <= 9; digit++) {
+          const paint = candidateColors[row][col][digit - 1]
+          if (!paint) {
+            continue
+          }
+          const colours = [...new Set(paint.map((layer) => layer.color))]
+          if (colours.length > 1) {
+            const labels = colours.map((id) => paintedSwatches.find((swatch) => swatch.id === id)!.label.toLowerCase())
+            problems.push(
+              `${formatCandidate({ row, col, digit })} is painted both ${labels[0]} and ${labels[1]}, but a candidate can only have one Dragon colour.`,
+            )
+          } else {
+            paintedCells.push({ row, col, digit, color: colours[0] })
+          }
+        }
+      }
+    }
+    if (problems.length > 0) {
+      say('error', 'The current Dragon colours are invalid.', problems.slice(0, 5))
+      setStatus('The current Dragon colours are invalid.')
+      return
+    }
+
+    const extendOptions: DragonExtendOptions = dynamic
+      ? {
+          dynamic: true,
+          allowedRule3Techniques: effectiveAllowedRule3Techniques,
+          aicLimitPerStep: aicLimitPerDragonStep,
+          maxTechniquesPerStep: maxTechniquesPerDragonStep,
+          exhaustive: exhaustiveDragonColouring,
+          // As for the solver's Dynamic Dragons: Optimize Dynamic Dragons
+          // implies the optimized search.
+          optimize: optimizeDragons || optimizeDynamicDragons,
+          optimizeDynamic: optimizeDynamicDragons,
+        }
+      : { exhaustive: exhaustiveDragonColouring, optimize: optimizeDragons }
+    const kindName = dynamic ? 'Dynamic Dragon' : 'Dragon'
+    let firstFailure: { outcome: Extract<ReturnType<typeof autocompleteDragon>, { kind: 'invalid' }>; rename: (text: string) => string } | null = null
+    for (const assignment of assignments) {
+      const roleSwatch: Record<DragonColor, MedusaColourSwatch> = {
+        blue: medusaA,
+        yellow: medusaB,
+        darkBlue: assignment.darkBlue ?? unusedSwatch('blue'),
+        orange: assignment.orange ?? unusedSwatch('rust'),
+      }
+      const roleOf = new Map<CandidateColor, DragonColor>(
+        (Object.keys(roleSwatch) as DragonColor[]).map((color) => [roleSwatch[color].id, color]),
+      )
+      const rename = (text: string) => renameDragonColours(text, roleSwatch)
+      const painted: DragonNode[] = paintedCells.map((cell) => ({ ...cell, color: roleOf.get(cell.color)! }))
+      const outcome = autocompleteDragon(board, candidates, painted, extendOptions)
+      if (outcome.kind === 'invalid') {
+        firstFailure ??= { outcome, rename }
+        continue
+      }
+      if (outcome.kind === 'not-stuck') {
+        say('info', "The current Medusa isn't stuck, so it can't start a Dragon.", [
+          'Its own Medusa rules already lead to eliminations or placements - try Autocomplete Medusa instead.',
+        ])
+        setStatus("The current Medusa isn't stuck, so it can't start a Dragon.")
+        return
+      }
+      if (outcome.kind === 'no-result') {
+        say('info', `Continuing the current ${kindName} does not lead to any eliminations or placements.`, [
+          dynamic
+            ? 'Your colouring is a valid Dynamic Dragon so far, but continuing it with the Dynamic Dragon techniques selected in Dragon Configuration leads to a dead end.'
+            : 'Your colouring is a valid plain Dragon so far, but continuing the Dragon Colouring leads to a dead end.',
+        ])
+        setStatus(`Continuing the current ${kindName} does not lead to any eliminations or placements.`)
+        return
+      }
+
+      const moves = outcome.moves.map((move) => ({
+        ...move,
+        description: rename(move.description),
+        substeps: move.substeps?.map((substep) => ({ ...substep, clause: rename(substep.clause) })),
+      }))
+      // Named like the Techniques list's rows: a Dynamic Dragon after the
+      // techniques its Extension Rule 3 steps used, and one that never needed
+      // Rule 3 is just a (plain) Dragon.
+      const usesRule3 = moves.some((move) => move.kind === 'extension-rule3')
+      const built = usesRule3
+        ? buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), outcome.chainKey, moves)
+        : buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', outcome.chainKey, moves)
+      const rolePaint = Object.fromEntries(
+        (Object.keys(roleSwatch) as DragonColor[]).map((color) => [
+          color,
+          { color: roleSwatch[color].id, shape: swatchShapes[roleSwatch[color].id] },
+        ]),
+      ) as Record<DragonColor, CandidatePaintLayer>
+
+      // Paint the finished colouring onto the grid (one undoable step), the
+      // way Autocomplete medusa does - only onto candidates the user hasn't
+      // painted, so their own paint is never replaced.
+      const final = foldDragonMoves(moves, moves.length - 1)
+      const nextColors = cloneCandidateColors(candidateColors)
+      let added = 0
+      for (const [refs, color] of [
+        [final.blueCandidates, 'blue'],
+        [final.yellowCandidates, 'yellow'],
+        [final.darkBlueCandidates, 'darkBlue'],
+        [final.orangeCandidates, 'orange'],
+      ] as const) {
+        for (const ref of refs) {
+          if (!nextColors[ref.row][ref.col][ref.digit - 1] && candidates[ref.row][ref.col][ref.digit - 1]) {
+            nextColors[ref.row][ref.col][ref.digit - 1] = [rolePaint[color]]
+            added++
+          }
+        }
+      }
+      if (added > 0) {
+        commitGrid({ board, givens, candidates, candidateColors: nextColors })
+      }
+
+      const label = (color: DragonColor) => roleSwatch[color].label.toLowerCase()
+      const colourNotes: string[] = []
+      if (extra.length === 1) {
+        const side = assignment.darkBlue ? 'blue' : 'yellow'
+        colourNotes.push(`${label(side === 'blue' ? 'darkBlue' : 'orange')} is the dragon colour of the ${label(side)} side`)
+      } else if (assignment.darkBlue !== extra[0]) {
+        colourNotes.push(
+          `your colouring only works with ${label('darkBlue')} as the dragon colour of the ${label('blue')} side and ${label('orange')} of the ${label('yellow')} side, so they're used that way round`,
+        )
+      }
+      for (const color of ['darkBlue', 'orange'] as const) {
+        if (!paintedSwatches.includes(roleSwatch[color]) && moves.some((m) => m.colored.some((n) => n.color === color))) {
+          colourNotes.push(`${label(color)} is used for the ${label(color === 'darkBlue' ? 'blue' : 'yellow')} side's dragon colour`)
+        }
+      }
+      if (dynamic && !usesRule3) {
+        colourNotes.push('no Dynamic Dragon technique was needed - plain Dragon Colouring does it')
+      }
+      const autocompletedSteps = moves.length - outcome.checkedMoves
+      const summary = [
+        `Your colouring checks out (steps 1-${outcome.checkedMoves}); the Dragon continues from there in ${autocompletedSteps} more step${autocompletedSteps === 1 ? '' : 's'}.`,
+        ...colourNotes.map((note) => capitalizeFirst(note) + '.'),
+      ].join(' ')
+      setAutocompleteResult({
+        kind: 'found',
+        source,
+        instance: { ...built, notation: rename(built.notation) },
+        summary,
+        dragon: { checkedMoves: outcome.checkedMoves, rolePaint, dynamic },
+        boardBefore: board,
+        candidatesBefore: candidates,
+      })
+      // Open the step player where the user left off.
+      setDragonStepIndex(outcome.checkedMoves - 1)
+      setDragonSubstepIndex(null)
+      setStatus(`Autocompleted the ${kindName}: ${moves.length} steps.`)
+      return
+    }
+
+    const failure = firstFailure!
+    const title =
+      failure.outcome.stage === 'medusa' ? 'The current Medusa colours are invalid.' : 'The current Dragon colours are invalid.'
+    const lines = failure.outcome.problems.slice(0, 5).map(failure.rename)
+    if (!dynamic && failure.outcome.stage === 'dragon' && !dynamicDragonDisabled) {
+      lines.push('If you used Dynamic Dragon techniques, try Autocomplete Dynamic Dragon instead.')
+    }
+    say('error', title, lines)
+    setStatus(title)
+  }
+
+  /** Autocomplete Dynamic Dragon can run many Extension Rule 3 simulations
+   * (every AIC kind ticked, say) - under the busy indicator, like Find by
+   * elims, so the page shows it's working. */
+  function runAutocompleteDragon(dynamic: boolean) {
+    runBusyTask(
+      'autocomplete',
+      {
+        title: dynamic ? 'Autocompleting the Dynamic Dragon…' : 'Autocompleting the Dragon…',
+        detail: 'Checking your colouring and carrying the Dragon on from it.',
+      },
+      () => onAutocompleteDragon(dynamic),
+    )
+  }
+
+  /** Commits the Autocomplete tab's Medusa conclusion, like the Find tab's
+   * Apply, and clears the result - the grid it was worked out on is gone. */
+  function onApplyAutocompletedMedusa() {
+    if (!autocompleteInstance) {
+      return
+    }
+    const next = applyTechniqueEffect(board, candidates, fullTechniqueEffect(autocompleteInstance))
+    commitGrid({ board: next.board, givens, candidates: next.candidates })
+    setAutocompleteResult(null)
+    setStatus(`Applied ${autocompleteInstance.name}.`)
+  }
+
   function onApplyPanelSelection() {
     if (techniquePanelTab === 'solve-path') {
       onApplySolvePathStep()
     } else if (techniquePanelTab === 'find') {
       onApplyFoundTechnique()
+    } else if (techniquePanelTab === 'autocomplete') {
+      onApplyAutocompletedMedusa()
     } else {
       onApplySelectedTechnique()
     }
@@ -4188,7 +4837,9 @@ export default function App() {
           ? activeSolvePathIndex !== null
           : techniquePanelTab === 'find'
             ? !!findInstance
-            : !!activeTechniqueId
+            : techniquePanelTab === 'autocomplete'
+              ? !!autocompleteInstance
+              : !!activeTechniqueId
       }
       onGenerateSolvePath={onGenerateSolvePath}
       solvePathStale={solvePathStale}
@@ -4201,6 +4852,15 @@ export default function App() {
         onFind: runFindTargetedDragon,
         result: findResult,
         resultIsCurrent: findResultIsCurrent,
+      }}
+      autocomplete={{
+        paintedSwatches,
+        onAutocomplete: onAutocompleteMedusa,
+        onAutocompleteDragon: () => runAutocompleteDragon(false),
+        onAutocompleteDynamicDragon: () => runAutocompleteDragon(true),
+        dynamicDragonDisabled,
+        result: autocompleteResult,
+        resultIsCurrent: autocompleteResultIsCurrent,
       }}
       easySolveEnabled={easySolveEnabled}
       onToggleEasySolve={toggleEasySolveEnabled}
@@ -4269,8 +4929,15 @@ export default function App() {
                       {DIGITS.map((digit) => {
                         const active = candidates[r][c][digit - 1]
                         const isHighlighted = active && highlightedDigit === digit
+                        // An autocompleted Medusa's own candidates keep the
+                        // user's paint instead of the green/red/yellow
+                        // highlight - see AutocompleteResult.chainKeys.
+                        const autocompletePaint = autocompleteDragonPaint?.get(`${r},${c},${digit}`)
+                        const showsMedusaPaint =
+                          (autocompleteChainKeys?.has(`${r},${c},${digit}`) ?? false) || autocompletePaint !== undefined
                         const isTechniqueUsed =
                           active &&
+                          !showsMedusaPaint &&
                           (highlightedTechnique?.usedCandidates.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
@@ -4278,6 +4945,7 @@ export default function App() {
                         const eliminatedSource = dragonHighlight?.eliminatedCandidates ?? highlightedTechnique?.eliminatedCandidates
                         const isTechniqueEliminated =
                           active &&
+                          !showsMedusaPaint &&
                           (eliminatedSource?.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
@@ -4285,6 +4953,7 @@ export default function App() {
                         const solvedSource = dragonHighlight?.solvedCandidates ?? highlightedTechnique?.solvedCandidates
                         const isTechniqueSolved =
                           active &&
+                          !showsMedusaPaint &&
                           (solvedSource?.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
@@ -4292,6 +4961,7 @@ export default function App() {
                         const blueSource = dragonHighlight?.blueCandidates ?? highlightedTechnique?.blueCandidates
                         const isTechniqueBlue =
                           active &&
+                          !autocompleteDragonPaint &&
                           (blueSource?.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
@@ -4299,18 +4969,21 @@ export default function App() {
                         const yellowSource = dragonHighlight?.yellowCandidates ?? highlightedTechnique?.yellowCandidates
                         const isTechniqueYellow =
                           active &&
+                          !autocompleteDragonPaint &&
                           (yellowSource?.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
                             false)
                         const isTechniqueDarkBlue =
                           active &&
+                          !autocompleteDragonPaint &&
                           (dragonHighlight?.darkBlueCandidates.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
                             false)
                         const isTechniqueOrange =
                           active &&
+                          !autocompleteDragonPaint &&
                           (dragonHighlight?.orangeCandidates.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
@@ -4354,7 +5027,12 @@ export default function App() {
                         // annotation - it only shows through when no
                         // technique highlight is already claiming this
                         // pip's background, so the two never fight.
-                        const paint = active && !isTechniqueColored ? candidateColors[r][c][digit - 1] : null
+                        const paint =
+                          active && !isTechniqueColored
+                            ? autocompleteDragonPaint
+                              ? (autocompletePaint ?? null)
+                              : candidateColors[r][c][digit - 1]
+                            : null
                         return (
                           <span
                             key={digit}

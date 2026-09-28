@@ -782,20 +782,246 @@ export class SudokuDragonFinder {
     for (const n of seed) {
       nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
     }
+    return this.extendFromState(nodeMap, [this.buildMedusaMove(seed)], board, candidates, options)
+  }
 
+  /** Every Dragon log's first move: the whole seed Medusa chain coloured. */
+  private buildMedusaMove(seed: DragonNode[]): DragonMove {
     const blueCount = seed.filter((n) => n.color === 'blue').length
     const yellowCount = seed.filter((n) => n.color === 'yellow').length
-    const moves: DragonMove[] = [
-      {
-        id: 'medusa',
-        kind: 'medusa',
-        description: `Consider this 3d Medusa with: ${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue, and ${yellowCount} candidates yellow.`,
-        colored: seed,
-        eliminated: [],
-        solved: [],
-      },
-    ]
+    return {
+      id: 'medusa',
+      kind: 'medusa',
+      description: `Consider this 3d Medusa with: ${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue, and ${yellowCount} candidates yellow.`,
+      colored: seed,
+      eliminated: [],
+      solved: [],
+    }
+  }
 
+  /**
+   * "Autocomplete Dragon (Plain)" / "Autocomplete Dynamic Dragon": carries on
+   * a Dragon Colouring the user started painting by hand, from exactly where
+   * they left it - their paint is the starting point, never replaced by a
+   * Dragon found from scratch. With `options.dynamic`, painted candidates may
+   * also have come from Extension Rule 3 (see below), and the continuation is
+   * a Dynamic Dragon under the same options the solver passes extend().
+   *
+   * `medusaChain` is the whole (stuck - the caller checks) Medusa their
+   * Medusa colours belong to, already checked and completed (see
+   * autocompleteMedusa); `userNodes` is every candidate they painted, in
+   * Dragon's own four colours. The painted dragon colours are then checked
+   * by replaying Dragon's own rules from the Medusa: each must be a plain
+   * extension (Rule 1, Rule 2 or a hidden single - collected with the same
+   * extensionRule1Moves/extensionRule2Moves/extensionHiddenSingleMoves
+   * Optimize's search uses) of its side from the colours already accepted,
+   * or be coloured on its side by a promotion or the Medusa growth after
+   * one. They're accepted one at a time, in whatever order makes each
+   * derivable, so the user's own steps come out as ordinary moves after the
+   * Medusa. A painted Medusa colour outside the chain must be reached the
+   * same way and end up promoted. Anything never reached, or reached on the
+   * other side, is a problem, worded with Dragon's own colour names (the
+   * caller renames them).
+   *
+   * A valid colouring is handed to extend()'s own loop (extendFromState),
+   * unchanged, with `checkedMoves` saying how many leading moves were the
+   * user's own (the Medusa move included). Eliminations aren't looked for
+   * while checking - a user who coloured past the first one still gets it,
+   * straight after their own steps.
+   *
+   * Known gap: acceptance is greedy, and Rule 2 skips a cell that already
+   * holds a coloured candidate, so a colouring only derivable in one
+   * particular order across the two sides could in principle be rejected.
+   */
+  continueColouring(
+    medusaChain: MedusaChain,
+    userNodes: readonly DragonNode[],
+    board: Board,
+    candidates: CandidateGrid,
+    options: DragonExtendOptions = {},
+  ): { kind: 'invalid'; problems: string[] } | { kind: 'checked'; checkedMoves: number; result: DragonResult | null } {
+    const nodeMap = new Map<string, DragonNode>()
+    const seed: DragonNode[] = medusaChain.candidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit, color: c.color }))
+    for (const n of seed) {
+      nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+    }
+    const moves: DragonMove[] = [this.buildMedusaMove(seed)]
+    const describe = (n: DragonNode) => `${n.digit}${cellRef(n.row, n.col)}`
+    const problems: string[] = []
+
+    const pending = new Map<string, DragonNode>()
+    for (const u of userNodes) {
+      const key = nodeKey(u.row, u.col, u.digit)
+      const inMedusa = nodeMap.get(key)
+      if (!inMedusa) {
+        pending.set(key, u)
+      } else if (sideOf(inMedusa.color) !== sideOf(u.color)) {
+        problems.push(
+          `${describe(u)} is painted ${colorLabel(u.color)}, but the Medusa colours it ${colorLabel(inMedusa.color)} (the other side).`,
+        )
+      }
+    }
+    // A pending node the colouring has now reached: fine on its own side
+    // (a dragon colour since promoted, or a Medusa colour grown into),
+    // wrong on the other.
+    const resolvePending = () => {
+      for (const [key, u] of pending) {
+        const reached = nodeMap.get(key)
+        if (!reached) {
+          continue
+        }
+        pending.delete(key)
+        if (sideOf(reached.color) !== sideOf(u.color)) {
+          problems.push(
+            `${describe(u)} is painted ${colorLabel(u.color)}, but Dragon Colouring colours it ${colorLabel(reached.color)} (the other side).`,
+          )
+        }
+      }
+    }
+
+    // extendFromState's own allowed set: 'naked pair' and 'hidden single'
+    // are always on.
+    const rule3Techniques = new Set(options.allowedRule3Techniques ?? DEFAULT_RULE3_TECHNIQUES)
+    rule3Techniques.add('naked pair')
+    rule3Techniques.add('hidden single')
+
+    let counter = 0
+    let strongLinkGraph: StrongLinkGraph | null = null
+    const record = (move: DragonMove) => {
+      for (const n of move.colored) {
+        nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+      }
+      move.id = `checked-${move.kind}-${counter++}`
+      moves.push(move)
+    }
+    // extend()'s applyPromotion: a promotion, then any Medusa growth it opens.
+    const applyPromotion = (): boolean => {
+      const promotion = this.findPromotionMove(nodeMap)
+      if (!promotion) {
+        return false
+      }
+      record(promotion)
+      strongLinkGraph ??= this.medusaFinder.buildStrongLinkGraph(board, candidates)
+      const growth = this.findMedusaGrowthMove(nodeMap, strongLinkGraph, promotion.colored)
+      if (growth) {
+        record(growth)
+      }
+      return true
+    }
+
+    while (pending.size > 0 && problems.length === 0) {
+      if (applyPromotion()) {
+        resolvePending()
+        continue
+      }
+      const matching = (found: DragonMove[]): DragonMove | null =>
+        found.find((move) => {
+          const colored = move.colored[0]
+          const painted = pending.get(nodeKey(colored.row, colored.col, colored.digit))
+          return painted !== undefined && sideOf(painted.color) === sideOf(colored.color)
+        }) ?? null
+      let accepted: DragonMove | null = null
+      for (const primary of ['blue', 'yellow'] as const) {
+        accepted = matching([
+          ...this.extensionRule1Moves(nodeMap, board, candidates, primary, Infinity),
+          ...this.extensionRule2Moves(nodeMap, board, candidates, primary, Infinity),
+          ...this.extensionHiddenSingleMoves(nodeMap, board, candidates, primary, Infinity),
+        ])
+        if (accepted) {
+          break
+        }
+      }
+      // Dynamic: a painted candidate no plain rule reaches may still be forced
+      // by Extension Rule 3 - every candidate its simulation forces for the
+      // side (the every-move enumeration Optimize Dynamic Dragons uses), under
+      // the same allowed techniques, AIC limit and per-step technique cap the
+      // continuation will use. Only tried once no plain step fits, as extend()
+      // itself only falls back on Rule 3 when a side has no plain extension.
+      // First the move extend()'s own loop would take (findExtensionRule3Move,
+      // limit 1), then every candidate the simulation forces (the
+      // enumeration Optimize Dynamic Dragons uses): the enumeration caps its
+      // AIC searches (MAX_RULE3_ENUMERATION_AIC_SEARCHES), so with unlimited
+      // AICs it can stop short of a candidate the one-move simulation - the
+      // one the solver itself uses - does reach.
+      if (!accepted && options.dynamic) {
+        for (const limit of [1, Infinity]) {
+          for (const primary of ['blue', 'yellow'] as const) {
+            accepted = matching(
+              this.extensionRule3Moves(
+                nodeMap,
+                board,
+                candidates,
+                primary,
+                rule3Techniques,
+                options.aicLimitPerStep ?? true,
+                options.maxTechniquesPerStep ?? Infinity,
+                limit,
+              ),
+            )
+            if (accepted) {
+              break
+            }
+          }
+          if (accepted) {
+            break
+          }
+        }
+      }
+      if (!accepted) {
+        break
+      }
+      record(accepted)
+      resolvePending()
+    }
+
+    if (problems.length === 0) {
+      for (const u of pending.values()) {
+        problems.push(
+          isPrimary(u.color)
+            ? `${describe(u)} is painted ${colorLabel(u.color)}, but it isn't part of the Medusa, and Dragon Colouring doesn't reach it from the colours before it.`
+            : options.dynamic
+              ? `${describe(u)} is painted ${colorLabel(u.color)}, but Dynamic Dragon Colouring can't reach it from the colours before it: no Extension Rule 1, Rule 2, hidden single or Extension Rule 3 (with the Dynamic Dragon techniques enabled) for the ${colorLabel(primaryForSide(sideOf(u.color)))} side colours it.`
+              : `${describe(u)} is painted ${colorLabel(u.color)}, but plain Dragon Colouring can't reach it from the colours before it: no Extension Rule 1, Rule 2 or hidden single for the ${colorLabel(primaryForSide(sideOf(u.color)))} side colours it.`,
+        )
+      }
+    }
+    // A candidate painted in a Medusa colour that was only ever reached as a
+    // dragon colour claims more than Dragon proved - unless a promotion now
+    // due makes it one (extend()'s loop would take that promotion next).
+    const unpromoted = () =>
+      userNodes.filter((u) => {
+        const reached = nodeMap.get(nodeKey(u.row, u.col, u.digit))
+        return isPrimary(u.color) && reached !== undefined && !isPrimary(reached.color)
+      })
+    if (problems.length === 0 && unpromoted().length > 0) {
+      while (applyPromotion()) {
+        // Every promotion due, as extend()'s loop would take them.
+      }
+      for (const u of unpromoted()) {
+        problems.push(
+          `${describe(u)} is painted ${colorLabel(u.color)}, but Dragon Colouring only reaches it as ${colorLabel(secondaryForSide(sideOf(u.color)))} - nothing promotes it to ${colorLabel(u.color)}.`,
+        )
+      }
+    }
+    if (problems.length > 0) {
+      return { kind: 'invalid', problems }
+    }
+
+    const checkedMoves = moves.length
+    return { kind: 'checked', checkedMoves, result: this.extendFromState(nodeMap, moves, board, candidates, options) }
+  }
+
+  /** extend()'s whole run, from a colouring already in `nodeMap` whose moves
+   * so far are `moves` (both taken over and added to). extend() starts it
+   * from a bare Medusa chain; continueColouring from a colouring the user
+   * painted by hand, once it has been checked. */
+  private extendFromState(
+    nodeMap: Map<string, DragonNode>,
+    moves: DragonMove[],
+    board: Board,
+    candidates: CandidateGrid,
+    options: DragonExtendOptions,
+  ): DragonResult | null {
     const exhaustive = options.exhaustive ?? false
     // What every rule below reads. The caller's `candidates` is never
     // mutated: in exhaustive mode the first non-mass elimination swaps in a

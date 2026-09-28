@@ -82,8 +82,10 @@
   --grid-candidate: #6b7280;
 }
 
+/* 82rem (was 76rem) leaves the Techniques panel room for all four of its
+   tabs at full width beside the grid - see .technique-panel. */
 .page {
-  max-width: 76rem;
+  max-width: 82rem;
   margin: 0 auto;
   padding: 2rem 1rem 3rem;
 }
@@ -1253,14 +1255,18 @@ html.app-busy .busy-cancel,
   padding: 0.75rem;
   background: #fff;
   width: min(100%, 16rem);
-  flex: 1 1 14rem;
+  /* Same 14rem basis as before, so the row wraps at the same window widths;
+     the larger grow factor gives this panel most of the spare width over
+     .controls (grow 1), so at full page width its four tabs (~24.6rem of
+     Segoe UI Bold) fit without scrolling. */
+  flex: 3 1 14rem;
 }
 
 /* Tabs always stay on one row; Apply always sits at the right edge - beside
    the tabs when the panel is wide enough, otherwise alone on the next line
    (margin-left: auto right-aligns it either way). Wrapping is decided on
-   content widths, so Apply wraps before the tabs ever have to shrink; the
-   tabs only truncate with an ellipsis if the panel is narrower still. */
+   content widths, so Apply drops below before the tabs ever have to shrink;
+   the tab strip only scrolls sideways if the panel is narrower still. */
 .technique-panel-header {
   display: flex;
   flex-wrap: wrap;
@@ -1269,20 +1275,22 @@ html.app-busy .busy-cancel,
   margin-bottom: 0.3rem;
 }
 
+/* Tabs keep their full names; the strip scrolls sideways only when even a
+   line of its own is too narrow (a narrow window). */
 .technique-tabs {
   display: flex;
   flex-wrap: nowrap;
   gap: 0.2rem;
   flex: 1 1 auto;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .technique-tab {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 0 auto;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-size: 0.72rem;
   font-weight: 700;
   padding: 0.35rem 0.5rem 0.3rem;
@@ -3217,5 +3225,39 @@ button.primary {
 @media (prefers-reduced-motion: reduce) {
   .confirm-dialog {
     animation: none;
+  }
+}
+
+/* Autocomplete Colours: a named Medusa colour with its live swatch hex. */
+.autocomplete-colour {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 700;
+}
+
+.autocomplete-colour-dot {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.35);
+}
+
+/* Autocomplete Colours: "3D Medusa" / "Plain Dragon" section titles. */
+.autocomplete-heading {
+  margin: 0.7rem 0 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.autocomplete-heading:first-child {
+  margin-top: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .autocomplete-heading {
+    color: #e2e8f0;
   }
 }

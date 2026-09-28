@@ -13,15 +13,23 @@ import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
 import {
   SudokuDragonFinder,
   DEFAULT_RULE3_TECHNIQUES,
+  type DragonExtendOptions,
   type DragonMove,
+  type DragonNode,
   type Rule3Technique,
 } from './sudoku/SudokuDragonFinder'
+import { autocompleteMedusa } from './sudoku/SudokuMedusaAutocompleter'
 import { foldDragonMoves } from './sudoku/dragonReplay'
 import { formatCandidate, listEffectiveEliminations, type TargetProblem } from './sudoku/SudokuDragonTargetFinder'
 import { FISH_TECHNIQUE_NAMES, SudokuFishFinder, type FishInstance, type FishTechnique } from './sudoku/SudokuFishFinder'
 import { SudokuHiddenPairFinder } from './sudoku/SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './sudoku/SudokuLockedCandidateFinder'
-import { type MassEliminationInstance, SudokuMedusaFinder } from './sudoku/SudokuMedusaFinder'
+import {
+  type ChainColor,
+  type MassEliminationInstance,
+  type MedusaChain,
+  SudokuMedusaFinder,
+} from './sudoku/SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
@@ -166,6 +174,110 @@ export function cellRef(row: number, col: number): string {
  * chains that also used at least one bivalue cell link, i.e. chains that
  * couldn't have been found by single-digit Simple Coloring alone. */
 export type DragonChainFilter = 'any' | 'bivalue-seeded'
+
+/** What Autocomplete Dragon (Plain) makes of the user's painted colouring -
+ * see autocompleteDragon. */
+export type DragonAutocompleteOutcome =
+  | { kind: 'invalid'; stage: 'medusa' | 'dragon'; problems: string[] }
+  /** The Medusa proves something by itself, so it isn't a Dragon's start. */
+  | { kind: 'not-stuck' }
+  /** Valid, but carrying it on reaches no elimination or placement. */
+  | { kind: 'no-result'; checkedMoves: number }
+  | { kind: 'found'; chainKey: string; moves: DragonMove[]; checkedMoves: number }
+
+/** Autocomplete Dragon (Plain) / Autocomplete Dynamic Dragon: carries on the
+ * Dragon Colouring the user started painting. `painted` is every painted candidate in Dragon's
+ * own four colours (blue/yellow = the two Medusa colours, darkBlue/orange =
+ * their dragon colours). The Medusa colours are checked and the chain
+ * completed exactly as Autocomplete Medusa does (autocompleteMedusa, with
+ * Medusa colours outside the chain left for the Dragon check); the chain
+ * must then be stuck - the same test computeStuckDragonExtensions applies -
+ * and the rest is SudokuDragonFinder.continueColouring with `options` - the
+ * same ones the solver passes extend() for that kind of Dragon (see
+ * computeStuckDragonExtensions / computeStuckDynamicDragonExtensions). All
+ * text uses Dragon's own colour names; the caller renames them to the
+ * user's. */
+export function autocompleteDragon(
+  board: Board,
+  candidates: CandidateGrid,
+  painted: readonly DragonNode[],
+  options: DragonExtendOptions,
+): DragonAutocompleteOutcome {
+  const medusaSeeds = painted.flatMap((n) =>
+    n.color === 'blue' || n.color === 'yellow' ? [{ row: n.row, col: n.col, digit: n.digit, color: n.color }] : [],
+  )
+  // Which chain is the Medusa: the most-painted one first, then each other
+  // chain holding a painted Medusa colour. Medusa growth after a promotion
+  // paints its own Medusa colours on another chain, and can paint more of
+  // them than the Medusa itself has. The first chain whose whole colouring
+  // checks out wins; if none does, the most-painted chain's verdict stands.
+  const key = (n: { row: number; col: number; digit: number }) => `${n.row},${n.col},${n.digit}`
+  const tried = new Set<string>()
+  let firstOutcome: DragonAutocompleteOutcome | null = null
+  for (const mainSeed of [undefined, ...medusaSeeds]) {
+    if (mainSeed && tried.has(key(mainSeed))) {
+      continue
+    }
+    const outcome = autocompleteDragonFrom(board, candidates, painted, medusaSeeds, mainSeed, options, tried)
+    if (outcome.kind === 'found' || outcome.kind === 'no-result') {
+      return outcome
+    }
+    firstOutcome ??= outcome
+  }
+  return firstOutcome!
+}
+
+/** One attempt of autocompleteDragon, with the Medusa taken to be the chain
+ * holding `mainSeed` (the most-painted chain when undefined). Adds that
+ * chain's candidates to `tried`. */
+function autocompleteDragonFrom(
+  board: Board,
+  candidates: CandidateGrid,
+  painted: readonly DragonNode[],
+  medusaSeeds: Array<{ row: number; col: number; digit: number; color: 'blue' | 'yellow' }>,
+  mainSeed: { row: number; col: number; digit: number; color: 'blue' | 'yellow' } | undefined,
+  options: DragonExtendOptions,
+  tried: Set<string>,
+): DragonAutocompleteOutcome {
+  const medusa = autocompleteMedusa(medusaFinder, board, candidates, medusaSeeds, { blue: 'light blue', yellow: 'yellow' }, {
+    allowOutside: true,
+    mainSeed,
+  })
+  if (medusa.kind === 'invalid') {
+    return { kind: 'invalid', stage: 'medusa', problems: medusa.problems }
+  }
+  const chain = medusa.chain
+  for (const c of chain.candidates) {
+    tried.add(`${c.row},${c.col},${c.digit}`)
+  }
+  const stuck =
+    medusaFinder.findMassElimination(chain, board, candidates) === null &&
+    medusaFinder.findRule3Eliminations(chain, board, candidates).length === 0 &&
+    medusaFinder.findRule4Eliminations(chain, candidates).length === 0 &&
+    medusaFinder.findRule5Eliminations(chain, candidates).length === 0
+  if (!stuck) {
+    return { kind: 'not-stuck' }
+  }
+
+  const inChain = new Set(chain.candidates.map((c) => `${c.row},${c.col},${c.digit}`))
+  // The dragon colours, the Medusa colours outside the chain, and the dragon
+  // colours painted onto the chain itself (checked there for the right side).
+  const userNodes = painted.filter(
+    (n) => n.color === 'darkBlue' || n.color === 'orange' || !inChain.has(`${n.row},${n.col},${n.digit}`),
+  )
+  const checked = dragonFinder.continueColouring(chain, userNodes, board, candidates, options)
+  if (checked.kind === 'invalid') {
+    return { kind: 'invalid', stage: 'dragon', problems: checked.problems }
+  }
+  if (!checked.result) {
+    return { kind: 'no-result', checkedMoves: checked.checkedMoves }
+  }
+  const chainKey = chain.candidates
+    .map((c) => `${c.row}.${c.col}.${c.digit}.${c.color[0]}`)
+    .sort()
+    .join('-')
+  return { kind: 'found', chainKey, moves: checked.result.moves, checkedMoves: checked.checkedMoves }
+}
 
 /** Dragon Colouring only applies once Medusa's own rules 1-5 find nothing
  * for a chain ("colour the medusa until it gets stuck"); this finds every
@@ -348,6 +460,135 @@ export function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: 
     })),
     techniqueRank,
   }
+}
+
+/** What a 3D Medusa chain proves, as the Techniques panel's row for it: its
+ * mass elimination (rules 1-2, if any) plus every rule 3/4/5 elimination not
+ * already covered by it, or null when the chain proves nothing. Shared by
+ * buildTechniqueInstances and the "Autocomplete Colours" tab (which builds
+ * the chain from the user's own painting instead of findChains), so both
+ * describe a chain identically. `colorNames` only changes the wording - the
+ * tab names the user's own paint colours ("light blue") instead of the
+ * chain's internal blue/yellow sides. */
+export function buildMedusaChainInstance(
+  chain: MedusaChain,
+  board: Board,
+  candidates: CandidateGrid,
+  colorNames: Record<ChainColor, string> = { blue: 'blue', yellow: 'yellow' },
+): { instance: TechniqueInstance; hasMassElimination: boolean } | null {
+  const chainKey = chain.candidates
+    .map((c) => `${c.row}.${c.col}.${c.digit}.${c.color[0]}`)
+    .sort()
+    .join('-')
+  const blueCandidates = chain.candidates
+    .filter((c) => c.color === 'blue')
+    .map((c) => ({ row: c.row, col: c.col, digit: c.digit }))
+  const yellowCandidates = chain.candidates
+    .filter((c) => c.color === 'yellow')
+    .map((c) => ({ row: c.row, col: c.col, digit: c.digit }))
+
+  const rules = new Set<number>()
+  const clauses: string[] = []
+  const usedCandidates: TechniqueCandidateRef[] = []
+  const eliminatedByKey = new Map<string, TechniqueCandidateRef>()
+  const solvedCandidates: TechniqueCandidateRef[] = []
+  const medusaHighlightCells: Array<readonly [number, number]> = []
+  const eliminate = (row: number, col: number, digit: number) => {
+    eliminatedByKey.set(`${row}.${col}.${digit}`, { row, col, digit })
+  }
+
+  const mass = medusaFinder.findMassElimination(chain, board, candidates)
+  // When rule 1 or 2 settles which colour is true, a rule 3-5 finding
+  // whose eliminations placing that colour would make anyway adds nothing
+  // - it's left out of the row (title, text and highlights) entirely.
+  const coveredByMass = mass ? medusaMassCoverage(mass, candidates) : null
+  const coveredByMassDeduction = (row: number, col: number, digit: number) =>
+    coveredByMass?.has(`${row}.${col}.${digit}`) ?? false
+  if (mass) {
+    if (mass.conflict.kind === 'cell') {
+      rules.add(1)
+      clauses.push(
+        `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both ${colorNames[mass.conflict.color]}, so ${colorNames[mass.conflict.color]} is false and ${colorNames[mass.trueColor]} is true.`,
+      )
+      medusaHighlightCells.push([mass.conflict.row, mass.conflict.col])
+    } else if (mass.conflict.kind === 'unit') {
+      rules.add(1)
+      clauses.push(
+        `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both ${colorNames[mass.conflict.color]}, so ${colorNames[mass.conflict.color]} is false and ${colorNames[mass.trueColor]} is true.`,
+      )
+      medusaHighlightCells.push(mass.conflict.a, mass.conflict.b)
+    } else {
+      rules.add(2)
+      clauses.push(
+        `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see ${colorNames[mass.conflict.color]}, so ${colorNames[mass.conflict.color]} is false and ${colorNames[mass.trueColor]} is true.`,
+      )
+      medusaHighlightCells.push([mass.conflict.row, mass.conflict.col])
+    }
+    for (const c of mass.eliminatedCandidates) {
+      eliminate(c.row, c.col, c.digit)
+    }
+    solvedCandidates.push(...mass.solvedCells.map((c) => ({ row: c.row, col: c.col, digit: c.digit })))
+  }
+
+  for (const r3 of medusaFinder.findRule3Eliminations(chain, board, candidates)) {
+    if (coveredByMassDeduction(r3.row, r3.col, r3.digit)) {
+      continue
+    }
+    rules.add(3)
+    clauses.push(
+      `${cellRef(r3.row, r3.col)} cannot be ${r3.digit} (it sees both colours: ${cellRef(...r3.blueSeen)}, ${cellRef(...r3.yellowSeen)}).`,
+    )
+    eliminate(r3.row, r3.col, r3.digit)
+    medusaHighlightCells.push([r3.row, r3.col])
+  }
+
+  for (const r4 of medusaFinder.findRule4Eliminations(chain, candidates)) {
+    if (r4.eliminatedDigits.every((digit) => coveredByMassDeduction(r4.row, r4.col, digit))) {
+      continue
+    }
+    rules.add(4)
+    const sortedDigits = [...r4.eliminatedDigits].sort((a, b) => a - b)
+    const value = sortedDigits.length === 1 ? `${sortedDigits[0]}` : `[${sortedDigits.join(',')}]`
+    clauses.push(`${cellRef(r4.row, r4.col)} is not ${value} (it holds both colours).`)
+    usedCandidates.push(...r4.coloredCandidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit })))
+    for (const digit of r4.eliminatedDigits) {
+      eliminate(r4.row, r4.col, digit)
+    }
+    medusaHighlightCells.push([r4.row, r4.col])
+  }
+
+  for (const r5 of medusaFinder.findRule5Eliminations(chain, candidates)) {
+    if (coveredByMassDeduction(r5.row, r5.col, r5.eliminatedDigit)) {
+      continue
+    }
+    rules.add(5)
+    const opponentColor = colorNames[r5.coloredColor === 'blue' ? 'yellow' : 'blue']
+    clauses.push(
+      `${cellRef(r5.row, r5.col)} is not ${r5.eliminatedDigit} (it sees opposite colour ${opponentColor} at ${cellRef(...r5.opponent)}).`,
+    )
+    usedCandidates.push({ row: r5.row, col: r5.col, digit: r5.coloredDigit })
+    eliminate(r5.row, r5.col, r5.eliminatedDigit)
+    medusaHighlightCells.push([r5.row, r5.col])
+  }
+
+  if (rules.size === 0) {
+    return null
+  }
+  const ruleList = [...rules].sort((a, b) => a - b)
+  const instance: TechniqueInstance = {
+    id: `medusa-${chainKey}`,
+    name: `3D Medusa ${ruleList.length === 1 ? 'Rule' : 'Rules'} ${ruleList.join(',')}`,
+    notation: clauses.join(' '),
+    usedCells: [],
+    usedCandidates,
+    eliminatedCandidates: [...eliminatedByKey.values()],
+    solvedCandidates,
+    blueCandidates,
+    yellowCandidates,
+    medusaHighlightCells,
+    techniqueRank: RANK_MEDUSA,
+  }
+  return { instance, hasMassElimination: mass !== null }
 }
 
 /** Builds the live list of technique instances the current board/candidates
@@ -768,119 +1009,10 @@ export function buildTechniqueInstances(
   const otherMedusaInstances: TechniqueInstance[] = []
 
   for (const chain of medusaFinder.findChains(board, candidates)) {
-    const chainKey = chain.candidates
-      .map((c) => `${c.row}.${c.col}.${c.digit}.${c.color[0]}`)
-      .sort()
-      .join('-')
-    const blueCandidates = chain.candidates
-      .filter((c) => c.color === 'blue')
-      .map((c) => ({ row: c.row, col: c.col, digit: c.digit }))
-    const yellowCandidates = chain.candidates
-      .filter((c) => c.color === 'yellow')
-      .map((c) => ({ row: c.row, col: c.col, digit: c.digit }))
-
-    const rules = new Set<number>()
-    const clauses: string[] = []
-    const usedCandidates: TechniqueCandidateRef[] = []
-    const eliminatedByKey = new Map<string, TechniqueCandidateRef>()
-    const solvedCandidates: TechniqueCandidateRef[] = []
-    const medusaHighlightCells: Array<readonly [number, number]> = []
-    const eliminate = (row: number, col: number, digit: number) => {
-      eliminatedByKey.set(`${row}.${col}.${digit}`, { row, col, digit })
+    const built = buildMedusaChainInstance(chain, board, candidates)
+    if (built) {
+      ;(built.hasMassElimination ? massMedusaInstances : otherMedusaInstances).push(built.instance)
     }
-
-    const mass = medusaFinder.findMassElimination(chain, board, candidates)
-    // When rule 1 or 2 settles which colour is true, a rule 3-5 finding
-    // whose eliminations placing that colour would make anyway adds nothing
-    // - it's left out of the row (title, text and highlights) entirely.
-    const coveredByMass = mass ? medusaMassCoverage(mass, candidates) : null
-    const coveredByMassDeduction = (row: number, col: number, digit: number) =>
-      coveredByMass?.has(`${row}.${col}.${digit}`) ?? false
-    if (mass) {
-      if (mass.conflict.kind === 'cell') {
-        rules.add(1)
-        clauses.push(
-          `In ${cellRef(mass.conflict.row, mass.conflict.col)}, ${mass.conflict.digitA} and ${mass.conflict.digitB} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`,
-        )
-        medusaHighlightCells.push([mass.conflict.row, mass.conflict.col])
-      } else if (mass.conflict.kind === 'unit') {
-        rules.add(1)
-        clauses.push(
-          `${mass.conflict.digit} in ${cellRef(...mass.conflict.a)}, ${cellRef(...mass.conflict.b)} are both ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`,
-        )
-        medusaHighlightCells.push(mass.conflict.a, mass.conflict.b)
-      } else {
-        rules.add(2)
-        clauses.push(
-          `${cellRef(mass.conflict.row, mass.conflict.col)} has no coloured candidates, but ${mass.conflict.digits.join(', ')} all see ${mass.conflict.color}, so ${mass.conflict.color} is false and ${mass.trueColor} is true.`,
-        )
-        medusaHighlightCells.push([mass.conflict.row, mass.conflict.col])
-      }
-      for (const c of mass.eliminatedCandidates) {
-        eliminate(c.row, c.col, c.digit)
-      }
-      solvedCandidates.push(...mass.solvedCells.map((c) => ({ row: c.row, col: c.col, digit: c.digit })))
-    }
-
-    for (const r3 of medusaFinder.findRule3Eliminations(chain, board, candidates)) {
-      if (coveredByMassDeduction(r3.row, r3.col, r3.digit)) {
-        continue
-      }
-      rules.add(3)
-      clauses.push(
-        `${cellRef(r3.row, r3.col)} cannot be ${r3.digit} (it sees both colours: ${cellRef(...r3.blueSeen)}, ${cellRef(...r3.yellowSeen)}).`,
-      )
-      eliminate(r3.row, r3.col, r3.digit)
-      medusaHighlightCells.push([r3.row, r3.col])
-    }
-
-    for (const r4 of medusaFinder.findRule4Eliminations(chain, candidates)) {
-      if (r4.eliminatedDigits.every((digit) => coveredByMassDeduction(r4.row, r4.col, digit))) {
-        continue
-      }
-      rules.add(4)
-      const sortedDigits = [...r4.eliminatedDigits].sort((a, b) => a - b)
-      const value = sortedDigits.length === 1 ? `${sortedDigits[0]}` : `[${sortedDigits.join(',')}]`
-      clauses.push(`${cellRef(r4.row, r4.col)} is not ${value} (it holds both colours).`)
-      usedCandidates.push(...r4.coloredCandidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit })))
-      for (const digit of r4.eliminatedDigits) {
-        eliminate(r4.row, r4.col, digit)
-      }
-      medusaHighlightCells.push([r4.row, r4.col])
-    }
-
-    for (const r5 of medusaFinder.findRule5Eliminations(chain, candidates)) {
-      if (coveredByMassDeduction(r5.row, r5.col, r5.eliminatedDigit)) {
-        continue
-      }
-      rules.add(5)
-      const opponentColor = r5.coloredColor === 'blue' ? 'yellow' : 'blue'
-      clauses.push(
-        `${cellRef(r5.row, r5.col)} is not ${r5.eliminatedDigit} (it sees opposite colour ${opponentColor} at ${cellRef(...r5.opponent)}).`,
-      )
-      usedCandidates.push({ row: r5.row, col: r5.col, digit: r5.coloredDigit })
-      eliminate(r5.row, r5.col, r5.eliminatedDigit)
-      medusaHighlightCells.push([r5.row, r5.col])
-    }
-
-    if (rules.size === 0) {
-      continue
-    }
-    const ruleList = [...rules].sort((a, b) => a - b)
-    const instance: TechniqueInstance = {
-      id: `medusa-${chainKey}`,
-      name: `3D Medusa ${ruleList.length === 1 ? 'Rule' : 'Rules'} ${ruleList.join(',')}`,
-      notation: clauses.join(' '),
-      usedCells: [],
-      usedCandidates,
-      eliminatedCandidates: [...eliminatedByKey.values()],
-      solvedCandidates,
-      blueCandidates,
-      yellowCandidates,
-      medusaHighlightCells,
-      techniqueRank: RANK_MEDUSA,
-    }
-    ;(mass ? massMedusaInstances : otherMedusaInstances).push(instance)
   }
 
   instances.push(...massMedusaInstances, ...otherMedusaInstances)
