@@ -1,4 +1,4 @@
-import type { GridImage } from './SudokuGridOcr'
+import type { EraseRect, GridImage } from './SudokuGridOcr'
 
 /** Browser-side GridImage, backed by a Canvas - the same algorithm in
  * SudokuGridOcr.ts runs against this in the app as runs against the Jimp-
@@ -8,9 +8,11 @@ export class CanvasGridImage implements GridImage {
   height: number
   private gray: Uint8ClampedArray
   private canvas: HTMLCanvasElement
+  private rgba: Uint8ClampedArray
 
-  private constructor(canvas: HTMLCanvasElement, gray: Uint8ClampedArray) {
+  private constructor(canvas: HTMLCanvasElement, gray: Uint8ClampedArray, rgba: Uint8ClampedArray) {
     this.canvas = canvas
+    this.rgba = rgba
     this.width = canvas.width
     this.height = canvas.height
     this.gray = gray
@@ -33,7 +35,7 @@ export class CanvasGridImage implements GridImage {
       gray[i] = Math.round(0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2])
     }
 
-    return new CanvasGridImage(canvas, gray)
+    return new CanvasGridImage(canvas, gray, data)
   }
 
   static async fromBlob(blob: Blob): Promise<CanvasGridImage> {
@@ -52,7 +54,15 @@ export class CanvasGridImage implements GridImage {
     return this.gray[y * this.width + x]
   }
 
-  async toCroppedDataUrl(x: number, y: number, w: number, h: number, scale: number, invert = false): Promise<string> {
+  async toCroppedDataUrl(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    scale: number,
+    invert = false,
+    erase?: readonly EraseRect[],
+  ): Promise<string> {
     const sx = Math.max(0, Math.round(x))
     const sy = Math.max(0, Math.round(y))
     const sw = Math.max(1, Math.round(w))
@@ -69,6 +79,13 @@ export class CanvasGridImage implements GridImage {
     }
     outCtx.imageSmoothingEnabled = true
     outCtx.drawImage(this.canvas, sx, sy, sw, sh, 0, 0, dw, dh)
+    if (erase && erase.length > 0) {
+      outCtx.fillStyle = this.medianColour(sx, sy, sw, sh)
+      for (const r of erase) {
+        // One source pixel wider all round, for the blob's anti-aliased fringe.
+        outCtx.fillRect((r.x - 1 - sx) * scale, (r.y - 1 - sy) * scale, (r.w + 2) * scale, (r.h + 2) * scale)
+      }
+    }
     if (invert) {
       // Done on the pixels rather than with `ctx.filter = 'invert(1)'`,
       // which Safari ignores on canvas drawing.
@@ -82,5 +99,30 @@ export class CanvasGridImage implements GridImage {
       outCtx.putImageData(pixels, 0, 0)
     }
     return out.toDataURL('image/png')
+  }
+
+  /** The crop's background colour: per-channel median, since background
+   * covers most of any crop around a single glyph. */
+  private medianColour(sx: number, sy: number, sw: number, sh: number): string {
+    const channels = [0, 1, 2].map(() => new Array<number>(256).fill(0))
+    let total = 0
+    for (let y = sy; y < Math.min(sy + sh, this.height); y++) {
+      for (let x = sx; x < Math.min(sx + sw, this.width); x++) {
+        const o = (y * this.width + x) * 4
+        channels.forEach((histogram, k) => histogram[this.rgba[o + k]]++)
+        total++
+      }
+    }
+    const [r, g, b] = channels.map((histogram) => {
+      let seen = 0
+      for (let v = 0; v < 256; v++) {
+        seen += histogram[v]
+        if (seen * 2 >= total) {
+          return v
+        }
+      }
+      return 255
+    })
+    return `rgb(${r}, ${g}, ${b})`
   }
 }

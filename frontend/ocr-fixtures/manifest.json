@@ -1,0 +1,85 @@
+[
+  {
+    "file": "01-dark-coach.png",
+    "puzzle": "SCv7_32_f2e4b3qbdr1j0324tuh7a22g492l7md66vk0i0io60208mf4mtkd3ern52jqg3aijp3sp27u9rdmrb4vselqeoprkhmrpunlcdme6safov24aahj5d3sfc9vhm2vut4prbcn1rkk6dldj4f3me305d2gt689ttru7fqsnpbknqn66f9vf9ed9b0gpsrgnah9j43732dum28ql4s8aafdpl68jdhmt82e4kpqiaa9m74c011qod8u3b2c0le7rphfp35sgnr67otua6hk3j0fpfh0jd9ngb9ofq0qk1qktjh69rmkpae2hiigs68shbom3daa86q7jglodtku964bjfvd57gt9vse30sd7jpfdk1lcpo",
+    "note": "Sudoku.Coach dark theme, with lines/arrows/highlights. The screenshot shows a 7 pencil mark in r3c1 that the puzzle string lacks - imageOverrides records what the image shows",
+    "imageOverrides": {
+      "r3c1": "14678"
+    }
+  },
+  {
+    "file": "02-dark-coach.png",
+    "puzzle": "SCv7_32_f2e3qjq1do1j227shf7k3ggob2e6nuk3nogd5bimiqh1p4lkgtbfquo74s595je061hvomvmrdc3vhufaq7fqk7mu6ulqfu67offeshc5iu2guv3euq60dn61qs00ahgoupkda6cmapsvcme7ff5lobi51fvfrbmr8n9fkvpna7fbv6ou8gl6996af3sq90m6crqbhc48i2lp70c4u01numljma8aqm83h2klre2ahdlklc3bmga34q6f8gum85baeah9gid710qkqinah7csg9leduqs8f03i9siguiu8gpvut1k7cbiem8ph5gkh112sij6m14hrcoaqbu8qtm68jni3stvq01pfbpd9n5tsfustales",
+    "note": "Sudoku.Coach dark theme"
+  },
+  {
+    "file": "03-dark-coach.png",
+    "puzzle": "SCv7_32_f2ebaklrdr1j037s2umoi04aiok2iqpqeg691cf823244o10dk0ee0dk8nvrqhu9f461qmormj4u67afibumatn3q2nofjr22psmtdk7vngjo7mdsb2op9bv5qdsn1rpjmdtqs19tt7s6rhok5ihojan9229o8sh8sasitbof53qitkpmj6175sl8ah5jk1cd8mr3tmcsiobpekrv4flus1o3v5vhvo6cmvlurmuvegtv74ava88qjlc0ir2i8higb4gkusr0i8shqgtb2fjg734l4gm10k00jp4l5ak56msr971ln1t0innp8an0op7qrtm8nfmqprolplc3hgqjqgofjaj6m3c7cmcooohjig61dkefieie09qg8ph9id97p0aemd2soc26pi5j6h6q8u1huotdg4dieo9j17s87tumeet7u5t1j6deghr6ri6mu7ncv1bktgqnv9lvqrhbovmh1n4akpd2nhqjliuig3o1cr2n796t22krlqkd9p3gdlav24f9lq4eqlro49l4nb2dplj3npvn9grvlo",
+    "note": "Sudoku.Coach dark theme"
+  },
+  {
+    "file": "04-light-thin-ones.png",
+    "puzzle": "SCv7_32_f2ear3qhd81j2324tvheu34ccl4tdphnnl0ku46oclcghua8q9vb9p7e8nn9cn506o6egi9jmavsmumrsrruqqp9ovkl1lndeesrsrfbuqs9eov1fufn4a0vuvivcmh0pl42kkt9vfac9hlvb931qt3ikum28esp534b9tk4jrarto5kbgnafsrlrrjf6ou98m9gme3edm21locq4hd6l9q36n89l8getrl8ga8gpmgut42al0lpke6ilukjbk6c8ud8ggr3shrq4ls5uu8sug5lki8jq7cihnl83t3qe8hm34agq4cv022c68t4l60jiqf4dt0gj3jhnb0b5hp2d4u444cmsjb169ve1fppt7apf6l4mcu7u01n91lhi",
+    "note": "Light theme; thin \"1\" pencil marks were being dropped"
+  },
+  {
+    "file": "05-light.png",
+    "puzzle": "SCv7_32_f2ebakmb9oi3237sitocom3irhr1sn470drot263m2ehjd9k09km1400tmvmueed5pdeqs91lm71upanoneni3s7qcpdub3f7lebcjfou5s7of4vjr1eardos36b55tg14bn7im6tjfbtr2badsffhrjnvnbn5qnpvf9fh6trhlqjjqsobeic74mivv71d8sipjr01debic16cq8b5sgqvap2crat4r7qk9u4hdbtc8qfum7jm3cr8pjfgk6ovov71mbsu21s7ud8jsv4fubq2nvtvt11u7m16rfqu6stofecpeu7lrtfcash74qd31tku65fo1lk69cij0t2e0jfakcp6fl34kk4i9h99k2cajbkoj0a63irqc81gu8bndft9oo77l9abj4kpd869kqqg45e2oqh5e1s4k34d9b2n47ihcua0ol9j34ak9a1gh4m2qg4bcavqahulepdce5eo2lqpsn0ounec0qr66no0le65nvvdsjtvs6ogb73dhoc57mi671l0o5739l4p98s5jhpoa374ja6241lmh6693094o6h44i5j5fm6g0v9lpm70l464hgmfru0259r1fa",
+    "note": "Light theme; was inaccurate"
+  },
+  {
+    "file": "06-light.png",
+    "puzzle": "SCv7_32_f2ear3add81j2345tvh7a7hspep2opsrrqg2e26c60c445i9r92knriushkgnnen3dvp5nmfcvd6sorp3kfmmenm8fdcdurqfkctmu6sqcov3fqv7aibfurqvd9p1ia2m9at5q5ht70n6aqk99ofafd0pi0jrk28vl6otetkju1d6ulpjj7dep9csv3hkhde1orkfjk6k82532m1la0j08rae5a8j28g88a49j8u78qp98ng63t1840625q17t0up8g9qhqj078kks53o42kq162rlcr78j58lnjtbfpjc4qvetpaqhcr42s49d6ik1akjkkpi0es7m20uijl0ljov2ps4a58d9kola1m19ppfu6feq9f9v02p86d6p0",
+    "note": "Light theme; was already accurate"
+  },
+  {
+    "file": "07-light.png",
+    "puzzle": "SCv7_32_f2eaqjq91814237s9efgqp2fralvtg0n139go3f2o7mq1u3nt5onj099112lb2h2hsp9vulktfrldljlanj7squ7dmfvnpasqo2vufb5amneetnq2mc142g6qpggdcgq49bbb892k9hlc6h4a719qkjal0onma2lieiaoof2lhh9lr4ls99r0qc7odj7v77qmivr9p8j33o0817m862se3if6130g1nns5cs5uqkaa0o9nshhuq48i0l908l8gcmp3bjcjhguagslkm3nvi5uk4u5vrcgmsa",
+    "note": "Light theme; was inaccurate"
+  },
+  {
+    "file": "08-light.png",
+    "puzzle": "SCv7_32_f2ear3abd81j2424tuhba6qavm9tkmv70oso2oe440o5tm2e2o4rsusg4oi91ma6gl5ag7qtumctcmqvbrtkeiu772ibbftntd5lvuv3jq70jvrtq8grrnertmri18060o25oagg5000f40hcacmmka7g4hrcv8r7gp8e52jlvj55co6k2qo9cqovon3hdebslqbsbjt74vtka0i0q0o96e6bdq7p0h9hc9sgg4rrgkscg7bcop33a1gh66lasu29rmd6pp89u5j3b549b14ku84qkfmgte2fn75upf1f5ri8fdv02aqqnd4",
+    "note": "Light theme; was inaccurate"
+  },
+  {
+    "file": "09-light.png",
+    "puzzle": "SCv7_32_f2eaqjqbdp1i235s1fli13bdm0gtnt067l0q91sui2h2psirmj5dqau3fcsk3cdgc4u9t4bvodtenirnvtku2m0fc7mqutntt9lnvn6367gbujpogjjrrn9u0oqie088cp51j281io126069ick0lm175ek58430g00a02j3k0p4o234thkdq3aetlp3j7df9dfst3pm6q4j716jn3vdkc8fqcp2kqsav79sj9l3ko98ie36jko2j8h6oieed41oldt65oco6h2t24h5md5uh9i5e1bi5384vvltcor3jsapih0pmgguf799btr0rojtht0ne2upegsrpvo0fqem3jo",
+    "note": "Light theme; was already accurate"
+  },
+  {
+    "file": "10-highlight-circles.png",
+    "puzzle": "SCv7_32_f2e9qjqbh91j235r9fb3ae4etksdqtje60jihf7g12a2tuirmjqetdfj78bpg64c5h2p3sqatdiipfv3r79rtrei78ffrv1jqporn9jt5b2acmaqamkor2qhdrco8qih4r65pk4fc0gl81scb21s133j8oqcf5bluaiob43mt5ver5q37uegthvj6abe7ba7231fvan93vp2ok26s2m61im16iegl2bpavnrs8akhn4gl0ekq2kmqnm9srcbr4slk8g1odu9g8jl0jr2fvfj51aev3aresi18jjhlo6vrtpdqhavi3f1vu5g9kv0",
+    "note": "Filled highlight circles (touching circles merged into a fake solved digit)"
+  },
+  {
+    "file": "11-arrows.png",
+    "puzzle": "SCv7_32_f2e5aji91q1j037s9f720eaec89att07fk0h44caggs01rd1anvtsia05n2b4csuu7r5dosigptnkhelgp58rq8pstdhlktml9b1jqpkvd0186h14brcgd00f3d9v1ihqo65ioniraghc40afeng781o8dmd1lo4lclfam73qb2mjqnqf5447fu5ni4elcv9o32vfj29dl5jp5o853m2jfhj85ld2kgrjt4h8u1a7srlo9n6epjmrkd1g8amoe2kifhg3pbkogohf7cepfqep5qbpmvvulrsgnlf61cci5628",
+    "note": "Dashed/solid technique arrows across solved digits and pencil marks"
+  },
+  {
+    "file": "12-sudokuwiki-square-highlights.png",
+    "puzzle": "SCv7_32_f2e4ajq1do1i237s1fjlg6grdggdft07fl0q8h9bkgk8e97dk5avsng3l4h69hjoophv66vmbffjtuqf1f3nk23rvtndf3tuuv3jq703g25958j3p882mg31d0108k10m9aeel0gs7e51aod8in2s17754pmuo4okvgh1fnetlr6l5ubt5udrujmfqq32i1425bi6ao46bpmn74o929ofijs6bffbf2a5vo02css59ne8fcu16kfots06gbt4akepeeu7f57qi48bh0ip7q5nl12vk9u8urpbnf5tfnca17orf4qii6l9ikqslsptl95ses6ob9svs014bqed4",
+    "note": "SudokuWiki-style board (row letters, yellow/green square highlights behind pencil marks); the red ring round r1c1 is the user's own annotation marking the misread cell"
+  },
+  {
+    "file": "13-coach-light-box-marks-arrows.png",
+    "puzzle": "SCv7_32_f2e7ajibh91j235r9fb3ae4etncdqtje60jihf7g12a2tuirmj6drhu97gcbkq04m8a8jh5fmhfflsmtjsmuqvcnqrv6hptfnrrdmdfd2f3f30k42qh8d5jh2cj8um8l96893f0859b0irqongs9n46ma4l5pnc8l9kndocierknsrcn8ctpq3m7uf99fotdhm7tpg08m890hgg0sdieao4f0i0igp4kh1jk3ka6k2320cq1p19s9ch0j60l88t1b773c1ulb683udqg9gjv7plncbv6vf13uq66e2rvh0rq97qvu474j7g",
+    "note": "Sudoku.Coach light theme: boxed (outlined, coloured) pencil marks and dashed arrows"
+  },
+  {
+    "file": "14-coach-light-box-marks-arrows.png",
+    "puzzle": "SCv7_32_f2e6qjq1hr1j027shf7ra106cfe6nto7fl0qam4hkkk8fdlrgtevbrobe6ahsmh31ec1icvo5v6defktvdngnhrq11pvuqfbaufvnv8mhp0n7ak595800ck2jm12029i0dcl6cp8ag0746li2hbap55ocgqbl0lvc3hmr2gb30khpgnnllekurap9qbnbqmjsnfdo272fci8t6b4ij192l13aa55k1sm2fm9ppp2t8ek871qouof51jd9g8rmgvbnimug5fj0vllfm2gve81b57m8m95l1l7g7m6cgq3p8dvth62scfvflqbkc",
+    "note": "Sudoku.Coach light theme: boxed pencil marks and dashed arrows across solved digits"
+  },
+  {
+    "file": "15-circles-solid-arrows.png",
+    "puzzle": "SCv7_32_f2e7qjib1o12235t1dlki7ig23eek39so4i469h4oq2rv1e6nd5tn6bhc5h835nmumuvcpd69cdovrappmn6pj6k3rqnoq2jndesrjgkeghmpeqf1rg380t10s3ra81u4e0iv8jm5350bpjoh11a025j67rmnfdc0es36cb3iogvr52uej44a9bu5j55s89b6st6ocps5u4343uoqv9mifssosr0tdpagcm2pgc6cgohu8nb9016ebnoknf17iissa7a9s6aucdec3i1kcbq3l3ftqqpgh2e213kls6pkr7fgohshr8ma6emierqtob9e5vosubv03pdenpv",
+    "note": "Circle highlights and solid/dashed red arrows; the user reported this one as already read correctly"
+  },
+  {
+    "file": "16-coach-light-cell-shading.png",
+    "puzzle": "SCv7_32_f2e6qjib1o13225t9fbjd8agk1qqmdvg0i9kocr9c9j32vgm3bnis7b7hh34m0ls7psbpeorkrd1vqldn1mtte51br5rhbq37mftplk17k3ck2g10gg250pi8h4c241889jd534kb1hb0i8rqa221089a26mo0i1k80imj69dneeal56bkshstutr3brsesnep494hq59si1s19t5gcucbiqaoasn9n456ngoorsqkg1vi1623fmk3c7mg8bu4f61f8pnkp687lnumvvqudp2pil2olmilb69hfna3nnf01e3dqat0",
+    "note": "Sudoku.Coach light theme: shaded cells and boxed pencil marks"
+  }
+]

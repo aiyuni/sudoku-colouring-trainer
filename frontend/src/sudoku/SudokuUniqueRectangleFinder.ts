@@ -15,15 +15,33 @@ export type UniqueRectangleTypeName =
   | 'Type 7c'
   | 'Type 7d'
 
+/** One reasoning path behind a UR instance: which type found it, the bare
+ * "where" clause stating its basis ("6r1c4 is strongly linked to 6r1c6"),
+ * and exactly what *this* path proves. A merged instance keeps one per
+ * contributing path, so the panel can pair each clause with its own
+ * conclusion (explainUniqueRectangle) instead of listing every clause and
+ * then every elimination as two unconnected lists. */
+export interface UniqueRectangleReason {
+  type: UniqueRectangleTypeName
+  clause: string
+  /** Types 7a and 7d only: the strong link(s) the clause states, as
+   * candidate labels ("6r1c4" -> ["6r1c6"]), so paths sharing a source can
+   * be told as one clause ("6r1c4 is strongly linked to 6r1c6 and 6r9c4"). */
+  link?: { from: string; to: string[] }
+  eliminatedCandidates: CandidateElimination[]
+  solvedCandidates: CandidateElimination[]
+}
+
 /** One found instance of any Unique Rectangle type - a single shape (see
  * SudokuUniqueRectangleFinder's own doc comment for what "deadly pattern"
  * means and how each type escapes it differently), so every type shares
  * this one result shape rather than having its own interface. `reasonText`
- * is a ready-made, terse noun-phrase fragment ("a Unique Rectangle Type 4
- * ..., where 6 is locked to r3c7, r3c9 in their row") that both the
- * Techniques panel and Dynamic Dragon's own clause-building reuse verbatim,
- * rather than each re-deriving "why" from the raw geometry - the six types'
- * reasoning differs too much for that to stay simple. */
+ * is a ready-made, terse noun-phrase fragment ("UR Type 4 of {2,6} at ...,
+ * where 6 is locked to r3c7, r3c9") that Dynamic Dragon's own
+ * clause-building reuses verbatim, rather than re-deriving "why" from the
+ * raw geometry - the types' reasoning differs too much for that to stay
+ * simple. The Techniques panel uses explainUniqueRectangle instead, which
+ * also knows what the resulting grid looks like. */
 export interface UniqueRectangleInstance {
   /** Normally one of UniqueRectangleTypeName's literal names. A bivalue
    * cell's digit can carry more than one strong link at once (e.g. one via
@@ -31,11 +49,14 @@ export interface UniqueRectangleInstance {
    * reasoning path within the same type - can independently prove a valid,
    * simultaneous elimination for the exact same rectangle and digit pair.
    * `find()` merges every such instance into one (see `mergeSameRectangle`),
-   * and a merged instance's `type` is those types joined with " + ", e.g.
-   * "Type 7b + Type 7c" - `priorityOf` and the id/label building in App.tsx
-   * both only need the first joined name, so this stays a plain string
-   * rather than forcing every caller to handle an array. */
+   * and a merged instance's `type` is "Types 7a & 7d" (see typeLabelOf) -
+   * `priorityOf` and the id/label building in techniqueEngine.ts both only
+   * need the first name, so this stays a plain string rather than forcing
+   * every caller to handle an array. `reasons` has the per-path detail. */
   type: string
+  /** Every reasoning path behind this instance, simplest type first - one
+   * for an unmerged instance. */
+  reasons: readonly UniqueRectangleReason[]
   /** All four UR cells, always in the same canonical order: (r1,c1),
    * (r1,c2), (r2,c1), (r2,c2) - the order the geometry search enumerates
    * them in, unrelated to which are bivalue/pure. */
@@ -55,7 +76,8 @@ export interface UniqueRectangleInstance {
   subsetCells?: readonly Cell[]
   /** Plain-English fragment naming the type and stating the specific basis
    * for it (see the interface doc comment above) - no "which eliminates
-   * ..."/"is not ..." suffix, callers append their own conclusion. */
+   * ..."/"is not ..." suffix, callers append their own conclusion. Built
+   * from `reasons` by reasonTextOf, never by hand. */
   reasonText: string
   eliminatedCandidates: CandidateElimination[]
   /** Type 1 only (exactly one extra candidate): that candidate is the
@@ -237,6 +259,218 @@ function dedupeByKey<T>(items: readonly T[], key: (item: T) => string): T[] {
   return out
 }
 
+/** "a", "a and b", "a, b and c". */
+function joinList(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** "Type 7a", or "Types 7a & 7d" when more than one type contributed
+ * (simplest first, as `reasons` always is). */
+function typeLabelOf(reasons: readonly UniqueRectangleReason[]): string {
+  const names = Array.from(new Set(reasons.map((r) => r.type)))
+  return names.length === 1 ? names[0] : `Types ${names.map((t) => t.replace(/^Type /, '')).join(' & ')}`
+}
+
+interface ReasonGroup {
+  type: UniqueRectangleTypeName
+  clause: string
+  reasons: UniqueRectangleReason[]
+}
+
+/** Folds paths that read naturally as one clause: Type 7d paths (the same
+ * Hidden Rectangle deduction seen from each bivalue corner - "6r1c4 and
+ * 6r9c6 are each strongly linked to both of their neighbouring corners"),
+ * and strong-link paths of one type from the same source candidate ("6r1c4
+ * is strongly linked to 6r1c6 and 6r9c4"). Anything else stays its own
+ * clause. Before this, a rectangle with three Type 7a and two Type 7d paths
+ * read as five near-identical "and where ..." clauses. */
+function groupReasons(reasons: readonly UniqueRectangleReason[]): ReasonGroup[] {
+  const groups = new Map<string, UniqueRectangleReason[]>()
+  reasons.forEach((reason, i) => {
+    const key = reason.type === 'Type 7d' ? reason.type : reason.link ? `${reason.type}|${reason.link.from}` : `#${i}`
+    const group = groups.get(key)
+    if (group) {
+      group.push(reason)
+    } else {
+      groups.set(key, [reason])
+    }
+  })
+  return Array.from(groups.values(), (group) => ({ type: group[0].type, clause: groupClause(group), reasons: group }))
+}
+
+function groupClause(group: readonly UniqueRectangleReason[]): string {
+  if (group.length === 1) {
+    return group[0].clause
+  }
+  // Labels are "<digit>r<row>c<col>" with single-digit parts, so a string
+  // sort is reading order (per digit).
+  const froms = Array.from(new Set(group.map((r) => r.link!.from))).sort()
+  if (froms.length === 1) {
+    return `${froms[0]} is strongly linked to ${joinList(Array.from(new Set(group.flatMap((r) => r.link!.to))))}`
+  }
+  // Only Type 7d groups span several sources (see groupReasons).
+  return `${joinList(froms)} are each strongly linked to both of their neighbouring corners`
+}
+
+/** " (7a)" after each clause when more than one type is being told, so the
+ * reader can tell which type each clause is. */
+function typeTag(group: ReasonGroup, multiType: boolean): string {
+  return multiType ? ` (${group.type.replace(/^Type /, '')})` : ''
+}
+
+/** The instance's `reasonText`: "UR <types> of {a,b} at <cells>, where
+ * <clause>[; <clause>...]" - conclusion-free, since Dynamic Dragon appends
+ * its own "which eliminates ...". */
+function reasonTextOf(
+  urDigits: readonly [number, number],
+  cells: readonly Cell[],
+  reasons: readonly UniqueRectangleReason[],
+): string {
+  const groups = groupReasons(reasons)
+  const multiType = new Set(reasons.map((r) => r.type)).size > 1
+  const clauses = groups.map((group) => `${group.clause}${typeTag(group, multiType)}`)
+  return `UR ${typeLabelOf(reasons)} of {${urDigits[0]},${urDigits[1]}} at ${cellsLabel(cells)}, where ${clauses.join('; ')}`
+}
+
+/** Builds a single-path instance: its one reason, and the reasonText from it. */
+function makeInstance(
+  fields: Omit<UniqueRectangleInstance, 'type' | 'reasons' | 'reasonText'> & {
+    type: UniqueRectangleTypeName
+    clause: string
+    link?: UniqueRectangleReason['link']
+  },
+): UniqueRectangleInstance {
+  const { clause, link, ...instance } = fields
+  const reasons: UniqueRectangleReason[] = [
+    {
+      type: instance.type,
+      clause,
+      ...(link && { link }),
+      eliminatedCandidates: instance.eliminatedCandidates,
+      solvedCandidates: instance.solvedCandidates,
+    },
+  ]
+  return { ...instance, reasons, reasonText: reasonTextOf(instance.urDigits, instance.cells, reasons) }
+}
+
+export interface UniqueRectangleExplanation {
+  /** The types the text actually cites: a path whose whole conclusion
+   * already follows from another path's placement is left out, and so is
+   * its type if nothing else of that type is told. */
+  typeLabel: string
+  /** One sentence, each clause followed by its own conclusion. */
+  text: string
+  /** Type 1's solve, plus every cell the eliminations leave with a single
+   * candidate - what the text states as placements. Wording only: the
+   * instance's own eliminatedCandidates/solvedCandidates are what gets
+   * applied, unchanged (the cell is left holding just that one candidate). */
+  placements: CandidateElimination[]
+}
+
+/** The Techniques panel's wording for a UR instance. Unlike `reasonText`
+ * this knows the grid, so it can say what the eliminations actually leave:
+ *  - a cell cut to one candidate is stated as a placement ("r1c4 is 6"), not
+ *    as the elimination that happens to get it there;
+ *  - an elimination of that digit from a peer of the placement is left
+ *    unsaid (it follows from the placement; it's still in
+ *    eliminatedCandidates and still applied), and so is a path left with
+ *    nothing else to say;
+ * Text only: nothing here changes what the instance eliminates or solves.
+ *  - each remaining clause is followed by its own conclusion, instead of
+ *    every clause and then every elimination as two unconnected lists.
+ * A merged Types 7a & 7d rectangle used to read as five "and where"
+ * clauses plus five eliminations; it now reads as one placement clause and
+ * one elimination clause. */
+export function explainUniqueRectangle(ur: UniqueRectangleInstance, candidates: CandidateGrid): UniqueRectangleExplanation {
+  const remainingAfter = (row: number, col: number, eliminated: readonly CandidateElimination[]) =>
+    markedCandidateDigits(candidates[row][col]).filter(
+      (d) => !eliminated.some((e) => e.row === row && e.col === col && e.digit === d),
+    )
+  const placements = dedupeByKey(
+    [
+      ...ur.solvedCandidates,
+      ...ur.eliminatedCandidates.flatMap(({ row, col }) => {
+        const left = remainingAfter(row, col, ur.eliminatedCandidates)
+        return left.length === 1 ? [{ row, col, digit: left[0] }] : []
+      }),
+    ],
+    eliminationKey,
+  )
+  const placementAt = (row: number, col: number) => placements.find((p) => p.row === row && p.col === col)
+  const followsFromPlacement = (e: CandidateElimination) =>
+    placements.some((p) => p.digit === e.digit && !(p.row === e.row && p.col === e.col) && sameUnit([p.row, p.col], [e.row, e.col]))
+
+  type Item = { placed: boolean } & CandidateElimination
+  const itemKey = (item: Item) => `${item.placed}|${eliminationKey(item)}`
+  // Per path first, so a path with nothing left to say is dropped before
+  // grouping - otherwise a grouped clause would still cite its link.
+  const stated = new Set<string>()
+  const itemsByReason = new Map<UniqueRectangleReason, Item[]>()
+  for (const reason of ur.reasons) {
+    const items: Item[] = reason.solvedCandidates.map((s) => ({ placed: true, ...s }))
+    for (const e of reason.eliminatedCandidates) {
+      const placement = placementAt(e.row, e.col)
+      if (placement) {
+        // Only claim the placement when this path's own eliminations are
+        // what leave the cell one candidate; otherwise say what it proves.
+        items.push(
+          remainingAfter(e.row, e.col, reason.eliminatedCandidates).length === 1
+            ? { placed: true, ...placement }
+            : { placed: false, ...e },
+        )
+      } else if (!followsFromPlacement(e)) {
+        items.push({ placed: false, ...e })
+      }
+    }
+    const fresh = dedupeByKey(items, itemKey).filter((item) => !stated.has(itemKey(item)))
+    if (fresh.length > 0) {
+      fresh.forEach((item) => stated.add(itemKey(item)))
+      itemsByReason.set(reason, fresh)
+    }
+  }
+  const told = groupReasons(Array.from(itemsByReason.keys())).map((group) => ({
+    group,
+    items: group.reasons.flatMap((r) => itemsByReason.get(r)!),
+  }))
+
+  // Cells sharing the same digit(s) are told together, in reading order:
+  // "r1c4 and r9c6 are 6", "r6c8 cannot be 1, 3 or 7".
+  const grouped = (items: readonly CandidateElimination[], verb: (plural: boolean) => string) => {
+    const digitsByCell = new Map<string, { row: number; col: number; digits: number[] }>()
+    for (const { row, col, digit } of [...items].sort((a, b) => a.row - b.row || a.col - b.col || a.digit - b.digit)) {
+      const entry = digitsByCell.get(`${row}.${col}`) ?? { row, col, digits: [] }
+      entry.digits.push(digit)
+      digitsByCell.set(`${row}.${col}`, entry)
+    }
+    const cellsByDigits = new Map<string, string[]>()
+    for (const { row, col, digits } of digitsByCell.values()) {
+      const key = joinList(digits.map(String)).replace(/ and /, ' or ')
+      cellsByDigits.set(key, [...(cellsByDigits.get(key) ?? []), cellRef(row, col)])
+    }
+    return Array.from(cellsByDigits, ([digits, cells]) => `${joinList(cells)} ${verb(cells.length > 1)} ${digits}`)
+  }
+  const conclusion = (items: readonly Item[]) =>
+    [
+      ...grouped(items.filter((i) => i.placed), (plural) => (plural ? 'are' : 'is')),
+      ...grouped(items.filter((i) => !i.placed), () => 'cannot be'),
+    ].join(', ')
+  // A placement no single clause makes on its own (two clauses each cut the
+  // same cell by one candidate) is still where the eliminations leave that
+  // cell, so say so.
+  const unstated = placements.filter((p) => !stated.has(`true|${eliminationKey(p)}`))
+  const leaving = unstated.length > 0 ? `, leaving ${grouped(unstated, () => 'as').join(', ')}` : ''
+
+  const toldReasons = told.flatMap(({ group }) => group.reasons)
+  const typeLabel = typeLabelOf(toldReasons)
+  const multiType = new Set(toldReasons.map((r) => r.type)).size > 1
+  const header = `UR ${typeLabel} of {${ur.urDigits[0]},${ur.urDigits[1]}} at ${cellsLabel(ur.cells)}`
+  const text =
+    told.length === 1
+      ? `${header}, where ${told[0].group.clause}, thus ${conclusion(told[0].items)}${leaving}`
+      : `${header}: ${told.map(({ group, items }) => `${group.clause}, so ${conclusion(items)}${typeTag(group, multiType)}`).join('; ')}${leaving}`
+  return { typeLabel, text, placements }
+}
+
 export class SudokuUniqueRectangleFinder {
   /** `mergeTypes: false` skips `mergeSameRectangle`, so every instance keeps
    * its own single type and only its own eliminations - for the How It Works
@@ -387,33 +621,24 @@ export class SudokuUniqueRectangleFinder {
         continue
       }
       // Simplest-type-first, so the combined type label and reasonText read
-      // in the same order the rest of the panel does.
+      // in the same order the rest of the panel does. Cells/digits are
+      // identical within a group by construction; each path's own clause
+      // and conclusion is kept in `reasons`. (This used to recover each
+      // clause by stripping reasonText up to ", where " - Type 7d's text
+      // didn't have one, so its whole sentence got pasted in twice.)
       const sorted = [...group].sort((a, b) => priorityOf(a.type) - priorityOf(b.type))
       const [first] = sorted
-      const distinctTypeNames = Array.from(new Set(sorted.map((i) => i.type)))
-      // "Type 7a" alone when the whole group is one type (several
-      // reasoning paths within it - e.g. several Type 7a directions on the
-      // same rectangle); "Types 7a & 7d" when more than one type
-      // contributed - strips each name's "Type " prefix so it doesn't
-      // repeat.
-      const combinedType =
-        distinctTypeNames.length === 1
-          ? distinctTypeNames[0]
-          : `Types ${distinctTypeNames.map((t) => t.replace(/^Type /, '')).join(' & ')}`
-      // Every type's reasonText follows "a Unique Rectangle Type X of
-      // {a,b} at CELLS, where <clause>" (see each findType*'s own comment) -
-      // cells/digits are identical within a group by construction, so only
-      // the "where" clause differs and is worth keeping per instance.
-      const clauses = sorted.map((i) => i.reasonText.replace(/^.*?, where /, ''))
+      const reasons = sorted.flatMap((i) => i.reasons)
       merged.push({
-        type: combinedType,
+        type: typeLabelOf(reasons),
+        reasons,
         cells: first.cells,
         urDigits: first.urDigits,
         reasonCells: dedupeByKey(sorted.flatMap((i) => i.reasonCells), cellKey),
         ...(sorted.some((i) => i.subsetCells) && {
           subsetCells: dedupeByKey(sorted.flatMap((i) => i.subsetCells ?? []), cellKey),
         }),
-        reasonText: `UR ${combinedType} of {${first.urDigits[0]},${first.urDigits[1]}} at ${cellsLabel(first.cells)}, where ${clauses.join('; and where ')}`,
+        reasonText: reasonTextOf(first.urDigits, first.cells, reasons),
         eliminatedCandidates: dedupeByKey(sorted.flatMap((i) => i.eliminatedCandidates), eliminationKey),
         solvedCandidates: dedupeByKey(sorted.flatMap((i) => i.solvedCandidates), eliminationKey),
       })
@@ -461,30 +686,34 @@ export class SudokuUniqueRectangleFinder {
       return
     }
 
-    const reasonText = `UR Type 1 of {${a},${b}} at ${cellsLabel(cells)}, where ${cellRef(...extraCell)} alone holds more than just the pair`
+    const clause = `${cellRef(...extraCell)} alone holds more than just the pair`
     if (extras.length === 1) {
-      out.push({
-        type: 'Type 1',
-        cells,
-        urDigits: pair,
-        reasonCells: [extraCell],
-        reasonText,
-        eliminatedCandidates: [],
-        solvedCandidates: [{ row: extraCell[0], col: extraCell[1], digit: extras[0] }],
-      })
+      out.push(
+        makeInstance({
+          type: 'Type 1',
+          cells,
+          urDigits: pair,
+          reasonCells: [extraCell],
+          clause,
+          eliminatedCandidates: [],
+          solvedCandidates: [{ row: extraCell[0], col: extraCell[1], digit: extras[0] }],
+        }),
+      )
     } else {
-      out.push({
-        type: 'Type 1',
-        cells,
-        urDigits: pair,
-        reasonCells: [extraCell],
-        reasonText,
-        eliminatedCandidates: [
-          { row: extraCell[0], col: extraCell[1], digit: a },
-          { row: extraCell[0], col: extraCell[1], digit: b },
-        ],
-        solvedCandidates: [],
-      })
+      out.push(
+        makeInstance({
+          type: 'Type 1',
+          cells,
+          urDigits: pair,
+          reasonCells: [extraCell],
+          clause,
+          eliminatedCandidates: [
+            { row: extraCell[0], col: extraCell[1], digit: a },
+            { row: extraCell[0], col: extraCell[1], digit: b },
+          ],
+          solvedCandidates: [],
+        }),
+      )
     }
   }
 
@@ -524,15 +753,18 @@ export class SudokuUniqueRectangleFinder {
       return
     }
     const type: UniqueRectangleTypeName = isType2 ? 'Type 2' : 'Type 5'
-    out.push({
-      type,
-      cells,
-      urDigits: pair,
-      reasonCells: extraCells,
-      reasonText: `UR ${type} of {${a},${b}} at ${cellsLabel(cells)}, where ${z} is the only extra candidate in ${cellsLabel(extraCells)}, so one of them is ${z}`,
-      eliminatedCandidates: eliminations,
-      solvedCandidates: [],
-    })
+    out.push(
+      makeInstance({
+        type,
+        cells,
+        urDigits: pair,
+        reasonCells: extraCells,
+        // No "so" of its own: the panel appends ", so <conclusion>".
+        clause: `one of ${cellsLabel(extraCells)} must be ${z}, their only extra candidate`,
+        eliminatedCandidates: eliminations,
+        solvedCandidates: [],
+      }),
+    )
   }
 
   /** Type 3: exactly two corners have extra candidates, and they share a row
@@ -628,16 +860,18 @@ export class SudokuUniqueRectangleFinder {
             continue
           }
           const digitsLabel = (mask: number) => [1, 2, 3, 4, 5, 6, 7, 8, 9].filter((d) => mask & (1 << d)).join(',')
-          out.push({
-            type: 'Type 3',
-            cells,
-            urDigits: pair,
-            reasonCells: [x, y],
-            subsetCells,
-            reasonText: `UR Type 3 of {${a},${b}} at ${cellsLabel(cells)}, where the extras {${digitsLabel(extraMask)}} of ${cellsLabel([x, y])} form a naked subset {${digitsLabel(digitMask)}} with ${cellsLabel(subsetCells)} in ${houses.map(houseLabel).join(' and ')}`,
-            eliminatedCandidates: eliminations,
-            solvedCandidates: [],
-          })
+          out.push(
+            makeInstance({
+              type: 'Type 3',
+              cells,
+              urDigits: pair,
+              reasonCells: [x, y],
+              subsetCells,
+              clause: `the extras {${digitsLabel(extraMask)}} of ${cellsLabel([x, y])} form a naked subset {${digitsLabel(digitMask)}} with ${cellsLabel(subsetCells)} in ${houses.map(houseLabel).join(' and ')}`,
+              eliminatedCandidates: eliminations,
+              solvedCandidates: [],
+            }),
+          )
           break found
         }
       }
@@ -680,15 +914,17 @@ export class SudokuUniqueRectangleFinder {
       if (eliminations.length === 0) {
         continue
       }
-      out.push({
-        type: 'Type 4',
-        cells,
-        urDigits: pair,
-        reasonCells: [x, y],
-        reasonText: `UR Type 4 of {${a},${b}} at ${cellsLabel(cells)}, where ${digit} is locked to ${cellsLabel([x, y])}`,
-        eliminatedCandidates: eliminations,
-        solvedCandidates: [],
-      })
+      out.push(
+        makeInstance({
+          type: 'Type 4',
+          cells,
+          urDigits: pair,
+          reasonCells: [x, y],
+          clause: `${digit} is locked to ${cellsLabel([x, y])}`,
+          eliminatedCandidates: eliminations,
+          solvedCandidates: [],
+        }),
+      )
     }
   }
 
@@ -745,15 +981,19 @@ export class SudokuUniqueRectangleFinder {
           if (!candidates[otherN[0]][otherN[1]][digit - 1]) {
             continue
           }
-          out.push({
-            type: 'Type 7a',
-            cells,
-            urDigits: pair,
-            reasonCells: [A, N],
-            reasonText: `UR Type 7a of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where ${digit}${cellRef(...A)} is strongly linked to ${digit}${cellRef(...N)}`,
-            eliminatedCandidates: [{ row: otherN[0], col: otherN[1], digit }],
-            solvedCandidates: [],
-          })
+          const link = { from: `${digit}${cellRef(...A)}`, to: [`${digit}${cellRef(...N)}`] }
+          out.push(
+            makeInstance({
+              type: 'Type 7a',
+              cells,
+              urDigits: pair,
+              reasonCells: [A, N],
+              clause: `${link.from} is strongly linked to ${link.to[0]}`,
+              link,
+              eliminatedCandidates: [{ row: otherN[0], col: otherN[1], digit }],
+              solvedCandidates: [],
+            }),
+          )
         }
       }
     }
@@ -806,15 +1046,17 @@ export class SudokuUniqueRectangleFinder {
             if (!candidates[D[0]][D[1]][X - 1]) {
               continue
             }
-            out.push({
-              type: 'Type 7b',
-              cells,
-              urDigits: pair,
-              reasonCells: [A, B, cells[cIndex]],
-              reasonText: `UR Type 7b of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where ${X}${cellRef(...A)} strong links ${X}${cellRef(...B)} and ${Y}${cellRef(...B)} strong links ${Y}${cellRef(...cells[cIndex])}`,
-              eliminatedCandidates: [{ row: D[0], col: D[1], digit: X }],
-              solvedCandidates: [],
-            })
+            out.push(
+              makeInstance({
+                type: 'Type 7b',
+                cells,
+                urDigits: pair,
+                reasonCells: [A, B, cells[cIndex]],
+                clause: `${X}${cellRef(...A)} strong links ${X}${cellRef(...B)} and ${Y}${cellRef(...B)} strong links ${Y}${cellRef(...cells[cIndex])}`,
+                eliminatedCandidates: [{ row: D[0], col: D[1], digit: X }],
+                solvedCandidates: [],
+              }),
+            )
           }
         }
       }
@@ -885,15 +1127,17 @@ export class SudokuUniqueRectangleFinder {
         if (!candidates[target[0]][target[1]][ownDigit - 1]) {
           continue
         }
-        out.push({
-          type: 'Type 7c',
-          cells,
-          urDigits: pair,
-          reasonCells: [A, cells[aOwnPartnerIndex]],
-          reasonText: `UR Type 7c of {${pair[0]},${pair[1]}} at ${cellsLabel(cells)}, where ${cellRef(...A)}'s ${ownDigit} is strongly linked to ${cellRef(...cells[aOwnPartnerIndex])}`,
-          eliminatedCandidates: [{ row: target[0], col: target[1], digit: ownDigit }],
-          solvedCandidates: [],
-        })
+        out.push(
+          makeInstance({
+            type: 'Type 7c',
+            cells,
+            urDigits: pair,
+            reasonCells: [A, cells[aOwnPartnerIndex]],
+            clause: `${cellRef(...A)}'s ${ownDigit} is strongly linked to ${cellRef(...cells[aOwnPartnerIndex])}`,
+            eliminatedCandidates: [{ row: target[0], col: target[1], digit: ownDigit }],
+            solvedCandidates: [],
+          }),
+        )
       }
     }
   }
@@ -940,15 +1184,26 @@ export class SudokuUniqueRectangleFinder {
         if (!candidates[Z[0]][Z[1]][eliminated - 1]) {
           continue
         }
-        out.push({
-          type: 'Type 7d aka Hidden Rectangle',
-          cells,
-          urDigits: pair,
-          reasonCells: [cells[aIndex], Z],
-          reasonText: `UR Type 7d with candidates {${pair[0]},${pair[1]}}.  ${digit}${cellRef(...Z)} has 3 strong links, and its opposite UR cell is bivalue ${cellRef(...cells[aIndex])}`,
-          eliminatedCandidates: [{ row: Z[0], col: Z[1], digit: eliminated }],
-          solvedCandidates: [],
-        })
+        // Named by the two links the check actually needs (one to each
+        // neighbouring corner, through any house they share) - this used
+        // to say "has 3 strong links", which was often false (a corner
+        // linked via its box and column but not its row still qualifies).
+        // "Hidden Rectangle" is a display name only (techniqueEngine.ts);
+        // keeping it out of `type` keeps it out of merged labels, where
+        // "Types 7a & 7d aka Hidden Rectangle" read as if both were.
+        const link = { from: `${digit}${cellRef(...Z)}`, to: zNeighbourIndices.map((i) => `${digit}${cellRef(...cells[i])}`) }
+        out.push(
+          makeInstance({
+            type: 'Type 7d',
+            cells,
+            urDigits: pair,
+            reasonCells: [cells[aIndex], Z],
+            clause: `${link.from} is strongly linked to both ${link.to[0]} and ${link.to[1]}`,
+            link,
+            eliminatedCandidates: [{ row: Z[0], col: Z[1], digit: eliminated }],
+            solvedCandidates: [],
+          }),
+        )
       }
     }
   }

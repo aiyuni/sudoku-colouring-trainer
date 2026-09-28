@@ -27,6 +27,18 @@ import type { TutorialLesson } from './tutorialTypes'
 
 const SAMPLE_BOARD = SAMPLE_PUZZLE.map((row) => row.join('')).join('')
 
+/** One mid-solve position (from a Sudoku.Coach state) taught twice: Simple
+ * Colouring of 3 gets only one elimination out of it, then 3D Medusa grows
+ * that same colouring into a chain whose yellow side clashes. */
+const PRELUDE_TO_MEDUSA_TITLE = 'Prelude to 3D Medusa'
+const preludeToMedusa = () =>
+  decodePuzzleState(
+    '000908430004702680081054002005003129000520308000090560000079810017005006400106050',
+    'r1c1-2 r1c2-5 r1c9-7 r3c1-7 r3c1-9 r4c1-6 r4c2-6 r4c4-4 r4c5-8 r5c1-7 r5c2-7 r6c1-3 r6c1-7 r6c1-8 ' +
+      'r6c2-4 r6c2-7 r6c3-2 r7c1-3 r7c2-2 r7c2-3 r7c3-2 r7c4-3 r8c1-2 r8c1-9 r8c4-4 r8c4-8 r8c5-3 r9c2-3 ' +
+      'r9c3-3 r9c7-9',
+  )
+
 /** One sub-tab of a tab that has several techniques (Basics, Abusing
  * Uniqueness): its label, one line about it, and its example(s). */
 export interface LessonGroup {
@@ -302,19 +314,46 @@ export function buildColourLessons(tab: ColourTabId): TutorialLesson[] {
             outcome: 'solve',
           }),
         ),
+        ...safely(() =>
+          buildSimpleColouringLesson({
+            id: 'simple-prelude',
+            title: PRELUDE_TO_MEDUSA_TITLE,
+            hint: 'One elimination here - and the start of something bigger.',
+            state: preludeToMedusa(),
+            digit: 3,
+            outcome: 'eliminate',
+            noLines: true,
+            closingNote:
+              'That is all Simple Colouring can do with 3 here. The 3D Medusa tutorial uses this same puzzle to show how Simple Colouring can evolve.',
+          }),
+        ),
       ]
     case 'medusa':
-      return safely(() =>
-        buildMedusaLesson({
-          id: 'medusa',
-          title: 'Colouring across digits',
-          state: decodePuzzleState(
-            '200589064604132800900746002100027000745918623000065000510874030407090580009050040',
-            'r6c8-9 r8c4-3 r9c2-6 r9c4-3',
-          ),
-          seed: { row: 3, col: 7, digit: 5 },
-        }),
-      )
+      return [
+        ...safely(() =>
+          buildMedusaLesson({
+            id: 'medusa',
+            title: 'Colouring across digits',
+            hint: 'One candidate can be eliminated.',
+            state: decodePuzzleState(
+              '200589064604132800900746002100027000745918623000065000510874030407090580009050040',
+              'r6c8-9 r8c4-3 r9c2-6 r9c4-3',
+            ),
+            seed: { row: 3, col: 7, digit: 5 },
+          }),
+        ),
+        ...safely(() =>
+          buildMedusaLesson({
+            id: 'medusa-evolved',
+            title: 'One colour is true',
+            hint: `The "${PRELUDE_TO_MEDUSA_TITLE}" puzzle from Simple Colouring: one colour is false, so the other is true.`,
+            state: preludeToMedusa(),
+            seed: { row: 2, col: 0, digit: 3 },
+            fromSimpleColouring: { lessonTitle: PRELUDE_TO_MEDUSA_TITLE },
+            noLines: true,
+          }),
+        ),
+      ]
     case 'dragon':
       return [
         ...safely(() =>

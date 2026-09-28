@@ -28,7 +28,7 @@ import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
 import { SudokuGenericAicFinder } from './sudoku/SudokuGenericAicFinder'
 import { classifyShortAic, SudokuShortAicFinder, type ShortAicInstance, type ShortAicKind } from './sudoku/SudokuShortAicFinder'
 import { SudokuSingleFinder } from './sudoku/SudokuSingleFinder'
-import { SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
+import { explainUniqueRectangle, SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './sudoku/types'
 
 
@@ -572,16 +572,13 @@ export function buildTechniqueInstances(
   }
 
   for (const ur of uniqueRectangleFinder.find(board, candidates)) {
-    const conclusion =
-      ur.solvedCandidates.length > 0
-        ? ur.solvedCandidates.map((s) => `${cellRef(s.row, s.col)} is ${s.digit}`).join(', ')
-        : ur.eliminatedCandidates.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
+    const explanation = explainUniqueRectangle(ur, candidates)
     const idSuffix = ur.cells.map(([row, col]) => `${row}.${col}`).join('-')
 
     instances.push({
       id: `ur-${ur.type.replace(/\s+/g, '').toLowerCase()}-${idSuffix}-${ur.urDigits.join(',')}`,
-      name: `Unique Rectangle (${ur.type})`,
-      notation: `${ur.reasonText}, thus ${conclusion}`,
+      name: `Unique Rectangle (${explanation.typeLabel === 'Type 7d' ? 'Type 7d, Hidden Rectangle' : explanation.typeLabel})`,
+      notation: explanation.text,
       usedCells: [...ur.cells, ...(ur.subsetCells ?? [])],
       usedCandidates: [
         ...ur.cells.flatMap(([row, col]) => ur.urDigits.map((digit) => ({ row, col, digit }))),

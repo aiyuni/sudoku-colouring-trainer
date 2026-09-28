@@ -20,8 +20,26 @@ export interface GridImage {
    * recognizer, so it never needs to know about GridImage itself. With
    * `invert`, every channel is flipped (255 - v) first: Tesseract reads
    * dark-on-light far more reliably than light-on-dark, so a dark-theme
-   * screenshot's crops are handed over inverted. */
-  toCroppedDataUrl(x: number, y: number, w: number, h: number, scale: number, invert?: boolean): Promise<string>
+   * screenshot's crops are handed over inverted. Each `erase` rect (image
+   * coordinates) is painted over with the crop's own background colour
+   * (its median) first - how stray ink next to a glyph, like the dashes of
+   * an arrow drawn across a solved cell, is kept away from the recognizer. */
+  toCroppedDataUrl(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    scale: number,
+    invert?: boolean,
+    erase?: readonly EraseRect[],
+  ): Promise<string>
+}
+
+export interface EraseRect {
+  x: number
+  y: number
+  w: number
+  h: number
 }
 
 /** A dark-theme screenshot (Sudoku.Coach's dark mode: near-black cells,
@@ -51,8 +69,16 @@ class InvertedGridImage implements GridImage {
     return 255 - this.inner.getGray(x, y)
   }
 
-  toCroppedDataUrl(x: number, y: number, w: number, h: number, scale: number, invert = false): Promise<string> {
-    return this.inner.toCroppedDataUrl(x, y, w, h, scale, !invert)
+  toCroppedDataUrl(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    scale: number,
+    invert = false,
+    erase?: readonly EraseRect[],
+  ): Promise<string> {
+    return this.inner.toCroppedDataUrl(x, y, w, h, scale, !invert, erase)
   }
 }
 
@@ -207,6 +233,50 @@ function inkDensity(image: GridImage, rect: Rect, threshold: number): number {
     }
   }
   return ink / (rect.w * rect.h)
+}
+
+/** Radius of the largest disc that fits inside the ink in `rect` - i.e. half
+ * the thickest stroke (a chamfer distance transform, two passes). What
+ * tells a filled highlight circle apart from a glyph: a glyph is strokes
+ * however bold its font, a highlight is a solid fill. Measured on
+ * Sudoku.Coach screenshots: solved-digit strokes at most 0.075 of the
+ * cell's interior height, highlight circles at least 0.13 - even when
+ * several circles merge into one irregular blob, or the cell margin clips
+ * one, which is what defeated the fill-ratio test this replaced (three
+ * touching circles filled only ~0.68 of their joint bounding box and were
+ * read as a solved digit). */
+function maxInscribedRadius(image: GridImage, rect: Rect, threshold: number): number {
+  const x0 = Math.floor(rect.x)
+  const y0 = Math.floor(rect.y)
+  const w = Math.ceil(rect.w)
+  const h = Math.ceil(rect.h)
+  const dist = new Float32Array(w * h)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      dist[y * w + x] = isInk(image, x0 + x, y0 + y, threshold) ? Infinity : 0
+    }
+  }
+  // Outside the rect counts as background, so a disc can't "fit" past it.
+  const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : dist[y * w + x])
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      if (dist[i] !== 0) {
+        dist[i] = Math.min(dist[i], at(x - 1, y) + 1, at(x, y - 1) + 1, at(x - 1, y - 1) + Math.SQRT2, at(x + 1, y - 1) + Math.SQRT2)
+      }
+    }
+  }
+  let max = 0
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x
+      if (dist[i] !== 0) {
+        dist[i] = Math.min(dist[i], at(x + 1, y) + 1, at(x, y + 1) + 1, at(x + 1, y + 1) + Math.SQRT2, at(x - 1, y + 1) + Math.SQRT2)
+        max = Math.max(max, dist[i])
+      }
+    }
+  }
+  return max
 }
 
 /** Connected ink components within `rect`, each as a bounding box - two ink
@@ -396,6 +466,17 @@ function findGridBounds(image: GridImage): Rect {
   return box
 }
 
+/** Whether an ink blob is shaped and sized like one pencil mark in a cell
+ * whose full box is `outer`: no bigger than one of its nine pips, at least
+ * 40% of a pip tall, and not a thin stroke (every digit but 1 is about
+ * two-thirds as wide as it is tall - so a 1 never passes, which callers
+ * account for). Arrow fragments and specks fail it. */
+function isPencilMarkBlob(c: Rect, outer: Rect): boolean {
+  const pipW = outer.w / 3
+  const pipH = outer.h / 3
+  return c.w <= pipW && c.h <= pipH && c.h >= pipH * 0.4 && c.w >= c.h * 0.4
+}
+
 function digitPosition(digit: number): { row: number; col: number } {
   return { row: Math.floor((digit - 1) / 3), col: (digit - 1) % 3 }
 }
@@ -464,15 +545,38 @@ export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecog
       // background's Otsu split, so the whole disc reads as ink - and two
       // circled candidates stacked or side by side touch and merge into one
       // component as tall as a solved digit (even a lone circle only just
-      // misses the height cutoff). A glyph is strokes around empty space,
-      // though: real solved digits measured at most ~0.56 of their bounding
-      // box inked (a bold "8"), a disc ~0.79. The aspect guard keeps a
-      // plain-bar "1", which is just as solid, from being mistaken for one.
+      // misses the height cutoff). A glyph is strokes, though, and a
+      // highlight a solid fill - see maxInscribedRadius.
+      //
+      // An arrow drawn across a solved cell (technique screenshots) leaves
+      // dash fragments beside the glyph, so "exactly one component" is too
+      // strict: one tall glyph holding most of the cell's ink still makes
+      // it a solved digit, whatever else is there. Pencil marks are never
+      // tall, so the only other tall things are highlights and arrow
+      // lines - a line is thin (w < 0.35h, straight up or down) or sparse
+      // (a diagonal: real glyphs measured 0.34-0.6 of their box inked).
+      const isHighlight = (c: Rect) => maxInscribedRadius(image, c, threshold) > interior.h * 0.1
+      const isGlyph = (c: Rect) =>
+        c.h > interior.h * 0.38 && c.w >= c.h * 0.35 && inkDensity(image, c, threshold) >= 0.25 && !isHighlight(c)
+      //
+      // The "whatever else" must not include anything shaped like a pencil
+      // mark, though: then it's a candidate cell whose marks happen to form
+      // a tall shape - two boxed marks stacked (Sudoku.Coach outlines some
+      // marks in a square) merge into one tall, thin-stroked outline, as
+      // does a plain 1 touching the box of the mark below it. Arrow
+      // fragments are never mark-shaped (5x8px dashes beside a solved 6).
+      const inkOf = (c: Rect) => inkDensity(image, c, threshold) * c.w * c.h
       const largest = components.reduce((a, b) => (b.h > a.h ? b : a))
-      const isFilledHighlight = largest.w >= largest.h * 0.35 && inkDensity(image, largest, threshold) > 0.7
-      const isSolvedDigit = components.length === 1 && largest.h > interior.h * 0.38 && !isFilledHighlight
+      const tallGlyphs = components.filter(isGlyph)
+      const isSolvedDigit =
+        components.length === 1
+          ? largest.h > interior.h * 0.38 && !isHighlight(largest)
+          : tallGlyphs.length === 1 &&
+            inkOf(tallGlyphs[0]) * 2 > components.reduce((sum, c) => sum + inkOf(c), 0) &&
+            !components.some((c) => c !== tallGlyphs[0] && isPencilMarkBlob(c, outer))
 
       if (isSolvedDigit) {
+        const glyph = components.length === 1 ? largest : tallGlyphs[0]
         // Tesseract needs real breathing room around an isolated glyph -
         // one that nearly touches the crop's edge reads far less reliably
         // than the same glyph with margin - but exactly how much margin
@@ -482,14 +586,27 @@ export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecog
         // in turn rather than betting on one.
         let digit: number | null = null
         for (const padRatio of [0.6, 0.25, 1.2]) {
-          const padX = largest.w * padRatio
-          const padY = largest.h * padRatio
-          const cropX = Math.max(outer.x, largest.x - padX)
-          const cropY = Math.max(outer.y, largest.y - padY)
-          const cropW = Math.min(outer.x + outer.w, largest.x + largest.w + padX) - cropX
-          const cropH = Math.min(outer.y + outer.h, largest.y + largest.h + padY) - cropY
+          const padX = glyph.w * padRatio
+          const padY = glyph.h * padRatio
+          const cropX = Math.max(outer.x, glyph.x - padX)
+          const cropY = Math.max(outer.y, glyph.y - padY)
+          const cropW = Math.min(outer.x + outer.w, glyph.x + glyph.w + padX) - cropX
+          const cropH = Math.min(outer.y + outer.h, glyph.y + glyph.h + padY) - cropY
           const scale = Math.max(1, Math.round(160 / cropH))
-          const dataUrl = await image.toCroppedDataUrl(cropX, cropY, cropW, cropH, scale)
+          // With stray fragments in the cell (an arrow across it), blank
+          // every other ink blob in the crop - including any in the margin
+          // outside the interior - or Tesseract reads the dashes as part of
+          // the glyph (a 6 flanked by dashes came back as 3). A blob
+          // touching the glyph's box stays, so the glyph itself is never
+          // cut. Clean cells keep the crop exactly as before.
+          const crop: Rect = { x: cropX, y: cropY, w: cropW, h: cropH }
+          const erase =
+            components.length === 1
+              ? undefined
+              : inkComponents(image, crop, threshold).filter(
+                  (c) => c.x + c.w < glyph.x || c.x > glyph.x + glyph.w || c.y + c.h < glyph.y || c.y > glyph.y + glyph.h,
+                )
+          const dataUrl = await image.toCroppedDataUrl(cropX, cropY, cropW, cropH, scale, false, erase)
           digit = await recognizeDigit(dataUrl)
           if (digit && digit >= 1 && digit <= 9) {
             break
@@ -520,6 +637,26 @@ export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecog
       const pipH = outer.h / 3
       const pipMarginX = pipW * 0.15
       const pipMarginY = pipH * 0.15
+      // Whether an ink blob is shaped like a glyph at all: tall enough, and
+      // not a thin stroke (every digit but 1 is about two-thirds as wide as
+      // it is tall). Judged on the whole blob, never on the part of it a pip
+      // box happens to clip: some boards (SudokuWiki-style) draw pencil
+      // marks off-centre, straddling two pips, so a clipped 7 or 4 is just a
+      // sliver - while an arrow's dash is thin however it's clipped.
+      const isGlyphBlob = (c: Rect, minHeight: number) => c.h >= minHeight && c.w >= c.h * 0.4
+      const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+      // Pencil-mark-sized glyph blobs also mark the pip their centre is in,
+      // however far off-centre they're drawn - a 4 drawn across the pip 4 /
+      // pip 5 boundary left only a 4px sliver inside pip 4's (margined,
+      // interior-clipped) box, too little for the tests below.
+      const markedByBlob = new Set<number>()
+      for (const c of allComponents) {
+        if (isPencilMarkBlob(c, outer)) {
+          const pc = Math.min(2, Math.max(0, Math.floor((c.x + c.w / 2 - outer.x) / pipW)))
+          const pr = Math.min(2, Math.max(0, Math.floor((c.y + c.h / 2 - outer.y) / pipH)))
+          markedByBlob.add(pr * 3 + pc + 1)
+        }
+      }
       let anyCandidate = false
       for (let digit = 1; digit <= 9; digit++) {
         const { row: pr, col: pc } = digitPosition(digit)
@@ -536,8 +673,28 @@ export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecog
         // silently dropped. Every digit glyph is tall, though, so a tall
         // stroke counts too - unless it runs the pip's full height, which
         // is what an overlaid line crossing it looks like instead.
+        //
+        // Either way the ink must belong to a glyph-shaped blob (isGlyphBlob)
+        // - except in digit 1's own pip, where a thin stroke is exactly what
+        // a real 1 looks like. Elsewhere a thin or flat blob is a fragment of
+        // an overlaid arrow: a dashed vertical arrow through a column of
+        // pips left a 3x11px dash in pip 6 that cleared the area test and
+        // was read as a 6.
+        // Glyph-shaped either as clipped to this pip or as a whole blob -
+        // each view alone loses real marks: a 2 whose thin diagonal falls
+        // under the ink threshold splits into two flat blobs (but its
+        // clipped ink is 2-shaped), and a 6 with a dashed line drawn over it
+        // merges into one thin 8x36 blob with the line (but its clipped ink
+        // is still 6-shaped). A dash fails both.
         const isTallStroke = pipInk !== null && pipInk.h >= pip.h * 0.45 && pipInk.h < pip.h * 0.95
-        if (pipInkArea > pip.w * pip.h * 0.15 || isTallStroke) {
+        const inGlyphBlob =
+          pipInk !== null &&
+          (isGlyphBlob(pipInk, pip.h * 0.45) ||
+            allComponents.some((c) => overlaps(c, pipInk) && isGlyphBlob(c, pip.h * 0.45)))
+        if (
+          ((pipInkArea > pip.w * pip.h * 0.15 || isTallStroke) && (digit === 1 || inGlyphBlob)) ||
+          markedByBlob.has(digit)
+        ) {
           candidates[row][col][digit - 1] = true
           anyCandidate = true
         }

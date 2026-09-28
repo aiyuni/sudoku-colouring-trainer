@@ -1315,6 +1315,25 @@ html.app-busy .busy-cancel,
   color: #64748b;
 }
 
+/* Techniques tab spoiler view. */
+.technique-spoiler {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.technique-spoiler-toggle {
+  font-size: 0.7rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.technique-spoiler .technique-spoiler-toggle {
+  margin-bottom: 0;
+}
+
 /* Find by elims tab. The "experimental" badge lives here rather than on
    the tab itself, so all three tabs fit on one row. */
 .find-panel .experimental-label {

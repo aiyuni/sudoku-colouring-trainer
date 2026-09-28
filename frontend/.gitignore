@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+ocr-fixtures/.out
+# tesseract.js caches its language data in the working directory (npm run test:ocr)
+eng.traineddata
 *.local
 
 # Editor directories and files

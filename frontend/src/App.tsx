@@ -111,7 +111,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.7.0-beta'
+const APP_VERSION = 'v0.7.1-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -758,6 +758,8 @@ interface TechniquePanelProps {
   instances: TechniqueInstance[]
   activeId: string | null
   onSelect: (id: string) => void
+  techniquesRevealed: boolean
+  onToggleTechniquesRevealed: () => void
   dragonStepIndex: number
   onDragonStep: (delta: number) => void
   dragonSubstepIndex: number | null
@@ -802,6 +804,8 @@ function TechniquePanel({
   instances,
   activeId,
   onSelect,
+  techniquesRevealed,
+  onToggleTechniquesRevealed,
   dragonStepIndex,
   onDragonStep,
   dragonSubstepIndex,
@@ -860,12 +864,29 @@ function TechniquePanel({
         </button>
       </div>
       {tab === 'techniques' ? (
-        instances.length === 0 ? (
-          <p className="technique-empty">
-            None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (click "Autofill all" under Candidates)
-          </p>
+        // Spoiler view: hidden until the user asks, so the list doesn't give
+        // away the next move. Not even the count is shown while hidden.
+        !techniquesRevealed ? (
+          <div className="technique-spoiler">
+            <p className="technique-empty">Shows the techniques available for the grid.</p>
+            <button type="button" className="technique-spoiler-toggle" onClick={onToggleTechniquesRevealed}>
+              Reveal techniques
+            </button>
+          </div>
+        ) : instances.length === 0 ? (
+          <>
+            <button type="button" className="technique-spoiler-toggle" onClick={onToggleTechniquesRevealed}>
+              Hide (spoiler view)
+            </button>
+            <p className="technique-empty">
+              None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (click "Autofill all" under Candidates)
+            </p>
+          </>
         ) : (
         <>
+          <button type="button" className="technique-spoiler-toggle" onClick={onToggleTechniquesRevealed}>
+            Hide (spoiler view)
+          </button>
           <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
             Click on a technique and click on the "Apply" button to execute the technique.
           </p>
@@ -1282,6 +1303,9 @@ export default function App() {
   // is used - see DragonStepper's own resolvedSubstepIndex.
   const [dragonSubstepIndex, setDragonSubstepIndex] = useState<number | null>(null)
   const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
+  // Techniques tab spoiler view: hidden by default, stays revealed until the
+  // user hides it again (session only, not persisted).
+  const [techniquesRevealed, setTechniquesRevealed] = useState(false)
   const [findInput, setFindInput] = useState('')
   const [findResult, setFindResult] = useState<FindResult | null>(null)
   const [activeSolvePathIndex, setActiveSolvePathIndex] = useState<number | null>(null)
@@ -2906,6 +2930,17 @@ export default function App() {
     setDragonSubstepIndex(null)
   }
 
+  function onToggleTechniquesRevealed() {
+    // Hiding drops the selection too, or its highlight would stay on the
+    // grid and give the hidden move away.
+    if (techniquesRevealed) {
+      setActiveTechniqueId(null)
+      setDragonStepIndex(0)
+      setDragonSubstepIndex(null)
+    }
+    setTechniquesRevealed(!techniquesRevealed)
+  }
+
   function onTechniquePanelTabChange(tab: TechniquePanelTab) {
     setTechniquePanelTab(tab)
     if (tab === 'find') {
@@ -4138,6 +4173,8 @@ export default function App() {
       instances={techniqueInstances}
       activeId={activeTechniqueId}
       onSelect={onSelectTechnique}
+      techniquesRevealed={techniquesRevealed}
+      onToggleTechniquesRevealed={onToggleTechniquesRevealed}
       dragonStepIndex={dragonStepIndex}
       onDragonStep={onDragonStep}
       dragonSubstepIndex={dragonSubstepIndex}

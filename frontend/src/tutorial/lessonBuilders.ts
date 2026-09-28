@@ -314,10 +314,15 @@ interface SimpleColouringOptions {
   /** 'eliminate': a cell that sees both colours. 'solve': two cells of one
    * colour that see each other. */
   outcome: 'eliminate' | 'solve'
+  /** Colours only: no link lines or arrows on the grid (see `withoutLines`). */
+  noLines?: boolean
+  /** An extra closing frame, e.g. pointing ahead to a lesson that reuses
+   * this position. */
+  closingNote?: string
 }
 
 export function buildSimpleColouringLesson(options: SimpleColouringOptions): TutorialLesson {
-  const { id, title, hint, state, digit, outcome } = options
+  const { id, title, hint, state, digit, outcome, noLines, closingNote } = options
   const { board, candidates } = state
   const chain = colorFinder
     .findChains(board, candidates, digit)
@@ -350,7 +355,9 @@ export function buildSimpleColouringLesson(options: SimpleColouringOptions): Tut
   const frames: TutorialFrame[] = []
   frames.push({
     badge: 'Look',
-    caption: `Each red line connects the only two cells left for ${digit} in a row, column or box: this means, for each line, one of its 7's must be true.`,
+    caption: noLines
+      ? `Look at ${digit}: several rows, columns and boxes have only two cells left for it, so in each of them one of the two must be true.`
+      : `Each red line connects the only two cells left for ${digit} in a row, column or box: this means, for each line, one of its ${digit}s must be true.`,
     links: allPairs,
     spotlight: { digits: [digit] },
   })
@@ -431,7 +438,22 @@ export function buildSimpleColouringLesson(options: SimpleColouringOptions): Tut
     })
   }
 
-  return { id, title, hint, state, frames }
+  if (closingNote) {
+    frames.push({ ...frames[frames.length - 1], badge: 'Next', caption: closingNote })
+  }
+  return { id, title, hint, state, frames: noLines ? withoutLines(frames) : frames }
+}
+
+/** Drops every link line and arrow, for lessons shown with colours only. A
+ * dashed "sees" line was the only thing pointing at the cells behind a clash
+ * or an elimination, so those cells are outlined instead. */
+function withoutLines(frames: TutorialFrame[]): TutorialFrame[] {
+  return frames.map(({ links, ...frame }) => {
+    const seen = (links ?? []).filter((l) => l.kind === 'sees').flatMap((l) => [l.from, l.to])
+    if (seen.length === 0) return frame
+    const outlined = dedupeCells([...(frame.outlineCells ?? []), ...seen.map((c) => [c.row, c.col] as const)])
+    return { ...frame, outlineCells: outlined }
+  })
 }
 
 // ------------------------------------------------------------------ medusa
@@ -443,6 +465,15 @@ interface MedusaOptions {
   state: PuzzleState
   /** Any candidate of the chain to build; the colouring is grown from it. */
   seed: CandRef
+  /** Pick up where a Simple Colouring lesson on this same position left off:
+   * the first frame already has every candidate of the seed's digit coloured
+   * (in that lesson's colours), and only the candidates on the way to the
+   * clash are then coloured one at a time - a long chain grown in full would
+   * be dozens of frames. The Result frame shows the whole chain. Needs a
+   * chain whose colours clash (Medusa rules 1-2). */
+  fromSimpleColouring?: { lessonTitle: string }
+  /** Colours only: no link lines or arrows on the grid. */
+  noLines?: boolean
 }
 
 function candidateKey(ref: CandRef): string {
@@ -450,13 +481,17 @@ function candidateKey(ref: CandRef): string {
 }
 
 export function buildMedusaLesson(options: MedusaOptions): TutorialLesson {
-  const { id, title, hint, state, seed } = options
+  const { id, title, hint, state, seed, fromSimpleColouring, noLines } = options
   const { board, candidates } = state
   const chain = medusaFinder
     .findChains(board, candidates)
     .find((c) => c.candidates.some((n) => candidateKey(n) === candidateKey(seed)))
   if (!chain) {
     throw new Error('The seed candidate is not part of a 3D Medusa in this example.')
+  }
+  if (fromSimpleColouring) {
+    const frames = medusaFromSimpleColouringFrames(chain, state, seed, fromSimpleColouring.lessonTitle)
+    return { id, title, hint, state, frames: noLines ? withoutLines(frames) : frames }
   }
 
   const colourByKey = new Map<string, 'blue' | 'yellow'>(chain.candidates.map((n) => [candidateKey(n), n.color]))
@@ -503,15 +538,9 @@ export function buildMedusaLesson(options: MedusaOptions): TutorialLesson {
       .map(({ node, parent }) => ({ from: ref(parent!.row, parent!.col, parent!.digit), to: ref(node.row, node.col, node.digit), kind: 'strong' as const, arrow: true }))
 
   steps.forEach(({ node, parent, bivalue }, i) => {
-    let caption: string
-    if (!parent) {
-      caption = `Start with ${node.digit} in ${cellName(node.row, node.col)}: colour it ${node.color}.`
-    } else if (bivalue) {
-      caption = `${cellName(node.row, node.col)} has just two candidates: ${parent.digit} is ${parent.color}, so ${node.digit} is ${node.color}.`
-    } else {
-      const unit = strongUnit(state, node.digit, [parent.row, parent.col], [node.row, node.col])
-      caption = `The only other ${node.digit} in ${unit ? unitPhrase(unit) : 'that unit'} is ${cellName(node.row, node.col)}: ${node.color}.`
-    }
+    const caption = parent
+      ? medusaStepCaption(state, node, parent, bivalue)
+      : `Start with ${node.digit} in ${cellName(node.row, node.col)}: colour it ${node.color}.`
     frames.push({
       badge: bivalue ? 'Cell link' : 'Digit link',
       caption,
@@ -522,7 +551,115 @@ export function buildMedusaLesson(options: MedusaOptions): TutorialLesson {
   })
 
   frames.push(...medusaConclusionFrames(chain, state, colouredUpTo(steps.length - 1), arrowsUpTo(steps.length - 1)))
-  return { id, title, hint, state, frames }
+  return { id, title, hint, state, frames: noLines ? withoutLines(frames) : frames }
+}
+
+/** The caption for colouring `node` from `parent` - through a two-candidate
+ * cell, or as the only other spot for its digit in a unit. */
+function medusaStepCaption(state: PuzzleState, node: ColoredCandidate, parent: ColoredCandidate, bivalue: boolean): string {
+  if (bivalue) {
+    return `${cellName(node.row, node.col)} has just two candidates: ${parent.digit} is ${parent.color}, so ${node.digit} is ${node.color}.`
+  }
+  const unit = strongUnit(state, node.digit, [parent.row, parent.col], [node.row, node.col])
+  return `The only other ${node.digit} in ${unit ? unitPhrase(unit) : 'that unit'} is ${cellName(node.row, node.col)}: ${node.color}.`
+}
+
+/** See `MedusaOptions.fromSimpleColouring`. */
+function medusaFromSimpleColouringFrames(
+  found: MedusaChain,
+  state: PuzzleState,
+  seed: CandRef,
+  lessonTitle: string,
+): TutorialFrame[] {
+  const { board, candidates } = state
+  const digit = seed.digit
+
+  // Use the Simple Colouring lesson's colours, so the digit it coloured looks
+  // the same here. Colour names are arbitrary, so swapping them on every
+  // candidate changes nothing about what the chain proves.
+  const seedColour = found.candidates.find((n) => candidateKey(n) === candidateKey(seed))!.color
+  const simpleColour =
+    colorFinder
+      .findChains(board, candidates, digit)
+      .flatMap((c) => c.cells)
+      .find((cell) => cell.row === seed.row && cell.col === seed.col)?.color ?? seedColour
+  const swap = (c: 'blue' | 'yellow'): 'blue' | 'yellow' => (seedColour === simpleColour ? c : c === 'blue' ? 'yellow' : 'blue')
+  const chain: MedusaChain = { ...found, candidates: found.candidates.map((n) => ({ ...n, color: swap(n.color) })) }
+
+  const mass = medusaFinder.findMassElimination(chain, board, candidates)
+  if (!mass || mass.conflict.kind === 'emptied') {
+    throw new Error('This 3D Medusa has no same-colour clash to show.')
+  }
+  const conflict = mass.conflict
+  const targets =
+    conflict.kind === 'cell'
+      ? [ref(conflict.row, conflict.col, conflict.digitA), ref(conflict.row, conflict.col, conflict.digitB)]
+      : [ref(conflict.a[0], conflict.a[1], conflict.digit), ref(conflict.b[0], conflict.b[1], conflict.digit)]
+
+  const colourByKey = new Map<string, 'blue' | 'yellow'>(chain.candidates.map((n) => [candidateKey(n), n.color]))
+  const graph = medusaFinder.buildStrongLinkGraph(board, candidates)
+  const start = chain.candidates.filter((n) => n.digit === digit)
+
+  // Breadth-first out of every coloured candidate of the digit at once, so
+  // each candidate is reached through as few new colourings as possible.
+  const parentOf = new Map<string, { parent: ColoredCandidate; bivalue: boolean }>()
+  const order: ColoredCandidate[] = []
+  const seen = new Set(start.map(candidateKey))
+  const queue = [...start]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    const currentKey = candidateKey(current)
+    for (const neighbourKey of graph.adjacency.get(currentKey) ?? []) {
+      if (seen.has(neighbourKey) || !colourByKey.has(neighbourKey)) continue
+      seen.add(neighbourKey)
+      const node: ColoredCandidate = { ...graph.nodeByKey.get(neighbourKey)!, color: colourByKey.get(neighbourKey)! }
+      const edgeKey = currentKey < neighbourKey ? `${currentKey}|${neighbourKey}` : `${neighbourKey}|${currentKey}`
+      parentOf.set(neighbourKey, { parent: current, bivalue: graph.bivalueEdgeKeys.has(edgeKey) })
+      order.push(node)
+      queue.push(node)
+    }
+  }
+
+  // Keep only the candidates on the way from the start to the clash.
+  const needed = new Set<string>()
+  for (const target of targets) {
+    let key = candidateKey(target)
+    while (parentOf.has(key) && !needed.has(key)) {
+      needed.add(key)
+      key = candidateKey(parentOf.get(key)!.parent)
+    }
+  }
+  const steps = order.filter((n) => needed.has(candidateKey(n)))
+
+  const toColoured = (n: ColoredCandidate): ColouredCand => ({ row: n.row, col: n.col, digit: n.digit, color: n.color })
+  const colouredUpTo = (count: number): ColouredCand[] => [...start, ...steps.slice(0, count)].map(toColoured)
+  const arrowsUpTo = (count: number): TutorialLink[] =>
+    steps.slice(0, count).map((node) => {
+      const { parent } = parentOf.get(candidateKey(node))!
+      return { from: ref(parent.row, parent.col, parent.digit), to: ref(node.row, node.col, node.digit), kind: 'strong' as const, arrow: true }
+    })
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Recap',
+      caption: `This is the same puzzle as the Simple Colouring "${lessonTitle}" example, starting from its colouring of ${digit}. Medusa keeps going: the two candidates of a two-candidate cell are linked too.`,
+      coloured: colouredUpTo(0),
+    },
+  ]
+  steps.forEach((node, i) => {
+    const { parent, bivalue } = parentOf.get(candidateKey(node))!
+    frames.push({
+      badge: bivalue ? 'Cell link' : 'Digit link',
+      caption: medusaStepCaption(state, node, parent, bivalue),
+      coloured: colouredUpTo(i + 1),
+      fresh: [ref(node.row, node.col, node.digit)],
+      links: arrowsUpTo(i + 1),
+    })
+  })
+  frames.push(
+    ...medusaConclusionFrames(chain, state, colouredUpTo(steps.length), arrowsUpTo(steps.length), chain.candidates.map(toColoured)),
+  )
+  return frames
 }
 
 /** Nothing to draw before the colouring starts except which cells the
@@ -541,6 +678,9 @@ function medusaConclusionFrames(
   state: PuzzleState,
   coloured: ColouredCand[],
   arrows: TutorialLink[],
+  /** The whole chain, when only part of it was coloured on the way to a
+   * clash: the Result frame then shows every candidate it decides. */
+  wholeChain?: ColouredCand[],
 ): TutorialFrame[] {
   const { board, candidates } = state
   const nodeOf = (r: number, c: number, d: number) => ref(r, c, d)
@@ -553,10 +693,10 @@ function medusaConclusionFrames(
     let caption: string
     const conflict = mass.conflict
     if (conflict.kind === 'cell') {
-      caption = `${cellName(conflict.row, conflict.col)} would hold both ${conflict.digitA} and ${conflict.digitB}, both ${conflict.color}. ${conflict.color} can't be true.`
+      caption = `${cellName(conflict.row, conflict.col)} would hold both ${conflict.digitA} and ${conflict.digitB}, both ${conflict.color}. ${conflict.color === 'blue' ? 'Blue' : 'Yellow'} can't be true.`
       clashLink = [{ from: nodeOf(conflict.row, conflict.col, conflict.digitA), to: nodeOf(conflict.row, conflict.col, conflict.digitB), kind: 'sees' }]
     } else if (conflict.kind === 'unit') {
-      caption = `Two ${conflict.color} ${conflict.digit}s see each other. ${conflict.color} can't be true.`
+      caption = `Two ${conflict.color} ${conflict.digit}s see each other. ${conflict.color === 'blue' ? 'Blue' : 'Yellow'} can't be true.`
       clashLink = [{ from: nodeOf(conflict.a[0], conflict.a[1], conflict.digit), to: nodeOf(conflict.b[0], conflict.b[1], conflict.digit), kind: 'sees' }]
     } else {
       caption = `${cellName(conflict.row, conflict.col)} is uncoloured, but all its candidates see ${conflict.color}. If ${conflict.color} were true it would be empty.`
@@ -571,9 +711,11 @@ function medusaConclusionFrames(
       { badge: 'Clash', caption, coloured, links: [...arrows, ...clashLink] },
       {
         badge: 'Result',
-        caption: `So ${trueColor} is true: it solves its cells, and every ${falseColor} candidate goes.`,
-        coloured,
-        links: arrows,
+        caption: wholeChain
+          ? `So ${falseColor} is false and ${trueColor} is true. Colouring the rest of the chain the same way, every ${trueColor} candidate is a solution and every ${falseColor} candidate goes.`
+          : `So ${trueColor} is true: it solves its cells, and every ${falseColor} candidate goes.`,
+        coloured: wholeChain ?? coloured,
+        links: wholeChain ? [] : arrows,
         solved: mass.solvedCells.map((n) => ref(n.row, n.col, n.digit)),
         eliminated: mass.eliminatedCandidates.map((n) => ref(n.row, n.col, n.digit)),
       },
@@ -866,7 +1008,7 @@ export function buildUniqueRectangleLesson(options: UniqueRectangleOptions): Tut
     .find(board, candidates, { mergeTypes: false })
     .find(
       (candidate) =>
-        candidate.type.replace(' aka Hidden Rectangle', '') === type && candidate.cells.some((cell) => sameCell(cell, corner)),
+        candidate.type === type && candidate.cells.some((cell) => sameCell(cell, corner)),
     )
   if (!instance) {
     throw new Error(`No Unique Rectangle ${type} at ${cellName(corner[0], corner[1])} in this example.`)

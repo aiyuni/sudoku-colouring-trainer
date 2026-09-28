@@ -58,13 +58,13 @@ export const HELP_QUICKSTART =
   "The defaults give the best Colouring and Sudoku solving experience. Leave them alone if you're learning Colouring or still learning what AICs are, " +
   'and use "Reset to defaults" in Settings to get back to them at any time. \n\nTo start, generate or import a puzzle. ' +
   '\n\n For how the techniques work, see the [Techniques overview](how-it-works).\n\n' +
-  'For advanced players, the tabs below explain the customizations for the solver.'
+  'For advanced players, the tabs below explain the customizations for the solver.' 
 
 export const HELP_TABS: HelpTab[] = [
   {
     label: 'Dragon Configuration',
-    intro: 'The Dragon Configuration menu.  Every setting here has a major impact on what Dragons the solver shows, ' +
-    'but only "Select Dragon Colouring techniques" and "Limit to 1 AIC per step" affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
+    intro: 'The Dragon Configuration menu.  Every setting here has a major impact on what Dragons the solver shows. ' +
+    'In addition, "Select Dragon Colouring techniques", "Limit to 1 AIC per step", and "Max techniques per Dragon step" affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
     sections: [
       {
         title: 'Dragon Colouring',
@@ -122,10 +122,7 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Max techniques per step',
             settingKey: 'maxTechniquesPerDragonStep',
             description:
-              'The most technique applications a single Dynamic Dragon step may chain to find its new colour, whatever ' +
-              'the techniques are (e.g. at 3, neither 4 Locked Candidates nor 2 Locked Candidates + 2 ALS-xz are ' +
-              'allowed). Naked and hidden singles do not count. Only the techniques the step actually relies on (the ' +
-              'ones its substeps show) are counted. \n\nInfinite: no limit.',
+              'Controls how many non-singles techniques a single Dynamic Dragon step may use to extend its colours \n\nInfinite: no limit.',
           },
           {
             name: 'Auto-solve includes AICs',
@@ -181,7 +178,7 @@ export const HELP_TABS: HelpTab[] = [
           {
             name: 'Show strong links',
             settingKey: 'showStrongLinks',
-            description: 'Draws every strong link (conjugate pairs) on the grid.',
+            description: 'Draws every strong link on the grid.',
           },
           {
             name: 'Show bivalue cells',

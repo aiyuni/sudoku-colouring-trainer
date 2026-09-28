@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:ocr": "rolldown ocr-fixtures/run.ts --format esm --platform node --external tesseract.js -o ocr-fixtures/.out/run.mjs && node ocr-fixtures/.out/run.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
