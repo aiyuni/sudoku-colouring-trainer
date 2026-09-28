@@ -1262,6 +1262,27 @@ html.app-busy .busy-cancel,
   flex: 3 1 14rem;
 }
 
+/* Desktop, beside the grid: App caps the panel's height so a long panel ends
+   level with the "Drag or paste a grid" row (a short one keeps its natural
+   height). Tabs and Apply stay put; everything under them scrolls as one
+   (the list's own 32rem scroll would only nest inside). */
+.technique-panel-fitted {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.technique-panel-fitted .technique-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.technique-panel-fitted .technique-list {
+  max-height: none;
+  overflow-y: visible;
+}
+
 /* Tabs always stay on one row; Apply always sits at the right edge - beside
    the tabs when the panel is wide enough, otherwise alone on the next line
    (margin-left: auto right-aligns it either way). Wrapping is decided on
@@ -1929,8 +1950,11 @@ html.app-busy .busy-cancel,
   justify-content: center;
   flex-wrap: wrap;
   gap: 0.3rem;
-  flex: 1 1 18rem;
-  padding: 0.75rem 1rem;
+  /* Narrow enough to share its row with Copy to SC and Copy Puzzle; the text
+     wraps inside it rather than pushing the buttons onto their own line. */
+  flex: 1 1 9rem;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
   border: 2px dashed #cbd5e1;
   border-radius: 0.5rem;
   font-size: 0.8rem;
@@ -1966,6 +1990,12 @@ html.app-busy .busy-cancel,
   gap: 0.6rem;
   justify-content: center;
   margin: 1.25rem 0 0.75rem;
+}
+
+/* Desktop: directly under the import rows in the grid column, spaced like
+   those rows are from each other. */
+.grid-column > .actions {
+  margin: 0.6rem 0 0;
 }
 
 button {
@@ -2998,9 +3028,18 @@ button.primary {
   min-height: var(--compact-touch);
 }
 
+/* Shares the row with the two copy buttons, as on desktop. The copy buttons
+   are ~110px each, so on a ~360px phone the drop zone only gets ~80px: a low
+   flex-basis keeps it on the row (its text wraps inside it) instead of
+   wrapping the whole box onto a line of its own. */
 .compact-layout .image-import-drop {
-  flex-basis: 100%;
+  flex-basis: 4rem;
   min-height: var(--compact-touch);
+  padding-inline: 0.5rem;
+}
+
+.compact-layout .copy-sc-button {
+  padding-inline: 0.6rem;
 }
 
 .compact-layout .image-import-browse {

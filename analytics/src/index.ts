@@ -1,11 +1,13 @@
 // Records every puzzle import from the frontend into D1.
 //
-// The frontend only ever sends { puzzle, importType, sourceFormat } - the
-// timestamp, country and validity are all decided here, so a client can't
-// forge them and the page never holds a credential (the D1 binding lives
-// only on this Worker). There is deliberately no read endpoint: the data is
+// The frontend only ever sends { puzzle, importType, sourceFormat, device }
+// (`device` = a few browser hints, see src/device.ts) - the timestamp,
+// country, validity and device description are all decided here, the device
+// mainly from the request's own User-Agent header, and the page never holds
+// a credential (the D1 binding lives only on this Worker). There is deliberately no read endpoint: the data is
 // only reachable through `wrangler d1 execute` / the Cloudflare dashboard.
 import { SudokuSolver } from '../../frontend/src/sudoku/SudokuSolver'
+import { describeDevice, parseHints, type DeviceHints } from './device'
 
 interface Env {
   DB: D1Database
@@ -15,7 +17,8 @@ interface Env {
 type ImportType = 'ocr' | 'string'
 
 const SOURCE_FORMATS = new Set(['plain', 'sudoku-coach', 'sudokuwiki'])
-const MAX_BODY_BYTES = 1024
+const MAX_BODY_BYTES = 2048
+const MAX_USER_AGENT_LENGTH = 512
 // Fewer than 17 clues can never have a unique solution, so skip the solver
 // (same shortcut App.tsx takes).
 const MIN_UNIQUE_SOLUTION_CLUES = 17
@@ -62,13 +65,16 @@ export default {
     const clueCount = parsed.puzzle.replace(/0/g, '').length
     const solveStatus = clueCount < MIN_UNIQUE_SOLUTION_CLUES ? 'multiple' : solver.solve(board).status
     const country = (request.cf?.country as string | undefined) ?? request.headers.get('CF-IPCountry')
+    const userAgent = (request.headers.get('User-Agent') ?? '').slice(0, MAX_USER_AGENT_LENGTH)
+    const device = describeDevice(userAgent, parsed.device)
 
     // Respond immediately; the insert finishes in the background.
     ctx.waitUntil(
       env.DB.prepare(
         `INSERT INTO puzzle_imports
-           (puzzle, import_type, source_format, is_valid_puzzle, solve_status, clue_count, imported_at, country)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (puzzle, import_type, source_format, is_valid_puzzle, solve_status, clue_count, imported_at, country,
+            device_type, device, os, os_version, browser, browser_version, user_agent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
         .bind(
           parsed.puzzle,
@@ -79,6 +85,13 @@ export default {
           clueCount,
           new Date().toISOString(),
           country ?? null,
+          device.deviceType,
+          device.device,
+          device.os,
+          device.osVersion,
+          device.browser,
+          device.browserVersion,
+          userAgent || null,
         )
         .run()
         .catch((err) => console.error('D1 insert failed', err)),
@@ -89,7 +102,7 @@ export default {
 
 function parseBody(
   text: string,
-): { puzzle: string; importType: ImportType; sourceFormat: string | null } | null {
+): { puzzle: string; importType: ImportType; sourceFormat: string | null; device: DeviceHints } | null {
   let body: unknown
   try {
     body = JSON.parse(text)
@@ -99,7 +112,7 @@ function parseBody(
   if (typeof body !== 'object' || body === null) {
     return null
   }
-  const { puzzle, importType, sourceFormat } = body as Record<string, unknown>
+  const { puzzle, importType, sourceFormat, device } = body as Record<string, unknown>
   if (typeof puzzle !== 'string' || !/^[0-9]{81}$/.test(puzzle)) {
     return null
   }
@@ -113,7 +126,8 @@ function parseBody(
     }
     format = sourceFormat
   }
-  return { puzzle, importType, sourceFormat: format }
+  // Optional, and never a reason to drop the import: older pages don't send it.
+  return { puzzle, importType, sourceFormat: format, device: parseHints(device) }
 }
 
 function toBoard(puzzle: string): number[][] {

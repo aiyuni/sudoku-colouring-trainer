@@ -9,6 +9,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
+  type Ref,
 } from 'react'
 import {
   cloneBoard,
@@ -117,7 +118,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.8.0-beta'
+const APP_VERSION = 'v0.8.1-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -1029,6 +1030,12 @@ interface TechniquePanelProps {
   onToggleEasySolve: () => void
   solvePathTimeoutMs: number
   onSolvePathTimeoutChange: (event: ChangeEvent<HTMLSelectElement>) => void
+  panelRef?: Ref<HTMLDivElement>
+  /** Desktop, beside the grid: the panel's maximum height in px, so a long
+   * panel ends level with the "Drag or paste a grid" row (see App's
+   * techniquePanelHeight) - the tabs and Apply stay put and the rest scrolls
+   * - while a short one keeps its natural height. Null: no cap. */
+  fittedHeight?: number | null
 }
 
 /** The panel to the left of the grid, with three tabs sharing one "Apply"
@@ -1076,9 +1083,16 @@ function TechniquePanel({
   onToggleEasySolve,
   solvePathTimeoutMs,
   onSolvePathTimeoutChange,
+  panelRef,
+  fittedHeight,
 }: TechniquePanelProps) {
+  const fitted = fittedHeight != null
   return (
-    <div className="technique-panel">
+    <div
+      ref={panelRef}
+      className={['technique-panel', fitted ? 'technique-panel-fitted' : ''].filter(Boolean).join(' ')}
+      style={fitted ? { maxHeight: fittedHeight } : undefined}
+    >
       <div className="technique-panel-header">
         <div className="technique-tabs" role="tablist">
           <button
@@ -1124,6 +1138,7 @@ function TechniquePanel({
           Apply
         </button>
       </div>
+      <div className="technique-panel-body">
       {tab === 'techniques' ? (
         // Spoiler view: hidden until the user asks, so the list doesn't give
         // away the next move. Not even the count is shown while hidden.
@@ -1318,6 +1333,7 @@ function TechniquePanel({
 
         </>
       )}
+      </div>
     </div>
   )
 }
@@ -1679,6 +1695,36 @@ export default function App() {
   const [confirmOptimizeDynamicOpen, setConfirmOptimizeDynamicOpen] = useState(false)
   const [tutorialOpen, setTutorialOpen] = useState(false)
   const { compact, phone, landscape } = useCompactLayout()
+
+  // Desktop: the Techniques panel ends level with the bottom of the "Drag or
+  // paste a grid" row next to it. The grid is square and shrinks with the
+  // window, so where that row ends can't be a fixed CSS height - it's
+  // measured, and re-measured whenever the grid column resizes. Only while
+  // the panel sits beside the grid (same top); once the row wraps it onto a
+  // line of its own it keeps its natural height.
+  const techniquePanelRef = useRef<HTMLDivElement>(null)
+  const gridColumnRef = useRef<HTMLDivElement>(null)
+  const importSecondaryRowRef = useRef<HTMLDivElement>(null)
+  const [techniquePanelHeight, setTechniquePanelHeight] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const panel = techniquePanelRef.current
+    const column = gridColumnRef.current
+    const row = importSecondaryRowRef.current
+    if (compact || !panel || !column || !row) {
+      setTechniquePanelHeight(null)
+      return
+    }
+    const measure = () => {
+      const panelTop = panel.getBoundingClientRect().top
+      const besideGrid = Math.abs(panelTop - column.getBoundingClientRect().top) < 2
+      setTechniquePanelHeight(besideGrid ? Math.round(row.getBoundingClientRect().bottom - panelTop) : null)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(column)
+    observer.observe(document.body)
+    return () => observer.disconnect()
+  }, [compact])
   const [compactSection, setCompactSection] = useState<CompactSection>('techniques')
   const [importText, setImportText] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -1693,7 +1739,7 @@ export default function App() {
   const solving = busyKinds.has('solve')
   const generating = busyKinds.has('generate')
   const ocrBusy = busyKinds.has('ocr')
-  const [status, setStatus] = useState('Sudoku Colouring Solver Trainer')
+  const [status, setStatus] = useState('Grid status')
 
   const filled = useMemo(
     () => board.flat().filter((value) => value !== 0).length,
@@ -4002,6 +4048,23 @@ export default function App() {
     }
   }
 
+  /** "Copy Puzzle": the puzzle as a plain 81-character string (row by row,
+   * 0 = empty) - its givens, or every filled cell when the grid has no
+   * givens (typed in by hand), since then the digits on it are the puzzle. */
+  async function onCopyPuzzleString() {
+    const hasGivens = givens.some((row) => row.some(Boolean))
+    const puzzle = board
+      .flatMap((row, r) => row.map((value, c) => (value !== 0 && (!hasGivens || givens[r][c]) ? String(value) : '0')))
+      .join('')
+    try {
+      await navigator.clipboard.writeText(puzzle)
+      showToast('Copied to clipboard!')
+    } catch {
+      setStatus("Couldn't access the clipboard - here's the puzzle string to copy manually:")
+      setImportText(puzzle)
+    }
+  }
+
   /** Reads a screenshot of a Sudoku grid (dropped or pasted) and rebuilds
    * the board from it, colour and any overlaid lines/arrows ignored -
    * only which pixels are darker than their own cell's background is
@@ -4224,7 +4287,7 @@ export default function App() {
           { target, timeBudgetMs: dragonGenerationTimeoutMs, enabledFish: [...enabledFish], alsXzEnabled },
           signal,
         ),
-      `New puzzle loaded: ${techniqueName} is the easiest technique that can make progress.`,
+      `New ${techniqueName} puzzle loaded: Find the ${techniqueName} to progress the puzzle.`,
     )
   }
 
@@ -4243,7 +4306,7 @@ export default function App() {
           },
           signal,
         ),
-      'New puzzle loaded: every easier technique gets stuck before Dragon Colouring is needed.',
+      'New Dragon Colouring puzzle loaded: find a Dragon to progress the puzzle.',
     )
   }
 
@@ -4266,8 +4329,8 @@ export default function App() {
           ? pickStockDynamicDragonPuzzle(options)
           : generateDragonPuzzleInParallel(options, signal),
       dynamicDragonPuzzleForbidsPlainDragon
-        ? 'New puzzle loaded: plain Dragon Colouring is stuck on every chain - only Dynamic Dragon Colouring can continue.'
-        : 'New puzzle loaded: a puzzle state that contains at least one Dynamic Dragon Colouring technique.',
+        ? 'New Dynamic Dragon puzzle loaded: plain Dragon Colouring is stuck on every chain - only Dynamic Dragon Colouring can continue.'
+        : 'New Dynamic Dragon puzzle loaded: contains at least 1 Dynamic Dragon Colouring technique.',
       dynamicDragonPuzzleForbidsPlainDragon,
     )
   }
@@ -4866,6 +4929,8 @@ export default function App() {
       onToggleEasySolve={toggleEasySolveEnabled}
       solvePathTimeoutMs={solvePathTimeoutMs}
       onSolvePathTimeoutChange={onSolvePathTimeoutChange}
+      panelRef={techniquePanelRef}
+      fittedHeight={compact ? null : techniquePanelHeight}
     />
   )
 
@@ -5126,7 +5191,7 @@ export default function App() {
       <div className="import-row">
         <textarea
           className="import-input"
-          placeholder="Paste a 81-char string, or Sudoku.Coach puzzle string, or SudokuWiki.org text format..."
+          placeholder="Paste a sudoku grid in any format (Sudoku.Coach, 81-char string, etc.)"
           rows={1}
           value={importText}
           disabled={busy}
@@ -5137,7 +5202,7 @@ export default function App() {
         </button>
       </div>
 
-      <div className="import-secondary-row">
+      <div className="import-secondary-row" ref={importSecondaryRowRef}>
         <div
           className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
           onDragOver={(event) => {
@@ -5154,11 +5219,11 @@ export default function App() {
           <span>
             {ocrBusy
               ? 'Reading screenshot…'
-              : 'Drag & drop or paste a Sudoku grid screenshot, or '}
+              : 'Drag or paste a screenshot, or '}
           </span>
           {!ocrBusy && (
             <label className="image-import-browse">
-              browse for an image
+              upload
               <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
             </label>
           )}
@@ -5170,7 +5235,16 @@ export default function App() {
           disabled={busy}
           title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard"
         >
-          Copy SC puzzle string
+          Copy to SC
+        </button>
+        <button
+          type="button"
+          className="copy-sc-button"
+          onClick={onCopyPuzzleString}
+          disabled={busy}
+          title="Copies the puzzle as an 81-character string (0 = empty) to your clipboard"
+        >
+          Copy Puzzle
         </button>
       </div>
     </>
@@ -5737,10 +5811,13 @@ export default function App() {
         {/* The grid plus the import / screenshot / export rows, kept in one
             column so they sit right under the grid instead of below
             whichever side column (techniques panel, controls) is tallest. */}
-        <div className="grid-column">
+        <div className="grid-column" ref={gridColumnRef}>
           {gridElement}
 
           {importRows}
+
+          {/* Right under the import rows, not below the status lines. */}
+          {actionsRow}
         </div>
 
         <div className="controls">
@@ -5755,8 +5832,6 @@ export default function App() {
           {autosolveGroup}
         </div>
       </div>
-
-      {actionsRow}
 
       {statusLines}
 

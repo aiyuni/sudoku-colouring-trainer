@@ -14,8 +14,23 @@ fires one invisible `sendBeacon` to this Worker, which stores a row in the
 | `clue_count` | filled cells |
 | `imported_at` | ISO-8601 UTC, set by the Worker |
 | `country` | ISO country code from Cloudflare geolocation (`XX` unknown, `T1` Tor). No IP is stored. |
+| `device_type` | `phone` / `tablet` / `desktop` / `unknown` |
+| `device` | e.g. `iPhone`, `iPad`, `Samsung SM-S918B`, `Google Pixel 7`, `Chromebook`, `Mac`, `Windows PC` |
+| `os`, `os_version` | e.g. `iOS` `15.4`, `iPadOS` `17.1`, `Android` `14`, `Windows` `11`, `ChromeOS`, `macOS` |
+| `browser`, `browser_version` | e.g. `Safari` `17.1`, `Chrome` `129`, `Samsung Internet` `23`, `Firefox`, `Edge` |
+| `user_agent` | the raw User-Agent header (max 512 chars), for re-classifying rows later |
 
-The browser only sends `{puzzle, importType, sourceFormat}`. It never holds a
+The device columns (NULL on rows from before migration `0002`) are worked out
+on the Worker by `src/device.ts`, mainly from the request's User-Agent header.
+Some things the header can't tell, so the page adds a few hints:
+- **iPads** that report themselves as a Mac are identified by their touch screen.
+- **Chromium browsers** hide the phone model and the real Android, macOS and
+  Windows versions. The page fills these in from User-Agent Client Hints.
+
+Where nothing reveals the version, `os_version` stays NULL (Safari on a Mac,
+Chrome on Android without hints), or is `10/11` (Windows in Firefox).
+
+The browser only sends `{puzzle, importType, sourceFormat, device}` (`device` = those hints). It never holds a
 credential, and the Worker has no read endpoint, so the data can only be read
 through your Cloudflare account. Everything here fits Cloudflare's free tier.
 
@@ -38,6 +53,20 @@ Rebuild or redeploy the site. If the variable is unset, the frontend sends nothi
 If the site moves to another origin, add it to `ALLOWED_ORIGINS` in `wrangler.toml`
 and redeploy. Requests from any other origin are rejected with 403.
 
+## Updating
+
+When a migration is added (e.g. `0002_add_device_columns.sql`), apply it **before**
+deploying the Worker that writes the new columns. Otherwise every insert fails
+until the migration runs:
+
+```sh
+npm run migrate:remote
+npm run deploy
+```
+
+The frontend can go out before or after these two steps: the old Worker ignores
+the extra `device` field, and the new Worker doesn't require it.
+
 ## Querying
 
 In the Cloudflare dashboard, go to **Storage & Databases → D1 → sudoku-analytics → Console**,
@@ -45,6 +74,9 @@ or use the CLI:
 
 ```sh
 npx wrangler d1 execute sudoku-analytics --remote --command "SELECT * FROM puzzle_imports ORDER BY id DESC LIMIT 20"
+
+# imports per device / OS version
+npx wrangler d1 execute sudoku-analytics --remote --command "SELECT device_type, device, os, os_version, COUNT(*) n FROM puzzle_imports GROUP BY 1,2,3,4 ORDER BY n DESC"
 
 # imports per country
 npx wrangler d1 execute sudoku-analytics --remote --command "SELECT country, COUNT(*) n FROM puzzle_imports GROUP BY country ORDER BY n DESC"

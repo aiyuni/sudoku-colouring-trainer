@@ -21,6 +21,7 @@ import { MIN_BASE_MEDUSA_CANDIDATES, type AppSettings } from './settingsDefaults
  *  - `description` is a plain-text paragraph. Use "\n\n" to start a new one.
  *  - Any text can hold a link: write [some text](how-it-works) and "some
  *    text" becomes a link that opens the Techniques overview page.
+ *  - Write **some text** to show "some text" in bold.
  *  - To add a setting: add an item to a section. To add a section or tab:
  *    add an object to the list. To reorder: move things around.
  */
@@ -63,8 +64,8 @@ export const HELP_QUICKSTART =
 export const HELP_TABS: HelpTab[] = [
   {
     label: 'Dragon Configuration',
-    intro: 'The Dragon Configuration menu.  Every setting here has a major impact on what Dragons the solver shows. ' +
-    'In addition, "Select Dragon Colouring techniques", "Limit to 1 AIC per step", and "Max techniques per Dragon step" affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
+    intro: 'The Dragon Configuration menu.  Every setting here has a **major impact** on what Dragons the solver shows, especially the **"Exhaustive Dragon Colouring"** setting. ' +
+    'In addition, **"Select Dragon Colouring techniques"**, **"Limit to 1 AIC per step"**, and **"Max techniques per Dragon step"** affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
     sections: [
       {
         title: 'Dragon Colouring',
@@ -74,10 +75,10 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Exhaustive Dragon Colouring',
             settingKey: 'exhaustiveDragonColouring',
             description:
-              'ON: Recycles its colours and does not stop on the first elimination it finds.  1 Dragon might be able to solve the entire puzzle. ' +
+              'ON: Recycles its colours and does not stop on the first elimination it finds. ' +
               '' +
-              'This is the setting most human-like, and shows promotions.\n\n' +
-              'OFF: stops at the first elimination (AIC-like).',
+              '**This is the setting most human-like**, shows promotions, and, as a result, **a single Exhaustive Dragon might be able to solve the entire puzzle.** \n\n' +
+              'OFF: stops at the first elimination (AIC-like).  As a result, does not utilize Dragon promotions. Use this in combination with "Optimize Dragons" to show the simplest Dragon that can progress, or to compare Dragons with AICs.',
           },
           {
             name: 'Optimize Dragons',
@@ -105,31 +106,30 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Optimize Dynamic Dragons',
             settingKey: 'optimizeDynamicDragons',
             description:
-              'ON: Dynamic Dragons get the Optimize Dragons search (whether or not that is ON), and at every step it also ' +
-              'tries every candidate the Dynamic techniques can force, not just the first one found. Dynamic Dragons ' +
-              'typically come out with far fewer extensions.\n\n' +
-              'Slower, especially with AICs enabled or with Exhaustive Dragon Colouring OFF.  It never uses ' +
+              'ON: Same as Optimize Dragons, but for Dynamic Dragons. Looks for the shortest path to find an elimination using ' +
+              'Dynamic Dragon extensions.\n\n' +
+              'Performance wise is a bit slower, especially with AICs enabled or with Exhaustive Dragon Colouring OFF.  It never uses ' +
               'more extensions than Optimize Dragons alone. "Find by elims" follows this setting.',
           },
           {
             name: 'Limit to 1 AIC per step',
             settingKey: 'aicLimitPerDragonStep',
             description:
-              'ON: a Dynamic Dragon step may chain at most one AIC. \n\nOFF: no limit - a stronger Dragon, but much ' +
-              'harder for a human to find.',
+              'ON: a Dynamic Dragon step may use at most one AIC.  Suitable for the average human solver. \n\nOFF: no limit to amount of AICs it can use - a stronger Dragon, but much ' +
+              'harder for the normal human to find.',
           },
           {
             name: 'Max techniques per step',
             settingKey: 'maxTechniquesPerDragonStep',
             description:
-              'Controls how many non-singles techniques a single Dynamic Dragon step may use to extend its colours \n\nInfinite: no limit.',
+              'Controls how many non-singles techniques a single Dynamic Dragon step may use to extend its colours.  Does not control the techniques used; only controls the quantity of techniques used. \n\nInfinite: no limits - makes the solver extremely strong if all techniques are enabled.',
           },
           {
             name: 'Auto-solve includes AICs',
             settingKey: 'dynamicDragonAutoSolveIncludesAics',
             description:
-              'OFF: the Dynamic Dragon auto-solve button skips Dragons whose steps needed an AIC, even with AICs ' +
-              'enabled. \n\n ON: applies those too.',
+              'OFF: the Dynamic Dragon auto-solve button skips Dragons whose steps needed an AIC, even with AICs.' +
+              'enabled. \n\n ON: applies those too.  This setting only affects Auto-Solve feature.',
           },
         ],
       },
@@ -147,10 +147,8 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Select Dynamic Dragon Colouring techniques',
             //settingKey: 'allowedRule3Techniques',
             description:
-              "The most important setting for Dynamic Dragons. Controls the non-colouring techniques Dynamic Dragon may apply under a colour's assumption to extend the Dragon. " +
-              'Locked Candidates and Naked Pair are always ON (Hidden Single is not listed: it is part of plain Dragons too, so it is always used). Each AIC kind, each fish (X-Wing, ' +
-              'Finned X-Wing, Swordfish, Finned Swordfish) and ALS-xz only takes effect while it is enabled in Settings; the ' +
-              'fish and ALS-xz are OFF here by default even then.',
+              "The most important setting for Dynamic Dragons. Controls the non-colouring and non-singles techniques Dynamic Dragon may use to extend the Dragon colouring. " +
+              'Locked Candidates & Naked Pair are always ON.',
           },
         ],
       },

@@ -9,17 +9,22 @@ interface HelpModalProps {
   onOpenTutorial: () => void
 }
 
-/** Renders `text`, turning each [label](how-it-works) into a link button. */
+/** Renders `text`, turning each [label](how-it-works) into a link button and
+ * each **text** into bold text. */
 function renderWithLinks(text: string, onOpenTutorial: () => void): ReactNode[] {
   const parts: ReactNode[] = []
-  const pattern = /\[([^\]]+)\]\(how-it-works\)/g
+  const pattern = /\[([^\]]+)\]\(how-it-works\)|\*\*([^*]+)\*\*/g
   let last = 0
   for (const match of text.matchAll(pattern)) {
     parts.push(text.slice(last, match.index))
     parts.push(
-      <button key={match.index} type="button" className="help-link" onClick={onOpenTutorial}>
-        {match[1]}
-      </button>,
+      match[1] !== undefined ? (
+        <button key={match.index} type="button" className="help-link" onClick={onOpenTutorial}>
+          {match[1]}
+        </button>
+      ) : (
+        <strong key={match.index}>{match[2]}</strong>
+      ),
     )
     last = match.index + match[0].length
   }
