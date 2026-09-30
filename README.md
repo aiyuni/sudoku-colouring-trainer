@@ -7,8 +7,6 @@ Try it here: https://aiyuni.github.io/sudoku-colouring-trainer/
 ## Features
 
 * **Step-by-step**, human-readable **Colouring technique explanations**
-  * Non-colouring techniques are explained too!
-
 * Every Colouring technique is implemented: 
 
   * **[Simple Colouring](https://www.sudokuwiki.org/Simple_Colouring)** — a widely documented, single-digit Colouring technique.
