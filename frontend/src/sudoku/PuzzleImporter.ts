@@ -1,14 +1,23 @@
-import { createEmptyCandidates, markedCandidateDigits } from './boardUtils'
-import type { Board, CandidateGrid } from './types'
+import { createEmptyCandidateColors, createEmptyCandidates, markedCandidateDigits } from './boardUtils'
+import {
+  CANDIDATE_COLOR_ORDER,
+  type Board,
+  type CandidateColorGrid,
+  type CandidateGrid,
+  type CandidatePaint,
+  type CandidatePaintLayer,
+  type CandidatePaintShape,
+} from './types'
 
 const BOARD_SIZE = 9
 const CELL_COUNT = BOARD_SIZE * BOARD_SIZE
 const STATE_PREFIX = 'SCv7_'
 const SUPPORTED_ENCODING_TAG = '32'
 const BASE32_ALPHABET = '0123456789abcdefghijklmnopqrstuv'
+const PAINT_SHAPE_CODES: Record<CandidatePaintShape, string> = { circle: 'c', square: 's', diamond: 'd' }
 
 export type ImportResult =
-  | { ok: true; board: Board; givens: boolean[][]; candidates: CandidateGrid }
+  | { ok: true; board: Board; givens: boolean[][]; candidates: CandidateGrid; candidateColors?: CandidateColorGrid }
   | { ok: false; error: string }
 
 export type PuzzleStringFormat = 'plain' | 'sudoku-coach' | 'sudokuwiki'
@@ -18,6 +27,10 @@ interface SudokuCoachState {
   givenDigits?: string
   userDigits?: string
   userCellCandidates?: string
+  /** Our own addition, not Sudoku.Coach's: the candidate paint, see
+   * encodePaint. Sudoku.Coach ignores keys it doesn't know, so the same
+   * string pastes into both. */
+  sudokuSolverPaint?: string
 }
 
 /**
@@ -132,7 +145,11 @@ export class PuzzleImporter {
       return { ok: false, error: "The puzzle's digits were not in the expected format." }
     }
 
-    return this.buildResultFromDigitStrings(givenDigits, userDigits, state.userCellCandidates ?? '')
+    const result = this.buildResultFromDigitStrings(givenDigits, userDigits, state.userCellCandidates ?? '')
+    if (result.ok && typeof state.sudokuSolverPaint === 'string') {
+      result.candidateColors = this.decodePaint(state.sudokuSolverPaint)
+    }
+    return result
   }
 
   /**
@@ -255,9 +272,15 @@ export class PuzzleImporter {
    * Builds a Sudoku.Coach "SCv7_32_<payload>" state string for the current
    * grid - the exact reverse of importSudokuCoachState: the same
    * given/user digit strings and bit-per-digit candidate encoding, JSON-
-   * stringified, deflated, and base32-encoded.
+   * stringified, deflated, and base32-encoded. With `candidateColors`, the
+   * paint rides along in an extra key only this app reads.
    */
-  async exportToSudokuCoachState(board: Board, givens: boolean[][], candidates: CandidateGrid): Promise<string> {
+  async exportToSudokuCoachState(
+    board: Board,
+    givens: boolean[][],
+    candidates: CandidateGrid,
+    candidateColors?: CandidateColorGrid,
+  ): Promise<string> {
     let givenDigits = ''
     let userDigits = ''
     for (let row = 0; row < BOARD_SIZE; row++) {
@@ -281,14 +304,84 @@ export class PuzzleImporter {
       }
     }
 
-    const json = JSON.stringify({
+    const state: SudokuCoachState = {
       gridSize: BOARD_SIZE,
       givenDigits,
       userDigits,
       userCellCandidates: cellValues.join('-'),
-    })
+    }
+    const paint = candidateColors ? this.encodePaint(board, candidates, candidateColors) : ''
+    if (paint) {
+      state.sudokuSolverPaint = paint
+    }
+    const json = JSON.stringify(state)
     const compressed = await this.deflateCompress(json)
     return `${STATE_PREFIX}${SUPPORTED_ENCODING_TAG}_${this.encodeBase32(compressed)}`
+  }
+
+  /** One "-"-separated entry per painted candidate: its index
+   * (cell * 9 + digit - 1), ":", then each layer as its 1-based place in
+   * CANDIDATE_COLOR_ORDER plus a shape letter - "40:4c" is r5c5's 5 in
+   * swatch 4 as a circle, "40:4c1s" the same split with swatch 1 as a
+   * square. Palette positions rather than hex, so a pasted string comes
+   * back in the same swatches, whatever colours they've been set to.
+   * Paint on a candidate that isn't marked is left out, as commitGrid would
+   * drop it anyway. */
+  private encodePaint(board: Board, candidates: CandidateGrid, colors: CandidateColorGrid): string {
+    const entries: string[] = []
+    for (let row = 0; row < BOARD_SIZE; row++) {
+      for (let col = 0; col < BOARD_SIZE; col++) {
+        if (board[row][col] !== 0) {
+          continue
+        }
+        for (let i = 0; i < BOARD_SIZE; i++) {
+          const paint = colors[row][col][i]
+          if (!paint || !candidates[row][col][i]) {
+            continue
+          }
+          const layers = paint.map(
+            (layer) => `${CANDIDATE_COLOR_ORDER.indexOf(layer.color) + 1}${PAINT_SHAPE_CODES[layer.shape]}`,
+          )
+          entries.push(`${(row * BOARD_SIZE + col) * BOARD_SIZE + i}:${layers.join('')}`)
+        }
+      }
+    }
+    return entries.join('-')
+  }
+
+  /** The reverse of encodePaint. Lenient: an entry it can't read is skipped
+   * rather than failing the whole import - the digits and marks matter more
+   * than the paint. */
+  private decodePaint(text: string): CandidateColorGrid {
+    const colors = createEmptyCandidateColors()
+    const shapeOf = new Map(
+      Object.entries(PAINT_SHAPE_CODES).map(([shape, code]) => [code, shape as CandidatePaintShape]),
+    )
+    for (const entry of text.split('-')) {
+      const match = /^(\d+):((?:\d+[a-z]){1,2})$/.exec(entry)
+      if (!match) {
+        continue
+      }
+      const index = Number(match[1])
+      if (index >= CELL_COUNT * BOARD_SIZE) {
+        continue
+      }
+      const layers: CandidatePaintLayer[] = []
+      for (const [, place, code] of match[2].matchAll(/(\d+)([a-z])/g)) {
+        const color = CANDIDATE_COLOR_ORDER[Number(place) - 1]
+        const shape = shapeOf.get(code)
+        if (color && shape) {
+          layers.push({ color, shape })
+        }
+      }
+      if (layers.length === 0) {
+        continue
+      }
+      const paint: CandidatePaint = layers.length === 1 ? [layers[0]] : [layers[0], layers[1]]
+      const cell = Math.floor(index / BOARD_SIZE)
+      colors[Math.floor(cell / BOARD_SIZE)][cell % BOARD_SIZE][index % BOARD_SIZE] = paint
+    }
+    return colors
   }
 
   private async deflateCompress(text: string): Promise<Uint8Array> {

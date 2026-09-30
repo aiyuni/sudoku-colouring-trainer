@@ -16,6 +16,23 @@ export type CandidateColor =
   | 'darkGreen'
   | 'tan'
 
+/** The colour palette's order (swatch 1 first) - what "Copy Puzzle As-Is"
+ * stores a painted colour as, so a pasted string keeps each colour's place
+ * in the palette whatever hex the swatches have been customized to. Must
+ * match the swatch list in App.tsx; append new colours, never reorder, or
+ * strings copied earlier paste back in the wrong colours. */
+export const CANDIDATE_COLOR_ORDER: readonly CandidateColor[] = [
+  'skyBlue',
+  'paleYellow',
+  'lightPink',
+  'blue',
+  'rust',
+  'limeGreen',
+  'purple',
+  'darkGreen',
+  'tan',
+]
+
 /** How a painted colour is drawn on its candidate pip. */
 export type CandidatePaintShape = 'circle' | 'square' | 'diamond'
 

@@ -1,5 +1,6 @@
 import { DEFAULT_RULE3_TECHNIQUES, type Rule3Technique } from './sudoku/SudokuDragonFinder'
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
+import { DEFAULT_HOTKEYS, HOTKEY_ACTIONS, HOTKEY_LABELS, formatHotkey, type HotkeyBindings } from './hotkeys'
 
 /** Every user-adjustable setting, with its default. This is the single
  * source of truth for three things at once: what App's `useState` calls start
@@ -62,6 +63,8 @@ export interface AppSettings {
   dragonGenerationTimeoutMs: number
   easySolveEnabled: boolean
   solvePathTimeoutMs: number
+  /** Keyboard shortcuts (Settings -> Keyboard shortcuts), see hotkeys.ts. */
+  hotkeys: HotkeyBindings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -96,6 +99,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
   solvePathTimeoutMs: 12_000,
+  hotkeys: DEFAULT_HOTKEYS,
 }
 
 /** Threshold for the "Require a bigger base Medusa" toggle - the minimum
@@ -177,6 +181,9 @@ export function describeDefault(key: keyof AppSettings): string {
   }
   if (key === 'maxTechniquesPerDragonStep') {
     return value === Infinity ? 'Infinite' : String(value)
+  }
+  if (key === 'hotkeys') {
+    return HOTKEY_ACTIONS.map((action) => `${HOTKEY_LABELS[action]}: ${formatHotkey(DEFAULT_HOTKEYS[action])}`).join(', ')
   }
   if (Array.isArray(value)) {
     return value.map((technique) => RULE3_TECHNIQUE_LABELS[technique as Rule3Technique]).join(', ')

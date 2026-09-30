@@ -3494,11 +3494,30 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       // per-candidate rules below would find nothing new.
       return [mass]
     }
-    return [
-      ...this.findRule3(nodes, board, candidates),
-      ...this.findRule4(nodes, candidates),
-      ...this.findRule5(nodes, candidates),
-    ]
+    // The three rules are run against the same colouring independently, so
+    // one candidate can qualify under more than one (e.g. 2r1c4 both seeing
+    // opposite-coloured 2s - Rule 3 - and sharing its cell with a coloured
+    // candidate while seeing an opposite 2 - Rule 5). Listing it twice made
+    // the log carry a redundant step and every "eliminates N candidates"
+    // tally that sums the log over-count it. Rule 4 moves are kept whole
+    // (one move can list several digits, named in its description); Rule 3
+    // and Rule 5 moves are one candidate each, so a repeat is just dropped.
+    // Output order stays Rule 3, 4, 5.
+    const rule4 = this.findRule4(nodes, candidates)
+    const eliminatedKeys = new Set(rule4.flatMap((m) => m.eliminated.map((e) => nodeKey(e.row, e.col, e.digit))))
+    const firstOnly = (moves: DragonMove[]) =>
+      moves.filter((m) => {
+        const [e] = m.eliminated
+        const key = nodeKey(e.row, e.col, e.digit)
+        if (eliminatedKeys.has(key)) {
+          return false
+        }
+        eliminatedKeys.add(key)
+        return true
+      })
+    const rule3 = firstOnly(this.findRule3(nodes, board, candidates))
+    const rule5 = firstOnly(this.findRule5(nodes, candidates))
+    return [...rule3, ...rule4, ...rule5]
   }
 
   private findMassElimination(nodes: DragonNode[], board: Board, candidates: CandidateGrid): DragonMove | null {

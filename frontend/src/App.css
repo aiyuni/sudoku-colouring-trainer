@@ -415,6 +415,33 @@ html.app-busy .busy-cancel,
   margin-top: 0.3rem;
 }
 
+/* Settings -> "Reset to defaults": a plain white item at the top of a long
+   menu went unnoticed, so it gets its own warm amber fill - noticeable, but
+   not red, since it only resets settings and never touches the puzzle. */
+.dropdown-item.settings-reset-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  text-align: center;
+  background: #fef3c7;
+  border-color: #f59e0b;
+  color: #92400e;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+.settings-reset-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+@media (hover: hover) {
+  .dropdown-item.settings-reset-button:hover {
+    background: #fde68a;
+    border-color: #d97706;
+  }
+}
+
 .menu-checkbox {
   display: flex;
   align-items: center;
@@ -428,6 +455,129 @@ html.app-busy .busy-cancel,
 .menu-checkbox:has(input:disabled) {
   cursor: default;
   opacity: 0.7;
+}
+
+/* Settings -> Keyboard shortcuts (HotkeySettings.tsx): label, the shortcut
+   as a key-cap button (click to record a new one), and a small x to unbind. */
+.hotkey-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hotkey-settings-toggle .dropdown-section-title {
+  flex: 1;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.hotkey-settings-toggle[aria-expanded='true'] {
+  margin-bottom: 0.4rem;
+}
+
+.hotkey-settings-toggle-hint {
+  font-size: 0.72rem;
+  color: #2563eb;
+}
+
+.hotkey-settings-chevron {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.hotkey-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.hotkey-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.hotkey-binding {
+  min-width: 5.5rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-bottom-width: 2px;
+  border-radius: 0.35rem;
+  color: #0f172a;
+}
+
+.hotkey-binding.recording {
+  background: #fef3c7;
+  border-color: #d97706;
+  color: #92400e;
+}
+
+.hotkey-clear {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+.hotkey-message {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #b45309;
+}
+
+@media (prefers-color-scheme: dark) {
+  .hotkey-row {
+    color: #e2e8f0;
+  }
+
+  .hotkey-binding {
+    background: #0f172a;
+    border-color: #475569;
+    color: #e2e8f0;
+  }
+
+  .hotkey-binding.recording {
+    background: #422006;
+    border-color: #d97706;
+    color: #fde68a;
+  }
+
+  .hotkey-clear {
+    color: #94a3b8;
+  }
+
+  .hotkey-settings-toggle-hint {
+    color: #93c5fd;
+  }
+
+  .hotkey-settings-chevron {
+    color: #94a3b8;
+  }
+
+  .hotkey-message {
+    color: #fbbf24;
+  }
 }
 
 /* Round "?" button beside Generate Puzzle - opens the Settings guide modal
@@ -1714,6 +1864,13 @@ html.app-busy .busy-cancel,
   margin: 0;
 }
 
+/* More than one header action (Candidate Colours: Clear cell + Clear all)
+   stays grouped together on the right. */
+.control-header-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
 .control-header-action {
   flex: 0 0 auto;
   padding: 0.22rem 0.6rem;
@@ -1990,7 +2147,7 @@ html.app-busy .busy-cancel,
   justify-content: center;
   flex-wrap: wrap;
   gap: 0.3rem;
-  /* Narrow enough to share its row with Copy to SC and Copy Puzzle; the text
+  /* Narrow enough to share its row with Copy Puzzle As-Is and Copy Original; the text
      wraps inside it rather than pushing the buttons onto their own line. */
   flex: 1 1 9rem;
   min-width: 0;

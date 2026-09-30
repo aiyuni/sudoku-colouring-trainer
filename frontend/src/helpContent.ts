@@ -1,5 +1,6 @@
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
 import { MIN_BASE_MEDUSA_CANDIDATES, type AppSettings } from './settingsDefaults'
+import { DEFAULT_HOTKEYS, HOTKEY_LABELS, formatHotkey } from './hotkeys'
 
 /**
  * The text of the "Settings guide" page (the ? button next to Generate Puzzle).
@@ -175,7 +176,7 @@ export const HELP_TABS: HelpTab[] = [
   },
   {
     label: 'Settings',
-    intro: 'The ⚙ Settings menu.  Controls the non-Dragon techniques the solver uses.',
+    intro: 'The ⚙ Settings menu.  Controls the non-Dragon techniques the solver uses, and keyboard hotkeys.',
     sections: [
       // Keyboard input is no longer in Settings - it is the "Use as Keyboard
       // Input" switch in the Solution / Candidates group headers.
@@ -189,26 +190,6 @@ export const HELP_TABS: HelpTab[] = [
       //     },
       //   ],
       // },
-      {
-        title: 'Display & hints',
-        items: [
-          {
-            name: 'Show strong links',
-            settingKey: 'showStrongLinks',
-            description: 'Draws every strong link on the grid.',
-          },
-          {
-            name: 'Show bivalue cells',
-            settingKey: 'showBivalueCells',
-            description: 'Highlights every cell with exactly two candidates.',
-          },
-          {
-            name: 'Light mode for grid',
-            settingKey: 'gridWhiteMode',
-            description: "Light or dark colour scheme for the grid.",
-          },
-        ],
-      },
       {
         title: 'Techniques',
         intro: 'Enables or disables certain techniques for the solver. Advanced players may want to enable AICs or fish.  Note that Plain Dragons will find all AICs eliminations.',
@@ -261,6 +242,70 @@ export const HELP_TABS: HelpTab[] = [
           },
         ],
       },
+      {
+        title: 'Keyboard shortcuts',
+        intro:
+          'These work while the grid or the Solution, Candidates, Candidate Colours or Highlight digit pad has focus (click a cell or a pad button first). ' +
+          'Click a shortcut in Settings, then press the new key combination; × removes it. Cmd works as Ctrl on a Mac.',
+        items: [
+          {
+            name: HOTKEY_LABELS.toggleInputMode,
+            defaultText: formatHotkey(DEFAULT_HOTKEYS.toggleInputMode),
+            description: 'Switches whether typing 1-9 places a solution digit or toggles a candidate (the Keyboard Input switches).',
+          },
+          {
+            name: HOTKEY_LABELS.candidateDigit,
+            defaultText: `${formatHotkey(DEFAULT_HOTKEYS.candidateDigit)}`,
+            description: 'Holding this modifier while typing 1-9 always toggles a candidate, whichever way Keyboard Input is set.',
+          },
+          {
+            name: HOTKEY_LABELS.deselect,
+            defaultText: formatHotkey(DEFAULT_HOTKEYS.deselect),
+            description: 'Deselects the selected cell.',
+          },
+          {
+            name: HOTKEY_LABELS.undo,
+            defaultText: formatHotkey(DEFAULT_HOTKEYS.undo),
+            description: 'Undoes the last move.',
+          },
+          {
+            name: HOTKEY_LABELS.redo,
+            defaultText: formatHotkey(DEFAULT_HOTKEYS.redo),
+            description: 'Redoes the last undone move.',
+          },
+          {
+            name: HOTKEY_LABELS.copyGrid,
+            defaultText: formatHotkey(DEFAULT_HOTKEYS.copyGrid),
+            description: 'Same as the Copy Puzzle As-Is button: copies the current progress (givens, solved cells, candidates and colours) as a string that pastes into Sudoku.Coach (without the colours) or back into this app.',
+          },
+          {
+            name: HOTKEY_LABELS.paste,
+            defaultText: formatHotkey(DEFAULT_HOTKEYS.paste),
+            description:
+              'Imports whatever is on the clipboard: a puzzle string (81 digits, Sudoku.Coach or SudokuWiki format) or a screenshot of a grid, which is read like a dropped one.',
+          },
+        ],
+      },
+      {
+        title: 'Display & hints',
+        items: [
+          {
+            name: 'Show strong links',
+            settingKey: 'showStrongLinks',
+            description: 'Draws every strong link on the grid.',
+          },
+          {
+            name: 'Show bivalue cells',
+            settingKey: 'showBivalueCells',
+            description: 'Highlights every cell with exactly two candidates.',
+          },
+          {
+            name: 'Light mode for grid',
+            settingKey: 'gridWhiteMode',
+            description: "Light or dark colour scheme for the grid.",
+          },
+        ],
+      }
     ],
   },
   {

@@ -83,7 +83,11 @@ import {
   MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS,
   MIN_BASE_MEDUSA_CANDIDATES,
   RULE3_TECHNIQUE_LABELS,
+  type AppSettings,
 } from './settingsDefaults'
+import { loadSavedGrid, loadSavedSettings, saveGrid, saveSettings } from './persistedState'
+import { isNativePasteHotkey, keyNameOf, matchHotkey, type HotkeyBindings } from './hotkeys'
+import HotkeySettings from './HotkeySettings'
 import {
   singleFinder,
   lockedCandidateFinder,
@@ -118,6 +122,23 @@ import {
   candidatesEqual,
 } from './techniqueEngine'
 import './App.css'
+
+/** Keyboard shortcuts only fire inside elements marked `data-hotkey-scope`:
+ * the grid and the Solution / Candidates / Candidate Colours / Highlight
+ * digit pads. Elsewhere (menus, the Techniques panel, the import box) keys
+ * keep their normal meaning - e.g. Space still presses a focused button. */
+function isInHotkeyScope(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-hotkey-scope]') !== null
+}
+
+/** Somewhere the user is typing text, which keeps every key to itself. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  )
+}
 
 const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
@@ -171,7 +192,8 @@ function createInitialGrid(): GridState {
 // painted this colour and a Dragon Colouring highlight start out as the
 // same colour, not just similar ones - customizing one of these four no
 // longer keeps that link, which is an accepted trade-off of letting the
-// user recolour freely.
+// user recolour freely. The order here is the palette order and must match
+// CANDIDATE_COLOR_ORDER (types.ts), which copied puzzle strings encode.
 const DEFAULT_CANDIDATE_COLOR_SWATCHES: Array<{ id: CandidateColor; label: string; hex: string }> = [
   { id: 'skyBlue', label: 'Light blue', hex: '#38bdf8' },
   { id: 'paleYellow', label: 'Light yellow', hex: '#fde047' },
@@ -1283,7 +1305,7 @@ function TechniquePanel({
               className="solve-path-timeout"
               title="How long Generate keeps searching before it stops and shows the steps found so far. The Solvable check under the grid uses the same limit."
             >
-              Timeout
+              Calculation time limit:
               <select value={solvePathTimeoutMs} onChange={onSolvePathTimeoutChange}>
                 {SOLVE_PATH_TIMEOUT_OPTIONS.map(({ label, ms }) => (
                   <option key={ms} value={ms}>
@@ -1622,8 +1644,12 @@ interface RunningBusyTask extends BusyTask {
 let nextBusyTaskId = 1
 
 export default function App() {
-  const [grid, setGrid] = useState<GridState>(createInitialGrid)
-  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => [{ grid: createInitialGrid(), solvePath: null }])
+  // The puzzle and settings the user left the page with (persistedState.ts),
+  // read once on mount; the effects further down keep both saved.
+  const [initialGrid] = useState<GridState>(() => loadSavedGrid() ?? createInitialGrid())
+  const [initialSettings] = useState(loadSavedSettings)
+  const [grid, setGrid] = useState<GridState>(initialGrid)
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => [{ grid: initialGrid, solvePath: null }])
   const [historyIndex, setHistoryIndex] = useState(0)
   const { board, givens, candidates, candidateColors } = grid
 
@@ -1654,7 +1680,8 @@ export default function App() {
   // it, so it survives switching tabs and applying its own steps for free.
   const [solvePath, setSolvePath] = useState<SolvePathResult | null>(null)
   const [showSolvePathLog, setShowSolvePathLog] = useState(false)
-  const [keyboardMode, setKeyboardMode] = useState<'solution' | 'candidate'>(DEFAULT_SETTINGS.keyboardMode)
+  const [keyboardMode, setKeyboardMode] = useState<'solution' | 'candidate'>(initialSettings.keyboardMode)
+  const [hotkeys, setHotkeys] = useState<HotkeyBindings>(initialSettings.hotkeys)
   const [paintColor, setPaintColor] = useState<CandidateColor | null>(null)
   const [swatchColors, setSwatchColors] = useState<Record<CandidateColor, string>>(loadCustomSwatchColors)
   const [swatchShapes, setSwatchShapes] = useState<Record<CandidateColor, CandidatePaintShape>>(loadCustomSwatchShapes)
@@ -1682,29 +1709,30 @@ export default function App() {
     () => DEFAULT_CANDIDATE_COLOR_SWATCHES.map((swatch) => ({ ...swatch, hex: swatchColors[swatch.id] })),
     [swatchColors],
   )
-  // Every setting below starts from DEFAULT_SETTINGS (settingsDefaults.ts),
-  // the same object resetSettingsToDefaults() and the help page read - so
-  // change a default there, not here.
-  const [showStrongLinks, setShowStrongLinks] = useState(DEFAULT_SETTINGS.showStrongLinks)
-  const [showBivalueCells, setShowBivalueCells] = useState(DEFAULT_SETTINGS.showBivalueCells)
-  const [gridWhiteMode, setGridWhiteMode] = useState(DEFAULT_SETTINGS.gridWhiteMode)
-  const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(DEFAULT_SETTINGS.minBaseMedusaFilter)
-  const [dynamicDragonDisabled, setDynamicDragonDisabled] = useState(DEFAULT_SETTINGS.dynamicDragonDisabled)
-  const [doubleDragonEnabled, setDoubleDragonEnabled] = useState(DEFAULT_SETTINGS.doubleDragonEnabled)
-  const [doubleDynamicDragonEnabled, setDoubleDynamicDragonEnabled] = useState(DEFAULT_SETTINGS.doubleDynamicDragonEnabled)
+  // Every setting below starts from what was saved last visit, else from
+  // DEFAULT_SETTINGS (settingsDefaults.ts) - the same object
+  // resetSettingsToDefaults() and the help page read, so change a default
+  // there, not here.
+  const [showStrongLinks, setShowStrongLinks] = useState(initialSettings.showStrongLinks)
+  const [showBivalueCells, setShowBivalueCells] = useState(initialSettings.showBivalueCells)
+  const [gridWhiteMode, setGridWhiteMode] = useState(initialSettings.gridWhiteMode)
+  const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(initialSettings.minBaseMedusaFilter)
+  const [dynamicDragonDisabled, setDynamicDragonDisabled] = useState(initialSettings.dynamicDragonDisabled)
+  const [doubleDragonEnabled, setDoubleDragonEnabled] = useState(initialSettings.doubleDragonEnabled)
+  const [doubleDynamicDragonEnabled, setDoubleDynamicDragonEnabled] = useState(initialSettings.doubleDynamicDragonEnabled)
   const [allowedRule3Techniques, setAllowedRule3Techniques] = useState<Set<Rule3Technique>>(
-    () => new Set(DEFAULT_SETTINGS.allowedRule3Techniques),
+    () => new Set(initialSettings.allowedRule3Techniques),
   )
-  const [shortAicEnabled, setShortAicEnabled] = useState(DEFAULT_SETTINGS.shortAicEnabled)
-  const [genericAicEnabled, setGenericAicEnabled] = useState(DEFAULT_SETTINGS.genericAicEnabled)
+  const [shortAicEnabled, setShortAicEnabled] = useState(initialSettings.shortAicEnabled)
+  const [genericAicEnabled, setGenericAicEnabled] = useState(initialSettings.genericAicEnabled)
   const [shortSingleDigitAicEnabled, setShortSingleDigitAicEnabled] = useState(
-    DEFAULT_SETTINGS.shortSingleDigitAicEnabled,
+    initialSettings.shortSingleDigitAicEnabled,
   )
-  const [xWingEnabled, setXWingEnabled] = useState(DEFAULT_SETTINGS.xWingEnabled)
-  const [finnedXWingEnabled, setFinnedXWingEnabled] = useState(DEFAULT_SETTINGS.finnedXWingEnabled)
-  const [swordfishEnabled, setSwordfishEnabled] = useState(DEFAULT_SETTINGS.swordfishEnabled)
-  const [finnedSwordfishEnabled, setFinnedSwordfishEnabled] = useState(DEFAULT_SETTINGS.finnedSwordfishEnabled)
-  const [alsXzEnabled, setAlsXzEnabled] = useState(DEFAULT_SETTINGS.alsXzEnabled)
+  const [xWingEnabled, setXWingEnabled] = useState(initialSettings.xWingEnabled)
+  const [finnedXWingEnabled, setFinnedXWingEnabled] = useState(initialSettings.finnedXWingEnabled)
+  const [swordfishEnabled, setSwordfishEnabled] = useState(initialSettings.swordfishEnabled)
+  const [finnedSwordfishEnabled, setFinnedSwordfishEnabled] = useState(initialSettings.finnedSwordfishEnabled)
+  const [alsXzEnabled, setAlsXzEnabled] = useState(initialSettings.alsXzEnabled)
   // The four fish toggles as the one set the engine takes.
   const enabledFish = useMemo(() => {
     const enabled = new Set<FishTechnique>()
@@ -1722,32 +1750,32 @@ export default function App() {
   //    dragonGenerationDisregardsSingleDigitAic is also false, and
   //    dragonGenerationDisregardsGenericAic while dragonGenerationDisregardsAic is
   const [dragonGenerationDisregardsSingleDigitAic, setDragonGenerationDisregardsSingleDigitAic] = useState(
-    DEFAULT_SETTINGS.dragonGenerationDisregardsSingleDigitAic,
+    initialSettings.dragonGenerationDisregardsSingleDigitAic,
   )
   const [dragonGenerationDisregardsAic, setDragonGenerationDisregardsAic] = useState(
-    DEFAULT_SETTINGS.dragonGenerationDisregardsAic,
+    initialSettings.dragonGenerationDisregardsAic,
   )
   const [dragonGenerationDisregardsGenericAic, setDragonGenerationDisregardsGenericAic] = useState(
-    DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic,
+    initialSettings.dragonGenerationDisregardsGenericAic,
   )
   const [dynamicDragonPuzzleForbidsDoubleDragon, setDynamicDragonPuzzleForbidsDoubleDragon] = useState(
-    DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsDoubleDragon,
+    initialSettings.dynamicDragonPuzzleForbidsDoubleDragon,
   )
   const [dynamicDragonPuzzleForbidsPlainDragon, setDynamicDragonPuzzleForbidsPlainDragon] = useState(
-    DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon,
+    initialSettings.dynamicDragonPuzzleForbidsPlainDragon,
   )
-  const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(DEFAULT_SETTINGS.aicLimitPerDragonStep)
-  const [maxTechniquesPerDragonStep, setMaxTechniquesPerDragonStep] = useState(DEFAULT_SETTINGS.maxTechniquesPerDragonStep)
-  const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(DEFAULT_SETTINGS.exhaustiveDragonColouring)
-  const [optimizeDragons, setOptimizeDragons] = useState(DEFAULT_SETTINGS.optimizeDragons)
-  const [optimizeDynamicDragons, setOptimizeDynamicDragons] = useState(DEFAULT_SETTINGS.optimizeDynamicDragons)
-  const [easySolveEnabled, setEasySolveEnabled] = useState(DEFAULT_SETTINGS.easySolveEnabled)
-  const [solvePathTimeoutMs, setSolvePathTimeoutMs] = useState(DEFAULT_SETTINGS.solvePathTimeoutMs)
+  const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(initialSettings.aicLimitPerDragonStep)
+  const [maxTechniquesPerDragonStep, setMaxTechniquesPerDragonStep] = useState(initialSettings.maxTechniquesPerDragonStep)
+  const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(initialSettings.exhaustiveDragonColouring)
+  const [optimizeDragons, setOptimizeDragons] = useState(initialSettings.optimizeDragons)
+  const [optimizeDynamicDragons, setOptimizeDynamicDragons] = useState(initialSettings.optimizeDynamicDragons)
+  const [easySolveEnabled, setEasySolveEnabled] = useState(initialSettings.easySolveEnabled)
+  const [solvePathTimeoutMs, setSolvePathTimeoutMs] = useState(initialSettings.solvePathTimeoutMs)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
-    DEFAULT_SETTINGS.dynamicDragonAutoSolveIncludesAics,
+    initialSettings.dynamicDragonAutoSolveIncludesAics,
   )
   const [dragonGenerationTimeoutMs, setDragonGenerationTimeoutMs] = useState(
-    DEFAULT_SETTINGS.dragonGenerationTimeoutMs,
+    initialSettings.dragonGenerationTimeoutMs,
   )
   const [helpOpen, setHelpOpen] = useState(false)
   const [confirmOptimizeDynamicOpen, setConfirmOptimizeDynamicOpen] = useState(false)
@@ -1813,6 +1841,8 @@ export default function App() {
     () => candidateColors.some((row) => row.some((cell) => cell.some((paint) => paint !== null))),
     [candidateColors],
   )
+  const selectedCellHasPaintedColor =
+    selected !== null && candidateColors[selected.row][selected.col].some((paint) => paint !== null)
 
   // Every colour painted on the grid, in the Colour section's swatch order -
   // Autocomplete Colours takes the first two as the Medusa's two sides.
@@ -2152,8 +2182,45 @@ export default function App() {
           ? `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]} › ${techniqueTrackingName(highlightedTechnique.name)}`
           : `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]}`
   useAnalyticsArea(solverArea, AREA_LAYER.solver)
-  useEffect(() => {
-    trackSettingsChanges({
+  // Every setting as one AppSettings snapshot: saved so a reopened tab
+  // comes back as it was left (persistedState.ts), and diffed for usage
+  // analytics. A new setting must be added here and to the deps.
+  const currentSettings = useMemo<AppSettings>(
+    () => ({
+      keyboardMode,
+      showStrongLinks,
+      showBivalueCells,
+      gridWhiteMode,
+      minBaseMedusaFilter,
+      shortSingleDigitAicEnabled,
+      shortAicEnabled,
+      genericAicEnabled,
+      xWingEnabled,
+      finnedXWingEnabled,
+      swordfishEnabled,
+      finnedSwordfishEnabled,
+      alsXzEnabled,
+      dynamicDragonDisabled,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
+      allowedRule3Techniques: [...allowedRule3Techniques],
+      exhaustiveDragonColouring,
+      optimizeDragons,
+      optimizeDynamicDragons,
+      aicLimitPerDragonStep,
+      maxTechniquesPerDragonStep,
+      dynamicDragonAutoSolveIncludesAics,
+      dragonGenerationDisregardsSingleDigitAic,
+      dragonGenerationDisregardsAic,
+      dragonGenerationDisregardsGenericAic,
+      dynamicDragonPuzzleForbidsPlainDragon,
+      dynamicDragonPuzzleForbidsDoubleDragon,
+      dragonGenerationTimeoutMs,
+      easySolveEnabled,
+      solvePathTimeoutMs,
+      hotkeys,
+    }),
+    [
       keyboardMode,
       showStrongLinks,
       showBivalueCells,
@@ -2185,8 +2252,18 @@ export default function App() {
       dragonGenerationTimeoutMs,
       easySolveEnabled,
       solvePathTimeoutMs,
-    })
+      hotkeys,
+    ],
+  )
+  useEffect(() => {
+    saveSettings(currentSettings)
+  }, [currentSettings])
+  useEffect(() => {
+    trackSettingsChanges(currentSettings as unknown as Record<string, unknown>)
   })
+  useEffect(() => {
+    saveGrid(grid)
+  }, [grid])
   const gridFilled = board.every((row) => row.every((value) => value !== 0)) && conflictedCells.size === 0
   useEffect(() => {
     if (gridFilled) {
@@ -3403,6 +3480,7 @@ export default function App() {
     setDynamicDragonPuzzleForbidsPlainDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon)
     setDynamicDragonPuzzleForbidsDoubleDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsDoubleDragon)
     setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
+    setHotkeys(DEFAULT_SETTINGS.hotkeys)
     setSwatchColors(defaultSwatchColors())
     setSwatchShapes(defaultSwatchShapes())
     showToast('Settings reset to defaults.')
@@ -4145,6 +4223,16 @@ export default function App() {
     commitGrid({ board, givens, candidates, candidateColors: createEmptyCandidateColors() })
   }
 
+  /** Un-paints every candidate in the selected cell only. */
+  function onClearCellCandidateColors() {
+    if (!selected) {
+      return
+    }
+    const nextColors = cloneCandidateColors(candidateColors)
+    nextColors[selected.row][selected.col] = nextColors[selected.row][selected.col].map(() => null)
+    commitGrid({ board, givens, candidates, candidateColors: nextColors })
+  }
+
   /** Paints one candidate with the selected colour - or un-paints it, or
    * splits it into two colours; see nextCandidatePaint. A manual annotation
    * only, never touched by any solving technique or auto-solve. Only
@@ -4178,16 +4266,95 @@ export default function App() {
   }
 
   async function onImport() {
-    const result = await importer.import(importText)
+    if (await importPuzzleText(importText)) {
+      setImportText('')
+    }
+  }
+
+  /** Imports a puzzle string (any format PuzzleImporter reads); shared by the
+   * import box and the paste shortcut. False (with the reason in the status
+   * line) when the text isn't a puzzle. */
+  async function importPuzzleText(text: string): Promise<boolean> {
+    const result = await importer.import(text)
     if (!result.ok) {
       setStatus(result.error)
+      return false
+    }
+    // Past an await - see latestRef.
+    // A new puzzle starts unpainted unless its string carries paint (a Copy
+    // Puzzle As-Is string does) - never the old puzzle's paint.
+    latestRef.current.commitGrid({
+      board: result.board,
+      givens: result.givens,
+      candidates: result.candidates,
+      candidateColors: result.candidateColors ?? createEmptyCandidateColors(),
+    })
+    reportImport(result.board, { importType: 'string', sourceFormat: importer.detectFormat(text) })
+    setHighlightedDigit(null)
+    setStatus('Puzzle imported. Click Solve to check it.')
+    return true
+  }
+
+  /** The paste shortcut: a puzzle string if the clipboard text is one, else
+   * a screenshot read by OCR, like a dropped one. Text is tried first because
+   * copying from some apps puts a rendered image on the clipboard next to the
+   * text; an image with no usable text beside it goes to OCR. */
+  async function importFromClipboard(text: string, image: Blob | null) {
+    const trimmed = text.trim()
+    if (trimmed && (await importPuzzleText(trimmed))) {
       return
     }
-    commitGrid({ board: result.board, givens: result.givens, candidates: result.candidates })
-    reportImport(result.board, { importType: 'string', sourceFormat: importer.detectFormat(importText) })
-    setHighlightedDigit(null)
-    setImportText('')
-    setStatus('Puzzle imported. Click Solve to check it.')
+    if (image) {
+      onImportImage(image)
+    } else if (!trimmed) {
+      setStatus('Nothing to paste - copy a puzzle string or a screenshot of a grid first.')
+    }
+  }
+
+  /** The paste shortcut when it isn't the browser's own Ctrl+V, so there is
+   * no paste event: ask the async Clipboard API (may prompt for permission). */
+  async function pasteFromClipboardApi() {
+    try {
+      if (navigator.clipboard.read) {
+        let text = ''
+        let image: Blob | null = null
+        for (const item of await navigator.clipboard.read()) {
+          const imageType = item.types.find((type) => type.startsWith('image/'))
+          if (imageType && !image) {
+            image = await item.getType(imageType)
+          }
+          if (item.types.includes('text/plain') && !text) {
+            text = await (await item.getType('text/plain')).text()
+          }
+        }
+        await importFromClipboard(text, image)
+      } else {
+        await importFromClipboard(await navigator.clipboard.readText(), null)
+      }
+    } catch {
+      setStatus("Couldn't read the clipboard - allow clipboard access, or paste into the import box instead.")
+    }
+  }
+
+  /** The browser's paste event, when the paste shortcut is Ctrl+V itself
+   * (the event carries the clipboard with no permission prompt). Only
+   * within the shortcut areas; the import box and the screenshot drop zone
+   * handle their own pastes. */
+  function onScopedPaste(event: ClipboardEvent<HTMLElement>) {
+    if (
+      busy ||
+      !isNativePasteHotkey(hotkeys.paste) ||
+      !isInHotkeyScope(event.target) ||
+      isTypingTarget(event.target)
+    ) {
+      return
+    }
+    event.preventDefault()
+    const image =
+      Array.from(event.clipboardData.items)
+        .find((item) => item.type.startsWith('image/'))
+        ?.getAsFile() ?? null
+    void importFromClipboard(event.clipboardData.getData('text/plain'), image)
   }
 
   function showToast(message: string) {
@@ -4195,10 +4362,14 @@ export default function App() {
     window.setTimeout(() => setToastMessage((current) => (current === message ? null : current)), 2200)
   }
 
-  async function onExportToSudokuCoach() {
+  /** "Copy Puzzle As-Is": the current progress as a Sudoku.Coach state
+   * string - givens, solved cells and candidates, which Sudoku.Coach reads,
+   * plus the candidate paint (by palette position), which only this app
+   * reads back. Pastes into either. Also the "Copy puzzle as-is" shortcut. */
+  async function onCopyPuzzleAsIs() {
     let exported: string
     try {
-      exported = await importer.exportToSudokuCoachState(board, givens, candidates)
+      exported = await importer.exportToSudokuCoachState(board, givens, candidates, candidateColors)
     } catch {
       setStatus('Could not export this puzzle.')
       return
@@ -4212,10 +4383,10 @@ export default function App() {
     }
   }
 
-  /** "Copy Puzzle": the puzzle as a plain 81-character string (row by row,
+  /** "Copy Original": the puzzle as a plain 81-character string (row by row,
    * 0 = empty) - its givens, or every filled cell when the grid has no
    * givens (typed in by hand), since then the digits on it are the puzzle. */
-  async function onCopyPuzzleString() {
+  async function onCopyOriginal() {
     const hasGivens = givens.some((row) => row.some(Boolean))
     const puzzle = board
       .flatMap((row, r) => row.map((value, c) => (value !== 0 && (!hasGivens || givens[r][c]) ? String(value) : '0')))
@@ -4235,7 +4406,7 @@ export default function App() {
    * ever asked. Like the SudokuWiki text-board import, a screenshot has
    * no way to tell an original given apart from a cell you'd already
    * solved yourself, so nothing comes back locked. */
-  function onImportImage(file: File) {
+  function onImportImage(file: Blob) {
     setStatus('Reading screenshot…')
     runBusyTask(
       'ocr',
@@ -4299,13 +4470,78 @@ export default function App() {
     }
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+  /** The last key a shortcut handled, so its keyup is swallowed too - a
+   * focused pad button would otherwise still be "clicked" by Space's keyup
+   * in some browsers even though its keydown was prevented. */
+  const handledHotkeyKeyRef = useRef<string | null>(null)
+
+  /** Runs a keyboard shortcut (Settings -> Keyboard shortcuts); true if the
+   * key press was one. Only called for keys pressed inside the grid or one
+   * of the four pads (isInHotkeyScope). */
+  function runHotkey(event: KeyboardEvent<HTMLElement>): boolean {
+    const match = matchHotkey(event, hotkeys)
+    if (!match) {
+      return false
+    }
+    if (match.action === 'paste' && isNativePasteHotkey(hotkeys.paste)) {
+      // Leave Ctrl+V to the browser: its paste event (onScopedPaste) carries
+      // the clipboard without asking for permission.
+      return true
+    }
+    event.preventDefault()
+    handledHotkeyKeyRef.current = keyNameOf(event)
+    switch (match.action) {
+      case 'toggleInputMode':
+        toggleKeyboardMode()
+        break
+      case 'candidateDigit':
+        if (selected && match.digit) {
+          toggleCandidate(selected.row, selected.col, match.digit)
+        }
+        break
+      case 'deselect':
+        setSelected(null)
+        break
+      case 'undo':
+        if (!busy) {
+          undo()
+        }
+        break
+      case 'redo':
+        if (!busy) {
+          redo()
+        }
+        break
+      case 'copyGrid':
+        void onCopyPuzzleAsIs()
+        break
+      case 'paste':
+        if (!busy) {
+          void pasteFromClipboardApi()
+        }
+        break
+    }
+    return true
+  }
+
+  function onKeyUp(event: KeyboardEvent<HTMLElement>) {
+    if (handledHotkeyKeyRef.current !== null && handledHotkeyKeyRef.current === keyNameOf(event)) {
+      handledHotkeyKeyRef.current = null
+      event.preventDefault()
+    }
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (isTypingTarget(event.target)) {
       // Let the import box handle its own typing instead of routing digits
       // and arrow keys to the grid.
       return
     }
-    if (!selected) {
+    if (isInHotkeyScope(event.target) && runHotkey(event)) {
+      return
+    }
+    if (!selected || event.ctrlKey || event.metaKey || event.altKey) {
+      // A modified digit is a shortcut (or the browser's own), never entry.
       return
     }
 
@@ -5016,10 +5252,13 @@ export default function App() {
           <div className="dropdown-section">
             <button
               type="button"
-              className="dropdown-item"
+              className="dropdown-item settings-reset-button"
               onClick={resetSettingsToDefaults}
               title="Puts every setting, including your custom paint colours, back to its default. Your puzzle is not touched."
             >
+              <span className="settings-reset-icon" aria-hidden="true">
+                ↺
+              </span>
               Reset to defaults
             </button>
           </div>
@@ -5039,6 +5278,10 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           */}
+          <div className="dropdown-section">
+            <HotkeySettings hotkeys={hotkeys} onChange={setHotkeys} />
+          </div>
+          <div className="dropdown-divider" />
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">Display &amp; hints</h3>
             <label className="menu-checkbox">
@@ -5224,6 +5467,7 @@ export default function App() {
       role="grid"
       aria-label="Sudoku board"
       tabIndex={0}
+      data-hotkey-scope
     >
       {NINE.map((boxIndex) => {
         const boxRow = Math.floor(boxIndex / 3)
@@ -5549,20 +5793,20 @@ export default function App() {
         <button
           type="button"
           className="copy-sc-button"
-          onClick={onExportToSudokuCoach}
+          onClick={onCopyPuzzleAsIs}
           disabled={busy}
-          title="Copies a Sudoku.Coach puzzle string for the current grid to your clipboard"
+          title="Copies the current progress - givens, solved cells, candidates and colours - to your clipboard. Pastes into Sudoku.Coach (without the colours) or back into this app."
         >
-          Copy to SC
+          Copy Puzzle As-Is
         </button>
         <button
           type="button"
           className="copy-sc-button"
-          onClick={onCopyPuzzleString}
+          onClick={onCopyOriginal}
           disabled={busy}
-          title="Copies the puzzle as an 81-character string (0 = empty) to your clipboard"
+          title="Copies just the original puzzle (its givens) as an 81-character string (0 = empty) to your clipboard"
         >
-          Copy Puzzle
+          Copy Original
         </button>
       </div>
     </>
@@ -5596,7 +5840,7 @@ export default function App() {
   }
 
   const solutionGroup = (
-    <section className="control-group solution-group">
+    <section className="control-group solution-group" data-hotkey-scope>
       {/* Each group's one "undo this section" action sits in the header,
           right of the title, rather than as a stray button under the pad -
           the old placement rendered as an unpadded, left-hugging sliver and
@@ -5623,7 +5867,7 @@ export default function App() {
   )
 
   const candidateGroup = (
-    <section className="control-group candidate-group">
+    <section className="control-group candidate-group" data-hotkey-scope>
       <div className="control-header">
         <h2 className="control-label">Candidates</h2>
         {keyboardInputToggle('candidate')}
@@ -5666,18 +5910,29 @@ export default function App() {
   )
 
   const paintGroup = (
-    <section className="control-group paint-group">
+    <section className="control-group paint-group" data-hotkey-scope>
       <div className="control-header">
         <h2 className="control-label">Candidate Colours</h2>
-        <button
-          type="button"
-          className="control-header-action"
-          disabled={!hasAnyPaintedColor}
-          onClick={onClearAllCandidateColors}
-          title="Remove every candidate colour from the grid"
-        >
-          Clear all
-        </button>
+        <div className="control-header-actions">
+          <button
+            type="button"
+            className="control-header-action"
+            disabled={!selectedCellHasPaintedColor}
+            onClick={onClearCellCandidateColors}
+            title="Remove every candidate colour from the selected cell"
+          >
+            Clear cell
+          </button>
+          <button
+            type="button"
+            className="control-header-action"
+            disabled={!hasAnyPaintedColor}
+            onClick={onClearAllCandidateColors}
+            title="Remove every candidate colour from the grid"
+          >
+            Clear all
+          </button>
+        </div>
       </div>
       <div className="paint-swatches">
         {candidateColorSwatches.map((swatch) => (
@@ -5749,7 +6004,7 @@ export default function App() {
   )
 
   const highlightGroup = (
-    <section className="control-group highlight-group">
+    <section className="control-group highlight-group" data-hotkey-scope>
       <div className="control-header">
         <h2 className="control-label">Highlight digit</h2>
         <button
@@ -6031,16 +6286,15 @@ export default function App() {
           onCancel={() => setConfirmOptimizeDynamicOpen(false)}
         >
           <p>
-            <b>Exhaustive Dragon Colouring is currently OFF</b>, and Optimize Dynamic Dragons is much slower without it.
+            <b>CAUTION: Unless you have a somewhat decent CPU, I recommend you to turn ON Exhaustive Dragon Colouring first</b>.
           </p>
           <p>
-            This should be turned ON for Dynamic Dragon analysis purposes only.  Keep it OFF for normal puzzle solving.
+            This setting should be turned ON for Dynamic Dragon analysis purposes only.  Keep it <b>OFF</b> if you are just doing normal puzzle solving.
           </p>
           <p>  
-             The techniques list, the solve path and the solvability check could each take many seconds to update
-            after every change you make to the grid.
+             If this is turned ON right now, expect slower performance and higher CPU usage.  This is because the Dynamic Dragon analysis will be optimized to find more solutions, which requires more CPU cycles. 
           </p>
-          <p className="confirm-tip">Tip: turn Exhaustive Dragon Colouring ON first to keep things quick.</p>
+          <p className="confirm-tip">Tip: turn Exhaustive Dragon Colouring ON first to keep things quick and minimize CPU usage.</p>
         </ConfirmDialog>
       )}
     </>
@@ -6081,6 +6335,8 @@ export default function App() {
           .filter(Boolean)
           .join(' ')}
         onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        onPaste={onScopedPaste}
       >
         {!phone && header}
         {toolbar}
@@ -6118,7 +6374,7 @@ export default function App() {
   }
 
   return (
-    <main className="page" onKeyDown={onKeyDown}>
+    <main className="page" onKeyDown={onKeyDown} onKeyUp={onKeyUp} onPaste={onScopedPaste}>
       {header}
 
       {toolbar}
