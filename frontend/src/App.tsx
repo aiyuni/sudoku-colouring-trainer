@@ -70,6 +70,18 @@ import {
   type CandidatePaintShape,
 } from './sudoku/types'
 import HelpModal from './HelpModal'
+import HintModal from './HintModal'
+import {
+  buildTechniqueHint,
+  checkMedusaPaint,
+  colouringHintKind,
+  dragonMoveSteps,
+  medusaColouringSteps,
+  medusaStartCandidate,
+  type HintStep,
+  type MedusaHintContext,
+  type TechniqueHint,
+} from './hints'
 import TutorialPage from './tutorial/TutorialPage'
 import { useCompactLayout } from './useCompactLayout'
 import { BusyIndicator } from './BusyIndicator'
@@ -117,6 +129,7 @@ import {
   fullTechniqueEffect,
   countEffectiveEliminations,
   applyTechniqueEffect,
+  pickEasiestInstance,
   type SolvePathResult,
   boardsEqual,
   candidatesEqual,
@@ -144,7 +157,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.8.2-beta'
+const APP_VERSION = 'v0.8.3-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -858,6 +871,24 @@ type AutocompleteResult =
       candidatesBefore: CandidateGrid
     }
 
+/** What checkPaintedDragon (in App) makes of the painted colouring - the
+ * shared core of Autocomplete Dragon and the Hint popup's Dragon hints. */
+type PaintedDragonCheck =
+  | { kind: 'invalid'; title: string; lines: string[] }
+  | { kind: 'not-stuck' }
+  | { kind: 'no-result' }
+  | {
+      kind: 'found'
+      outcome: Extract<ReturnType<typeof autocompleteDragon>, { kind: 'found' }>
+      /** The log, its text already renamed to the user's colours. */
+      moves: DragonMove[]
+      roleSwatch: Record<DragonColor, MedusaColourSwatch>
+      rename: (text: string) => string
+      assignment: { darkBlue?: MedusaColourSwatch; orange?: MedusaColourSwatch }
+      /** The painted dragon colours (0-2). */
+      extra: MedusaColourSwatch[]
+    }
+
 /** The two painted colours "Autocomplete Colours" treats as the Medusa's two
  * sides: the first two swatches, in the Colour section's order, that are on
  * the grid - so light blue and light yellow whenever both are used. */
@@ -1089,6 +1120,8 @@ interface TechniquePanelProps {
   activeSolvePathIndex: number | null
   onSelectSolvePathStep: (index: number) => void
   onApply: () => void
+  /** Opens the Hint popup (the Techniques tab's Hint button). */
+  onHint: () => void
   canApply: boolean
   onGenerateSolvePath: () => void
   solvePathStale: boolean
@@ -1142,6 +1175,7 @@ function TechniquePanel({
   activeSolvePathIndex,
   onSelectSolvePathStep,
   onApply,
+  onHint,
   canApply,
   onGenerateSolvePath,
   solvePathStale,
@@ -1205,9 +1239,21 @@ function TechniquePanel({
             Find by colours
           </button>
         </div>
-        <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
-          Apply
-        </button>
+        <div className="technique-header-actions">
+          {tab === 'techniques' && (
+            <button
+              type="button"
+              className="technique-hint-button"
+              onClick={onHint}
+              title="Get a hint about the easiest technique on the grid, one step at a time."
+            >
+              Hint
+            </button>
+          )}
+          <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
+            Apply
+          </button>
+        </div>
       </div>
       <div className="technique-panel-body">
       {tab === 'techniques' ? (
@@ -1634,7 +1680,7 @@ function DropdownMenu({
   )
 }
 
-type BusyTaskKind = 'solve' | 'generate' | 'ocr' | 'solve-path' | 'find' | 'auto-solve' | 'autocomplete'
+type BusyTaskKind = 'solve' | 'generate' | 'ocr' | 'solve-path' | 'find' | 'auto-solve' | 'autocomplete' | 'hint'
 
 interface RunningBusyTask extends BusyTask {
   id: number
@@ -1778,6 +1824,11 @@ export default function App() {
     initialSettings.dragonGenerationTimeoutMs,
   )
   const [helpOpen, setHelpOpen] = useState(false)
+  /** The Hint popup (Techniques tab): open while non-null. */
+  const [hintView, setHintView] = useState<{ hint: TechniqueHint | null; revealed: number } | null>(null)
+  /** The last hint shown, kept after the popup closes: reopening it for the
+   * same technique keeps what was already revealed (see onOpenHint). */
+  const lastHintRef = useRef<{ hint: TechniqueHint; revealed: number } | null>(null)
   const [confirmOptimizeDynamicOpen, setConfirmOptimizeDynamicOpen] = useState(false)
   const [tutorialOpen, setTutorialOpen] = useState(false)
   const { compact, phone, landscape } = useCompactLayout()
@@ -3810,25 +3861,7 @@ export default function App() {
     }
     const [first, second] = paintedSwatches
     const colorNames = { blue: first.label.toLowerCase(), yellow: second.label.toLowerCase() }
-
-    const seeds: MedusaSeed[] = []
-    const problems: string[] = []
-    for (let row = 0; row < 9; row++) {
-      for (let col = 0; col < 9; col++) {
-        for (let digit = 1; digit <= 9; digit++) {
-          const paint = candidateColors[row][col][digit - 1]
-          const hasFirst = paint?.some((layer) => layer.color === first.id) ?? false
-          const hasSecond = paint?.some((layer) => layer.color === second.id) ?? false
-          if (hasFirst && hasSecond) {
-            problems.push(
-              `${formatCandidate({ row, col, digit })} is painted both ${colorNames.blue} and ${colorNames.yellow}, but a candidate can only be on one side of a Medusa.`,
-            )
-          } else if (hasFirst || hasSecond) {
-            seeds.push({ row, col, digit, color: hasFirst ? 'blue' : 'yellow' })
-          }
-        }
-      }
-    }
+    const { seeds, problems } = medusaSeedsFromPaint(first, second)
 
     const outcome = autocompleteMedusa(medusaFinder, board, candidates, seeds, colorNames)
     if (outcome.kind === 'invalid') {
@@ -3899,9 +3932,117 @@ export default function App() {
     if (paintedSwatches.length < 3 || paintedSwatches.length > 4) {
       return
     }
+    const checked = checkPaintedDragon(dynamic)
+    const kindName = dynamic ? 'Dynamic Dragon' : 'Dragon'
+    if (checked.kind === 'invalid') {
+      say('error', checked.title, checked.lines)
+      setStatus(checked.title)
+      return
+    }
+    if (checked.kind === 'not-stuck') {
+      say('info', "The current Medusa isn't stuck, so it can't start a Dragon.", [
+        'Its own Medusa rules already lead to eliminations or placements - try Autocomplete Medusa instead.',
+      ])
+      setStatus("The current Medusa isn't stuck, so it can't start a Dragon.")
+      return
+    }
+    if (checked.kind === 'no-result') {
+      say('info', `Continuing the current ${kindName} does not lead to any eliminations or placements.`, [
+        dynamic
+          ? 'Your colouring is a valid Dynamic Dragon so far, but continuing it with the Dynamic Dragon techniques selected in Dragon Configuration leads to a dead end.'
+          : 'Your colouring is a valid plain Dragon so far, but continuing the Dragon Colouring leads to a dead end.',
+      ])
+      setStatus(`Continuing the current ${kindName} does not lead to any eliminations or placements.`)
+      return
+    }
+
+    const { outcome, moves, roleSwatch, rename, assignment, extra } = checked
+    // Named like the Techniques list's rows: a Dynamic Dragon after the
+    // techniques its Extension Rule 3 steps used, and one that never needed
+    // Rule 3 is just a (plain) Dragon.
+    const usesRule3 = moves.some((move) => move.kind === 'extension-rule3')
+    const built = usesRule3
+      ? buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), outcome.chainKey, moves)
+      : buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', outcome.chainKey, moves)
+    const rolePaint = Object.fromEntries(
+      (Object.keys(roleSwatch) as DragonColor[]).map((color) => [
+        color,
+        { color: roleSwatch[color].id, shape: swatchShapes[roleSwatch[color].id] },
+      ]),
+    ) as Record<DragonColor, CandidatePaintLayer>
+
+    // Paint the finished colouring onto the grid (one undoable step), the
+    // way Autocomplete medusa does - only onto candidates the user hasn't
+    // painted, so their own paint is never replaced.
+    const final = foldDragonMoves(moves, moves.length - 1)
+    const nextColors = cloneCandidateColors(candidateColors)
+    let added = 0
+    for (const [refs, color] of [
+      [final.blueCandidates, 'blue'],
+      [final.yellowCandidates, 'yellow'],
+      [final.darkBlueCandidates, 'darkBlue'],
+      [final.orangeCandidates, 'orange'],
+    ] as const) {
+      for (const ref of refs) {
+        if (!nextColors[ref.row][ref.col][ref.digit - 1] && candidates[ref.row][ref.col][ref.digit - 1]) {
+          nextColors[ref.row][ref.col][ref.digit - 1] = [rolePaint[color]]
+          added++
+        }
+      }
+    }
+    if (added > 0) {
+      commitGrid({ board, givens, candidates, candidateColors: nextColors })
+    }
+
+    const label = (color: DragonColor) => roleSwatch[color].label.toLowerCase()
+    const colourNotes: string[] = []
+    if (extra.length === 1) {
+      const side = assignment.darkBlue ? 'blue' : 'yellow'
+      colourNotes.push(`${label(side === 'blue' ? 'darkBlue' : 'orange')} is the dragon colour of the ${label(side)} side`)
+    } else if (assignment.darkBlue !== extra[0]) {
+      colourNotes.push(
+        `your colouring only works with ${label('darkBlue')} as the dragon colour of the ${label('blue')} side and ${label('orange')} of the ${label('yellow')} side, so they're used that way round`,
+      )
+    }
+    for (const color of ['darkBlue', 'orange'] as const) {
+      if (!paintedSwatches.includes(roleSwatch[color]) && moves.some((m) => m.colored.some((n) => n.color === color))) {
+        colourNotes.push(`${label(color)} is used for the ${label(color === 'darkBlue' ? 'blue' : 'yellow')} side's dragon colour`)
+      }
+    }
+    if (dynamic && !usesRule3) {
+      colourNotes.push('no Dynamic Dragon technique was needed - plain Dragon Colouring does it')
+    }
+    const autocompletedSteps = moves.length - outcome.checkedMoves
+    const summary = [
+      `Your colouring checks out (steps 1-${outcome.checkedMoves}); the Dragon continues from there in ${autocompletedSteps} more step${autocompletedSteps === 1 ? '' : 's'}.`,
+      ...colourNotes.map((note) => capitalizeFirst(note) + '.'),
+    ].join(' ')
+    setAutocompleteResult({
+      kind: 'found',
+      source,
+      instance: { ...built, notation: rename(built.notation) },
+      summary,
+      dragon: { checkedMoves: outcome.checkedMoves, rolePaint, dynamic },
+      boardBefore: board,
+      candidatesBefore: candidates,
+    })
+    // Open the step player where the user left off.
+    setDragonStepIndex(outcome.checkedMoves - 1)
+    setDragonSubstepIndex(null)
+    setStatus(`Autocompleted the ${kindName}: ${moves.length} steps.`)
+  }
+
+  /** The checking half of Autocomplete Dragon, shared with the Hint popup:
+   * maps the painted swatches onto Dragon's four colours (see
+   * onAutocompleteDragon), checks the colouring and carries it on. Takes 2-4
+   * painted colours (2: a Medusa with no dragon colours yet - only the hint
+   * asks that). The `found` moves' text is already in the user's colours. */
+  function checkPaintedDragon(dynamic: boolean): PaintedDragonCheck {
     const [medusaA, medusaB, ...extra] = paintedSwatches
     const assignments: Array<{ darkBlue?: MedusaColourSwatch; orange?: MedusaColourSwatch }> =
-      extra.length === 2
+      extra.length === 0
+        ? [{}]
+        : extra.length === 2
         ? [
             { darkBlue: extra[0], orange: extra[1] },
             { darkBlue: extra[1], orange: extra[0] },
@@ -3943,9 +4084,7 @@ export default function App() {
       }
     }
     if (problems.length > 0) {
-      say('error', 'The current Dragon colours are invalid.', problems.slice(0, 5))
-      setStatus('The current Dragon colours are invalid.')
-      return
+      return { kind: 'invalid', title: 'The current Dragon colours are invalid.', lines: problems.slice(0, 5) }
     }
 
     const extendOptions: DragonExtendOptions = dynamic
@@ -3961,7 +4100,6 @@ export default function App() {
           optimizeDynamic: optimizeDynamicDragons,
         }
       : { exhaustive: exhaustiveDragonColouring, optimize: optimizeDragons }
-    const kindName = dynamic ? 'Dynamic Dragon' : 'Dragon'
     let firstFailure: { outcome: Extract<ReturnType<typeof autocompleteDragon>, { kind: 'invalid' }>; rename: (text: string) => string } | null = null
     for (const assignment of assignments) {
       const roleSwatch: Record<DragonColor, MedusaColourSwatch> = {
@@ -3980,102 +4118,15 @@ export default function App() {
         firstFailure ??= { outcome, rename }
         continue
       }
-      if (outcome.kind === 'not-stuck') {
-        say('info', "The current Medusa isn't stuck, so it can't start a Dragon.", [
-          'Its own Medusa rules already lead to eliminations or placements - try Autocomplete Medusa instead.',
-        ])
-        setStatus("The current Medusa isn't stuck, so it can't start a Dragon.")
-        return
+      if (outcome.kind === 'not-stuck' || outcome.kind === 'no-result') {
+        return { kind: outcome.kind }
       }
-      if (outcome.kind === 'no-result') {
-        say('info', `Continuing the current ${kindName} does not lead to any eliminations or placements.`, [
-          dynamic
-            ? 'Your colouring is a valid Dynamic Dragon so far, but continuing it with the Dynamic Dragon techniques selected in Dragon Configuration leads to a dead end.'
-            : 'Your colouring is a valid plain Dragon so far, but continuing the Dragon Colouring leads to a dead end.',
-        ])
-        setStatus(`Continuing the current ${kindName} does not lead to any eliminations or placements.`)
-        return
-      }
-
       const moves = outcome.moves.map((move) => ({
         ...move,
         description: rename(move.description),
         substeps: move.substeps?.map((substep) => ({ ...substep, clause: rename(substep.clause) })),
       }))
-      // Named like the Techniques list's rows: a Dynamic Dragon after the
-      // techniques its Extension Rule 3 steps used, and one that never needed
-      // Rule 3 is just a (plain) Dragon.
-      const usesRule3 = moves.some((move) => move.kind === 'extension-rule3')
-      const built = usesRule3
-        ? buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), outcome.chainKey, moves)
-        : buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', outcome.chainKey, moves)
-      const rolePaint = Object.fromEntries(
-        (Object.keys(roleSwatch) as DragonColor[]).map((color) => [
-          color,
-          { color: roleSwatch[color].id, shape: swatchShapes[roleSwatch[color].id] },
-        ]),
-      ) as Record<DragonColor, CandidatePaintLayer>
-
-      // Paint the finished colouring onto the grid (one undoable step), the
-      // way Autocomplete medusa does - only onto candidates the user hasn't
-      // painted, so their own paint is never replaced.
-      const final = foldDragonMoves(moves, moves.length - 1)
-      const nextColors = cloneCandidateColors(candidateColors)
-      let added = 0
-      for (const [refs, color] of [
-        [final.blueCandidates, 'blue'],
-        [final.yellowCandidates, 'yellow'],
-        [final.darkBlueCandidates, 'darkBlue'],
-        [final.orangeCandidates, 'orange'],
-      ] as const) {
-        for (const ref of refs) {
-          if (!nextColors[ref.row][ref.col][ref.digit - 1] && candidates[ref.row][ref.col][ref.digit - 1]) {
-            nextColors[ref.row][ref.col][ref.digit - 1] = [rolePaint[color]]
-            added++
-          }
-        }
-      }
-      if (added > 0) {
-        commitGrid({ board, givens, candidates, candidateColors: nextColors })
-      }
-
-      const label = (color: DragonColor) => roleSwatch[color].label.toLowerCase()
-      const colourNotes: string[] = []
-      if (extra.length === 1) {
-        const side = assignment.darkBlue ? 'blue' : 'yellow'
-        colourNotes.push(`${label(side === 'blue' ? 'darkBlue' : 'orange')} is the dragon colour of the ${label(side)} side`)
-      } else if (assignment.darkBlue !== extra[0]) {
-        colourNotes.push(
-          `your colouring only works with ${label('darkBlue')} as the dragon colour of the ${label('blue')} side and ${label('orange')} of the ${label('yellow')} side, so they're used that way round`,
-        )
-      }
-      for (const color of ['darkBlue', 'orange'] as const) {
-        if (!paintedSwatches.includes(roleSwatch[color]) && moves.some((m) => m.colored.some((n) => n.color === color))) {
-          colourNotes.push(`${label(color)} is used for the ${label(color === 'darkBlue' ? 'blue' : 'yellow')} side's dragon colour`)
-        }
-      }
-      if (dynamic && !usesRule3) {
-        colourNotes.push('no Dynamic Dragon technique was needed - plain Dragon Colouring does it')
-      }
-      const autocompletedSteps = moves.length - outcome.checkedMoves
-      const summary = [
-        `Your colouring checks out (steps 1-${outcome.checkedMoves}); the Dragon continues from there in ${autocompletedSteps} more step${autocompletedSteps === 1 ? '' : 's'}.`,
-        ...colourNotes.map((note) => capitalizeFirst(note) + '.'),
-      ].join(' ')
-      setAutocompleteResult({
-        kind: 'found',
-        source,
-        instance: { ...built, notation: rename(built.notation) },
-        summary,
-        dragon: { checkedMoves: outcome.checkedMoves, rolePaint, dynamic },
-        boardBefore: board,
-        candidatesBefore: candidates,
-      })
-      // Open the step player where the user left off.
-      setDragonStepIndex(outcome.checkedMoves - 1)
-      setDragonSubstepIndex(null)
-      setStatus(`Autocompleted the ${kindName}: ${moves.length} steps.`)
-      return
+      return { kind: 'found', outcome, moves, roleSwatch, rename, assignment, extra }
     }
 
     const failure = firstFailure!
@@ -4085,8 +4136,169 @@ export default function App() {
     if (!dynamic && failure.outcome.stage === 'dragon' && !dynamicDragonDisabled) {
       lines.push('If you used Dynamic Dragon techniques, try Autocomplete Dynamic Dragon instead.')
     }
-    say('error', title, lines)
-    setStatus(title)
+    return { kind: 'invalid', title, lines }
+  }
+
+  /** The candidates painted in the two Medusa colours `first` (blue side)
+   * and `second` (yellow side), and any painted in both (a problem). */
+  function medusaSeedsFromPaint(first: MedusaColourSwatch, second: MedusaColourSwatch) {
+    const seeds: MedusaSeed[] = []
+    const problems: string[] = []
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        for (let digit = 1; digit <= 9; digit++) {
+          const paint = candidateColors[row][col][digit - 1]
+          const hasFirst = paint?.some((layer) => layer.color === first.id) ?? false
+          const hasSecond = paint?.some((layer) => layer.color === second.id) ?? false
+          if (hasFirst && hasSecond) {
+            problems.push(
+              `${formatCandidate({ row, col, digit })} is painted both ${first.label.toLowerCase()} and ${second.label.toLowerCase()}, but a candidate can only be on one side of a Medusa.`,
+            )
+          } else if (hasFirst || hasSecond) {
+            seeds.push({ row, col, digit, color: hasFirst ? 'blue' : 'yellow' })
+          }
+        }
+      }
+    }
+    return { seeds, problems }
+  }
+
+  /** The Hint popup's steps for the easiest technique on the grid (null when
+   * none applies). A 3D Medusa or single (Dynamic) Dragon reads the user's
+   * own paint the way Find by colours does - the first two painted colours
+   * are the Medusa, any others its dragon colours - and says which
+   * candidate to look at next; everything else gets fixed advice (hints.ts). */
+  function computeHint(): TechniqueHint | null {
+    const instance = pickEasiestInstance(techniqueInstances)
+    if (!instance) {
+      return null
+    }
+    const kind = colouringHintKind(instance)
+    if (!kind) {
+      return buildTechniqueHint(instance, board, candidates)
+    }
+
+    // The Medusa colours: the first two painted, else the first swatches
+    // not painted yet (what the hint tells the user to paint with).
+    const medusaSwatches = [
+      ...paintedSwatches.slice(0, 2),
+      ...candidateColorSwatches.filter((swatch) => !paintedSwatches.some((p) => p.id === swatch.id)),
+    ].slice(0, 2)
+    const [first, second] = medusaSwatches
+    const { seeds, problems } = paintedSwatches.length > 0 ? medusaSeedsFromPaint(first, second) : { seeds: [], problems: [] }
+    const colorNames = { blue: first.label.toLowerCase(), yellow: second.label.toLowerCase() }
+    const say = (text: string, lines?: string[]): HintStep[] => [{ text, lines }]
+    if (problems.length > 0) {
+      return buildTechniqueHint(instance, board, candidates, say('Your Medusa colouring has a problem:', problems.slice(0, 5)))
+    }
+
+    if (kind === 'medusa') {
+      const context: MedusaHintContext = {
+        seeds,
+        colorNames,
+        targetChain: [...(instance.blueCandidates ?? []), ...(instance.yellowCandidates ?? [])],
+        focusCells: instance.medusaHighlightCells,
+      }
+      return buildTechniqueHint(instance, board, candidates, medusaColouringSteps(board, candidates, context))
+    }
+
+    // A single plain or Dynamic Dragon: finish the Medusa first, then the
+    // Dragon moves, one at a time.
+    const moves = instance.moves ?? []
+    const lastMove = moves[moves.length - 1]
+    const context: MedusaHintContext = {
+      seeds,
+      colorNames,
+      targetChain: moves[0]?.colored ?? [],
+      focusCells: lastMove ? [...lastMove.eliminated, ...lastMove.solved].map((c) => [c.row, c.col] as const) : [],
+    }
+    const deadEnd = (why: string) => {
+      const start = medusaStartCandidate(context.targetChain, context.focusCells)
+      return say(
+        `${why} The easiest ${kind === 'dynamic-dragon' ? 'Dynamic Dragon' : 'Dragon'} starts from the 3D Medusa that includes ${formatCandidate(start)} - clear your colours and start there.`,
+      )
+    }
+    const medusaCheck = checkMedusaPaint(board, candidates, context, true)
+    if (medusaCheck.kind === 'steps') {
+      return buildTechniqueHint(instance, board, candidates, medusaCheck.steps)
+    }
+    if (!medusaCheck.stuck) {
+      return buildTechniqueHint(
+        instance,
+        board,
+        candidates,
+        say(
+          "Your Medusa is fully coloured, and its own rules already prove something - it's a 3D Medusa, not the start of a Dragon.",
+          medusaCheck.builtNotation ? [medusaCheck.builtNotation] : undefined,
+        ),
+      )
+    }
+    if (paintedSwatches.length > 4) {
+      return buildTechniqueHint(
+        instance,
+        board,
+        candidates,
+        say(
+          `There are ${paintedSwatches.length} colours on the grid - a Dragon can only have 3 or 4 (two Medusa colours and one or two dragon colours).`,
+        ),
+      )
+    }
+    const checked = checkPaintedDragon(kind === 'dynamic-dragon')
+    const steps: HintStep[] =
+      checked.kind === 'invalid'
+        ? say(checked.title, checked.lines)
+        : checked.kind === 'not-stuck'
+          ? deadEnd("Your Medusa isn't stuck, so it can't start a Dragon.")
+          : checked.kind === 'no-result'
+            ? deadEnd('Your colouring is valid, but continuing it leads to a dead end.')
+            : (() => {
+                const next = checked.moves[checked.outcome.checkedMoves]
+                const colourSteps = next ? dragonMoveSteps(next, (text) => text) : []
+                // A dragon colour the user hasn't painted yet: say which
+                // swatch the hint's text means by it.
+                for (const color of ['darkBlue', 'orange'] as const) {
+                  const swatch = checked.roleSwatch[color]
+                  if (next?.colored.some((n) => n.color === color) && !paintedSwatches.includes(swatch)) {
+                    colourSteps[colourSteps.length - 1].text += ` Use ${swatch.label.toLowerCase()} as the ${checked.roleSwatch[color === 'darkBlue' ? 'blue' : 'yellow'].label.toLowerCase()} side's dragon colour.`
+                  }
+                }
+                return colourSteps
+              })()
+    return buildTechniqueHint(instance, board, candidates, steps)
+  }
+
+  /** The Hint button: works the hint out (under the busy indicator - a
+   * Dynamic Dragon hint re-runs Autocomplete Dynamic Dragon) and opens the
+   * popup. Reopened for the same technique it keeps what was revealed, up
+   * to the first hint that has changed since (the user has coloured the
+   * candidate it pointed at, say), so the new one is the latest shown. */
+  function onOpenHint() {
+    runBusyTask('hint', { title: 'Working out a hint…', detail: 'Finding the easiest technique on the grid.' }, () => {
+      const hint = computeHint()
+      if (!hint) {
+        setHintView({ hint: null, revealed: 1 })
+        return
+      }
+      const last = lastHintRef.current
+      let revealed = 1
+      if (last && last.hint.instanceId === hint.instanceId) {
+        const firstChanged = hint.steps.findIndex((step, i) => last.hint.steps[i]?.text !== step.text)
+        revealed = Math.min(last.revealed, firstChanged === -1 ? hint.steps.length : firstChanged + 1)
+      }
+      lastHintRef.current = { hint, revealed }
+      setHintView({ hint, revealed })
+    })
+  }
+
+  function onNextHint() {
+    setHintView((current) => {
+      if (!current?.hint) {
+        return current
+      }
+      const next = { hint: current.hint, revealed: Math.min(current.revealed + 1, current.hint.steps.length) }
+      lastHintRef.current = next
+      return next
+    })
   }
 
   /** Autocomplete Dynamic Dragon can run many Extension Rule 3 simulations
@@ -5422,6 +5634,7 @@ export default function App() {
       activeSolvePathIndex={activeSolvePathIndex}
       onSelectSolvePathStep={onSelectSolvePathStep}
       onApply={onApplyPanelSelection}
+      onHint={onOpenHint}
       canApply={
         techniquePanelTab === 'solve-path'
           ? activeSolvePathIndex !== null
@@ -6273,6 +6486,14 @@ export default function App() {
         />
       )}
       {tutorialOpen && <TutorialPage onClose={() => setTutorialOpen(false)} />}
+      {hintView && (
+        <HintModal
+          hint={hintView.hint}
+          revealed={hintView.revealed}
+          onNextHint={onNextHint}
+          onClose={() => setHintView(null)}
+        />
+      )}
 
       {confirmOptimizeDynamicOpen && (
         <ConfirmDialog
