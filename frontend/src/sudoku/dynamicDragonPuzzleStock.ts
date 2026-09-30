@@ -6,6 +6,9 @@ import {
 } from './SudokuDragonPuzzleGenerator'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import type { Board } from './types'
+import { DOUBLE_DRAGON_PUZZLE_STOCK } from './doubleDragonPuzzleStockData'
+import { DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK } from './doubleDynamicDragonPuzzleStockData'
+import { PuzzleImporter } from './PuzzleImporter'
 import { DYNAMIC_DRAGON_PUZZLE_STOCK } from './dynamicDragonPuzzleStockData'
 
 /** Random symmetry transforms tried (each re-verified) before falling back
@@ -13,9 +16,9 @@ import { DYNAMIC_DRAGON_PUZZLE_STOCK } from './dynamicDragonPuzzleStockData'
 const TRANSFORM_ATTEMPTS = 3
 
 const generator = new SudokuDragonPuzzleGenerator()
-/** Shuffle-bag of stock indices, so every position is served once before
- * any repeats within a session. */
-let bag: number[] = []
+/** Shuffle-bags of stock indices, one per stock, so every position is served
+ * once before any repeats within a session. */
+const bags = new Map<readonly string[], number[]>()
 
 /**
  * Serves a "Dynamic Dragon puzzle that must not allow plain Dragon"
@@ -39,27 +42,83 @@ let bag: number[] = []
  * the untransformed original if TRANSFORM_ATTEMPTS transforms all fail.
  */
 export function pickStockDynamicDragonPuzzle(options: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
-  if (DYNAMIC_DRAGON_PUZZLE_STOCK.length === 0) {
+  // The Double Dragon stock's positions need Dynamic Dragon too, and plain
+  // Dragon is stuck on them - so they count unless Double Dragon is forbidden.
+  return pickFromStock(options.forbidDoubleDragon ? DYNAMIC_DRAGON_PUZZLE_STOCK : DYNAMIC_OR_DOUBLE_STOCK, {
+    ...options,
+    requireDynamic: true,
+    forbidPlainDragon: true,
+  })
+}
+
+const DYNAMIC_OR_DOUBLE_STOCK: readonly string[] = [...DYNAMIC_DRAGON_PUZZLE_STOCK, ...DOUBLE_DRAGON_PUZZLE_STOCK]
+
+/** The "Double Dragon Colouring practice puzzle": plain Dragon stuck on
+ * every chain, Double Dragon progresses (`requireDoubleDragon`). Rarer still
+ * than the Dynamic stock's positions (they are a subset of that kind), so
+ * served the same way, from doubleDragonPuzzleStockData.ts. */
+export function pickStockDoubleDragonPuzzle(options: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
+  return pickFromStock(DOUBLE_DRAGON_PUZZLE_STOCK, {
+    ...options,
+    requireDynamic: false,
+    forbidPlainDragon: false,
+    requireDoubleDragon: true,
+  })
+}
+
+/** Serves the next stock entry that checks out under `checkOptions` (a
+ * random symmetry of it, or failing that the entry itself). An entry that
+ * no longer qualifies at all - e.g. a Dynamic entry a Double Dragon also
+ * solves, under "must not allow double Dragons" - is skipped for the next.
+ * If none qualifies, the first one tried is served unchecked, as before. */
+/** The "Double Dynamic Dragon Colouring practice puzzle": a mid-solve
+ * position where nothing else the app has progresses - not even Dynamic
+ * Dragon or Double Dragon with every technique and no limits - but Double
+ * Dynamic Dragon does. Stored as whole Sudoku.Coach states (the other
+ * techniques' eliminations are part of the position, so a fresh autofill
+ * would not do) and served as they are: re-checking a transformed copy would
+ * mean the full unlimited search, seconds per pick. See
+ * doubleDynamicDragonPuzzleStockData.ts. */
+let doubleDynamicBag: number[] = []
+export async function pickStockDoubleDynamicDragonPuzzle(): Promise<GeneratedDragonPuzzle | null> {
+  if (DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK.length === 0) {
     return null
   }
-  if (bag.length === 0) {
-    bag = shuffled(DYNAMIC_DRAGON_PUZZLE_STOCK.map((_, index) => index))
+  if (doubleDynamicBag.length === 0) {
+    doubleDynamicBag = shuffled(DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK.map((_, index) => index))
   }
-  const original = parseBoard(DYNAMIC_DRAGON_PUZZLE_STOCK[bag.pop()!])
-  const checkOptions: DragonPuzzleGenerateOptions = { ...options, requireDynamic: true, forbidPlainDragon: true }
+  const imported = await new PuzzleImporter().import(DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK[doubleDynamicBag.pop()!])
+  return imported.ok ? { board: imported.board, givens: imported.givens, candidates: imported.candidates } : null
+}
 
-  for (let attempt = 0; attempt < TRANSFORM_ATTEMPTS; attempt++) {
-    const verified = generator.checkPuzzleState(randomSymmetry(original), checkOptions)
+function pickFromStock(stock: readonly string[], checkOptions: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
+  if (stock.length === 0) {
+    return null
+  }
+  let firstTried: Board | null = null
+  for (let tries = 0; tries < stock.length; tries++) {
+    let bag = bags.get(stock)
+    if (!bag || bag.length === 0) {
+      bag = shuffled(stock.map((_, index) => index))
+      bags.set(stock, bag)
+    }
+    const original = parseBoard(stock[bag.pop()!])
+    firstTried ??= original
+
+    for (let attempt = 0; attempt < TRANSFORM_ATTEMPTS; attempt++) {
+      const verified = generator.checkPuzzleState(randomSymmetry(original), checkOptions)
+      if (verified) {
+        return verified
+      }
+    }
+    const verified = generator.checkPuzzleState(original, checkOptions)
     if (verified) {
       return verified
     }
   }
-  return generator.checkPuzzleState(original, checkOptions) ?? withAutofilledCandidates(original)
+  return withAutofilledCandidates(firstTried!)
 }
 
-/** Only reached if the original somehow fails its own re-check (it passed
- * offline under stricter settings) - still hand back the position rather
- * than nothing. */
 function withAutofilledCandidates(board: Board): GeneratedDragonPuzzle {
   const candidates = createEmptyCandidates()
   for (let r = 0; r < BOARD_SIZE; r++) {

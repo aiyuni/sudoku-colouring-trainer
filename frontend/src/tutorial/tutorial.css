@@ -390,6 +390,24 @@
 .tutorial-swatch-orange {
   background: #fb923c;
 }
+.tutorial-swatch-pink {
+  background: #e6a3e6;
+}
+.tutorial-swatch-purple {
+  background: #9313b5;
+}
+.tutorial-swatch-limeGreen {
+  background: #7bc82c;
+}
+.tutorial-swatch-darkGreen {
+  background: #3d5c0e;
+}
+/* A candidate both Double Dragons colour is split along the same diagonal as
+   on the board (first Dragon bottom-left). The key draws the lesson's own
+   first pair inline (TutorialPage's Legend); this is only the fallback. */
+.tutorial-swatch-split {
+  background: linear-gradient(to top right, #38bdf8 50%, #9313b5 50%);
+}
 .tutorial-swatch-eliminated {
   background: #f80909;
 }

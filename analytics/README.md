@@ -31,8 +31,8 @@ Where nothing reveals the version, `os_version` stays NULL (Safari on a Mac,
 Chrome on Android without hints), or is `10/11` (Windows in Firefox).
 
 The browser only sends `{puzzle, importType, sourceFormat, device}` (`device` = those hints). It never holds a
-credential, and the Worker has no read endpoint, so the data can only be read
-through your Cloudflare account. Everything here fits Cloudflare's free tier.
+credential. The data can only be read through your Cloudflare account or the
+password-protected `/admin` dashboard (see Usage analytics below). Everything here fits Cloudflare's free tier.
 
 ## One-time setup
 
@@ -91,10 +91,113 @@ npx wrangler d1 execute sudoku-analytics --remote --command "SELECT substr(impor
 npx wrangler d1 export sudoku-analytics --remote --output imports.sql
 ```
 
+## Usage analytics (visitors, visits, time per feature)
+
+Separate from `puzzle_imports` (which is untouched), `frontend/src/usageTracking.ts`
+sends one small batch about once a minute while the page is in use (plus one when
+the tab is hidden or closed) to `POST /sync`. It is stored in four tables from
+migration `0003`:
+
+| table | one row per | key columns |
+|---|---|---|
+| `visitors` | browser (random id in `localStorage`) | `first_seen_at`, `last_seen_at`, `visit_count`, `total_engaged_ms`, latest location/device, `label`, `excluded`, `is_bot` |
+| `visits` | visit (a new one starts after 30 min without activity) | `visit_number` (1 = first ever), `started_at`, `last_seen_at`, `engaged_ms`, `page_loads`, location, device, screen, language, time zone, `referrer`, `campaign` (utm_*) |
+| `visit_areas` | visit × area | `area` (e.g. `Solver › Techniques › Dynamic Dragon Colouring`, `Menu › Dragon Configuration`, `Help › Settings`, `How It Works › Dragon Colouring`), `engaged_ms` |
+| `events` | action (repeats within one batch are merged into `count`) | `category`, `name`, `label`, `value`. The migration's comment lists every category. |
+
+- **Same visitor, several visits**: the visitor id survives closing the browser.
+  A different browser or device, a private window, or clearing site data counts as a
+  new visitor. Safari may also clear it after 7 days without a visit. No IP,
+  cookie or fingerprint is used.
+- **Engaged time** only counts while the tab is visible and the user did
+  something (click, key, scroll, touch) in the last 5 minutes. `last_seen_at -
+  started_at` is how long the visit was open.
+- **Areas** are the layer the user is looking at. An open overlay (How It Works,
+  Help) beats an open menu, which beats the solver panel. The part before the first
+  ` › ` is the section.
+- **Bots** (headless or crawler User-Agents, `navigator.webdriver`) are flagged
+  `is_bot = 1` and left out of the dashboard and the views by default.
+- **Imports** also appear as `events` rows (`category = 'import'`, `label` = the
+  81-char puzzle). That ties each import to a visitor, and you can join it to `puzzle_imports.puzzle`.
+
+### Setup (once)
+
+```sh
+cd analytics
+npm run migrate:remote                     # adds the 0003 tables (before deploying!)
+npx wrangler secret put ADMIN_PASSWORD     # 12+ characters; use a long random one
+npm run deploy
+```
+
+No new GitHub variable is needed: the page derives `/sync` from `VITE_ANALYTICS_URL`.
+
+### Dashboard (only you)
+
+Open `https://sudoku-trainer-api.<you>.workers.dev/admin` and sign in with
+`ADMIN_PASSWORD`. Nothing on the site links to it, and it sends `noindex`.
+Without the secret, every `/admin` route returns 404. The session cookie is
+HttpOnly and SameSite=Strict, and lasts 30 days. Changing the secret signs every
+session out. After 10 wrong passwords in 15 minutes, all logins are refused for
+15 minutes.
+
+For any date range, and for either everyone or one visitor (click a visitor row), it shows:
+- visitors (new and returning) and visits per visitor
+- engaged time per visit, and traffic per day
+- time per section and per area
+- every button, setting, technique, task, import and error, with counts
+- hour of day, day of week, and loyalty (visit number)
+- audience: country, city, device, OS, browser, referrer, language, screen
+
+Clicking a visit opens its full timeline. **Name yourself** in the Visitors table
+and tick **Exclude** so your own use stays out of the totals. To find your own id,
+open the site's devtools: Application → Local Storage → `sudoku-trainer.vid`.
+
+**Export** downloads the visitors, visits, areas or events table as a CSV file,
+with the dashboard's current filters. Excel opens these directly. For scripts, any
+`/admin` URL also accepts `Authorization: Bearer <ADMIN_PASSWORD>`:
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_PASSWORD" "https://sudoku-trainer-api.<you>.workers.dev/admin/export?table=events" -o events.csv
+```
+
+### Queries
+
+Three views leave out bots and excluded visitors: `visitor_summary`, `area_summary` and `daily_summary`.
+
+```sh
+D1="npx wrangler d1 execute sudoku-analytics --remote --command"
+
+# every visitor: visits, engaged minutes, where, device
+$D1 "SELECT * FROM visitor_summary ORDER BY last_seen_at DESC"
+
+# where time goes, most first
+$D1 "SELECT * FROM area_summary ORDER BY engaged_minutes DESC"
+
+# visitors / visits / new visitors per day (UTC)
+$D1 "SELECT * FROM daily_summary ORDER BY day DESC LIMIT 30"
+
+# one visitor's visits, then their time per area
+$D1 "SELECT visit_number, started_at, engaged_ms/1000 AS seconds, page_loads, referrer FROM visits WHERE visitor_id = '<id>' ORDER BY started_at"
+$D1 "SELECT area, SUM(engaged_ms)/1000 AS seconds FROM visit_areas WHERE visitor_id = '<id>' GROUP BY area ORDER BY seconds DESC"
+
+# settings people change, and to what
+$D1 "SELECT name, label, SUM(count) n, COUNT(DISTINCT visitor_id) visitors FROM events WHERE category = 'setting' GROUP BY 1, 2 ORDER BY n DESC"
+
+# techniques studied / applied
+$D1 "SELECT name, label, SUM(count) n FROM events WHERE category = 'technique' GROUP BY 1, 2 ORDER BY n DESC"
+
+# long tasks (puzzle generation etc): how long they take, how often they're cancelled
+$D1 "SELECT name, label, COUNT(*) n, ROUND(AVG(value)/1000, 1) avg_seconds FROM events WHERE category = 'task' GROUP BY 1, 2 ORDER BY n DESC"
+
+# imports with the visitor who made them
+$D1 "SELECT occurred_at, visitor_id, name, label AS puzzle FROM events WHERE category = 'import' ORDER BY occurred_at DESC LIMIT 50"
+```
+
 ## Local testing
 
 ```sh
 npm run migrate:local && npm run dev       # Worker on http://localhost:8787 with a local D1
 # frontend/.env.local:  VITE_ANALYTICS_URL=http://localhost:8787/import
+# analytics/.dev.vars:   ADMIN_PASSWORD=some-local-password   (then open http://localhost:8787/admin)
 npx wrangler d1 execute sudoku-analytics --local --command "SELECT * FROM puzzle_imports"
 ```

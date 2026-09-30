@@ -46,7 +46,11 @@ import {
   parseEliminationTargets,
 } from './sudoku/SudokuDragonTargetFinder'
 import { generateDragonPuzzleInParallel } from './sudoku/ParallelDragonPuzzleGenerator'
-import { pickStockDynamicDragonPuzzle } from './sudoku/dynamicDragonPuzzleStock'
+import {
+  pickStockDoubleDragonPuzzle,
+  pickStockDoubleDynamicDragonPuzzle,
+  pickStockDynamicDragonPuzzle,
+} from './sudoku/dynamicDragonPuzzleStock'
 import type { DragonPuzzleGenerateOptions, GeneratedDragonPuzzle } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
@@ -119,7 +123,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.8.1-beta'
+const APP_VERSION = 'v0.8.2-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -272,6 +276,37 @@ function renderCandidatePaint(paint: CandidatePaint, hexes: Record<CandidateColo
     <>
       <span className="paint-layer paint-layer-bottom-left">{shapeSpan(first)}</span>
       <span className="paint-layer paint-layer-top-right">{shapeSpan(second)}</span>
+    </>
+  )
+}
+
+/** Dragon Colouring's highlight colours, for a Double Dragon candidate both
+ * Dragons colour - drawn as a split pip (renderDragonSplit) instead of one
+ * .technique-* class. The same hexes as those classes in App.css. */
+const DRAGON_HIGHLIGHT_HEX = {
+  'technique-blue': '#38bdf8',
+  'technique-yellow': '#fde047',
+  'technique-darkblue': '#1d4ed8',
+  'technique-orange': '#fb923c',
+  'technique-pink': '#e6a3e6',
+  'technique-purple': '#9313b5',
+  'technique-limegreen': '#7bc82c',
+  'technique-darkgreen': '#3d5c0e',
+} as const
+type DragonHighlightClass = keyof typeof DRAGON_HIGHLIGHT_HEX
+
+/** A candidate coloured by both of a Double Dragon's Dragons: the first
+ * Dragon's colour bottom-left, the second's top-right - the same diagonal
+ * split as a two-colour manual paint (renderCandidatePaint). */
+function renderDragonSplit(first: DragonHighlightClass, second: DragonHighlightClass): ReactNode {
+  return (
+    <>
+      <span className="paint-layer paint-layer-bottom-left">
+        <span className="paint-shape paint-shape-circle" style={{ backgroundColor: DRAGON_HIGHLIGHT_HEX[first] }} />
+      </span>
+      <span className="paint-layer paint-layer-top-right">
+        <span className="paint-shape paint-shape-circle" style={{ backgroundColor: DRAGON_HIGHLIGHT_HEX[second] }} />
+      </span>
     </>
   )
 }
@@ -1655,6 +1690,8 @@ export default function App() {
   const [gridWhiteMode, setGridWhiteMode] = useState(DEFAULT_SETTINGS.gridWhiteMode)
   const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(DEFAULT_SETTINGS.minBaseMedusaFilter)
   const [dynamicDragonDisabled, setDynamicDragonDisabled] = useState(DEFAULT_SETTINGS.dynamicDragonDisabled)
+  const [doubleDragonEnabled, setDoubleDragonEnabled] = useState(DEFAULT_SETTINGS.doubleDragonEnabled)
+  const [doubleDynamicDragonEnabled, setDoubleDynamicDragonEnabled] = useState(DEFAULT_SETTINGS.doubleDynamicDragonEnabled)
   const [allowedRule3Techniques, setAllowedRule3Techniques] = useState<Set<Rule3Technique>>(
     () => new Set(DEFAULT_SETTINGS.allowedRule3Techniques),
   )
@@ -1692,6 +1729,9 @@ export default function App() {
   )
   const [dragonGenerationDisregardsGenericAic, setDragonGenerationDisregardsGenericAic] = useState(
     DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic,
+  )
+  const [dynamicDragonPuzzleForbidsDoubleDragon, setDynamicDragonPuzzleForbidsDoubleDragon] = useState(
+    DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsDoubleDragon,
   )
   const [dynamicDragonPuzzleForbidsPlainDragon, setDynamicDragonPuzzleForbidsPlainDragon] = useState(
     DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon,
@@ -1961,6 +2001,8 @@ export default function App() {
       dynamicDragonDisabled,
       enabledFish,
       alsXzEnabled,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
     }),
     [
       board,
@@ -1978,6 +2020,8 @@ export default function App() {
       dynamicDragonDisabled,
       enabledFish,
       alsXzEnabled,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
     ],
   )
   const [analysis, analysisPending] = useSettledValue(liveAnalysisInputs)
@@ -2028,12 +2072,16 @@ export default function App() {
         analysis.enabledFish,
         analysis.alsXzEnabled,
         analysis.maxTechniquesPerDragonStep,
+        analysis.doubleDragonEnabled,
+        analysis.doubleDynamicDragonEnabled,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
       analysis.enabledFish,
       analysis.alsXzEnabled,
+      analysis.doubleDragonEnabled,
+      analysis.doubleDynamicDragonEnabled,
       analysis.board,
       analysis.candidates,
       analysis.minBaseMedusaFilter,
@@ -2120,6 +2168,8 @@ export default function App() {
       finnedSwordfishEnabled,
       alsXzEnabled,
       dynamicDragonDisabled,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
       allowedRule3Techniques,
       exhaustiveDragonColouring,
       optimizeDragons,
@@ -2131,6 +2181,7 @@ export default function App() {
       dragonGenerationDisregardsAic,
       dragonGenerationDisregardsGenericAic,
       dynamicDragonPuzzleForbidsPlainDragon,
+      dynamicDragonPuzzleForbidsDoubleDragon,
       dragonGenerationTimeoutMs,
       easySolveEnabled,
       solvePathTimeoutMs,
@@ -2272,10 +2323,14 @@ export default function App() {
       enabledFish: [...enabledFish],
       alsXzEnabled,
       maxTechniquesPerDragonStep,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
     }),
     [
       enabledFish,
       alsXzEnabled,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -3331,6 +3386,8 @@ export default function App() {
     setFinnedSwordfishEnabled(DEFAULT_SETTINGS.finnedSwordfishEnabled)
     setAlsXzEnabled(DEFAULT_SETTINGS.alsXzEnabled)
     setDynamicDragonDisabled(DEFAULT_SETTINGS.dynamicDragonDisabled)
+    setDoubleDragonEnabled(DEFAULT_SETTINGS.doubleDragonEnabled)
+    setDoubleDynamicDragonEnabled(DEFAULT_SETTINGS.doubleDynamicDragonEnabled)
     setAllowedRule3Techniques(new Set(DEFAULT_SETTINGS.allowedRule3Techniques))
     setExhaustiveDragonColouring(DEFAULT_SETTINGS.exhaustiveDragonColouring)
     setOptimizeDragons(DEFAULT_SETTINGS.optimizeDragons)
@@ -3344,6 +3401,7 @@ export default function App() {
     setDragonGenerationDisregardsAic(DEFAULT_SETTINGS.dragonGenerationDisregardsAic)
     setDragonGenerationDisregardsGenericAic(DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic)
     setDynamicDragonPuzzleForbidsPlainDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon)
+    setDynamicDragonPuzzleForbidsDoubleDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsDoubleDragon)
     setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
     setSwatchColors(defaultSwatchColors())
     setSwatchShapes(defaultSwatchShapes())
@@ -3585,6 +3643,8 @@ export default function App() {
       maxTechniquesPerStep: maxTechniquesPerDragonStep,
       optimizeDynamic: optimizeDynamicDragons,
       dynamicEnabled: !dynamicDragonDisabled,
+      doubleEnabled: doubleDragonEnabled,
+      doubleDynamicEnabled: doubleDynamicDragonEnabled,
     })
 
     const best = search.best
@@ -3616,9 +3676,14 @@ export default function App() {
       return
     }
 
-    const name = best.kind === 'dragon' ? 'Dragon Colouring' : dynamicDragonLabel(best.moves)
+    const { idPrefix, name } = {
+      dragon: { idPrefix: 'dragon', name: 'Dragon Colouring' },
+      double: { idPrefix: 'double-dragon', name: 'Double Dragon Colouring' },
+      dynamic: { idPrefix: 'dynamic-dragon', name: dynamicDragonLabel(best.moves) },
+      'double-dynamic': { idPrefix: 'double-dynamic-dragon', name: `Double ${dynamicDragonLabel(best.moves)}` },
+    }[best.kind]
     const instance: TechniqueInstance = {
-      ...buildDragonInstance(board, candidates, best.kind === 'dragon' ? 'dragon' : 'dynamic-dragon', name, best.chainKey, best.moves),
+      ...buildDragonInstance(board, candidates, idPrefix, name, best.chainKey, best.moves),
       // The cells you asked about get the same yellow border Medusa rules use,
       // so they stay easy to find while the colouring builds up.
       medusaHighlightCells: targets.map((t) => [t.row, t.col] as const),
@@ -4418,6 +4483,8 @@ export default function App() {
       disregardGenericAic: dragonGenerationDisregardsGenericAic,
       enabledFish: [...enabledFish],
       alsXzEnabled,
+      // Only meaningful (and only settable) with "must not allow plain Dragon".
+      forbidDoubleDragon: dynamicDragonPuzzleForbidsPlainDragon && dynamicDragonPuzzleForbidsDoubleDragon,
     }
     runPracticePuzzleGeneration(
       'Generating a puzzle that needs Dynamic Dragon Colouring…',
@@ -4431,6 +4498,38 @@ export default function App() {
         ? 'New Dynamic Dragon puzzle loaded: plain Dragon Colouring is stuck on every chain - only Dynamic Dragon Colouring can continue.'
         : 'New Dynamic Dragon puzzle loaded: contains at least 1 Dynamic Dragon Colouring technique.',
       dynamicDragonPuzzleForbidsPlainDragon,
+    )
+  }
+
+  /** Double Dragon positions (plain Dragon stuck on every chain) are far too
+   * rare to find live, so like the "must not allow plain Dragon" Dynamic
+   * puzzles they come from a pre-generated stock (pickStockDoubleDragonPuzzle),
+   * re-checked under the current generation settings. */
+  function onNewDoubleDragonPuzzle() {
+    runPracticePuzzleGeneration(
+      'Picking a puzzle that needs Double Dragon Colouring…',
+      () =>
+        pickStockDoubleDragonPuzzle({
+          disregardSingleDigitAic: dragonGenerationDisregardsSingleDigitAic,
+          disregardAic: dragonGenerationDisregardsAic,
+          disregardGenericAic: dragonGenerationDisregardsGenericAic,
+          enabledFish: [...enabledFish],
+          alsXzEnabled,
+        }),
+      'New Double Dragon puzzle loaded: plain Dragon Colouring is stuck on every chain - link two plain Dragons to continue.',
+      true,
+    )
+  }
+
+  /** Double Dynamic Dragon positions were found offline (the famous hardest
+   * puzzles plus a correct extra clue or two - see
+   * doubleDynamicDragonPuzzleStockData.ts) and are served from that stock. */
+  function onNewDoubleDynamicDragonPuzzle() {
+    runPracticePuzzleGeneration(
+      'Picking a puzzle that needs Double Dynamic Dragon Colouring…',
+      () => pickStockDoubleDynamicDragonPuzzle(),
+      'New Double Dynamic Dragon puzzle loaded: nothing else progresses here - it needs Double Dynamic Dragon Colouring with every Dynamic Dragon technique and no AIC or technique limits.',
+      true,
     )
   }
 
@@ -4530,7 +4629,7 @@ export default function App() {
           buttonClassName="generate-puzzle-trigger"
         >
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Puzzle type</h3>
+            <h3 className="dropdown-section-title">Generate Practice Puzzle</h3>
             <button type="button" className="dropdown-item" onClick={onNewPuzzle} disabled={busy}>
               Random puzzle
             </button>
@@ -4541,7 +4640,7 @@ export default function App() {
               disabled={busy}
               title="Generates a puzzle state where Simple Colouring is the easiest technique that can make progress (AICs are not considered)"
             >
-              Simple Colouring practice puzzle
+              Simple Colouring puzzle
             </button>
             <button
               type="button"
@@ -4550,7 +4649,7 @@ export default function App() {
               disabled={busy}
               title="Generates a puzzle state where 3D Medusa is the easiest technique that can make progress (AICs are not considered)"
             >
-              3D Medusa practice puzzle
+              3D Medusa puzzle
             </button>
             <button
               type="button"
@@ -4559,7 +4658,20 @@ export default function App() {
               disabled={busy}
               title="Generates a puzzle state where the next move requires Dragon Colouring"
             >
-              Dragon Colouring practice puzzle
+              Dragon Colouring puzzle
+            </button>
+                      <button
+              type="button"
+              className="dropdown-item"
+              onClick={onNewDoubleDragonPuzzle}
+              disabled={busy || !doubleDragonEnabled}
+              title={
+                doubleDragonEnabled
+                  ? 'Picks a puzzle state where plain Dragon Colouring is stuck on every chain, but Double Dragon Colouring can progress (a Dynamic Dragon may too)'
+                  : 'Turn on Double Dragon Colouring in Dragon Configuration first'
+              }
+            >
+              Double Dragon Colouring puzzle
             </button>
             <button
               type="button"
@@ -4572,12 +4684,28 @@ export default function App() {
                   : 'Generates a puzzle state that includes dynamic Dragon Colouring'
               }
             >
-              Dynamic Dragon Colouring practice puzzle
+              Dynamic Dragon Colouring puzzle
+            </button>
+
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={onNewDoubleDynamicDragonPuzzle}
+              disabled={busy || !doubleDynamicDragonEnabled || dynamicDragonDisabled}
+              title={
+                dynamicDragonDisabled
+                  ? 'Dynamic Dragons are disabled in Dragon Configuration'
+                  : doubleDynamicDragonEnabled
+                    ? 'Picks a puzzle state that nothing else can progress - not even Dynamic Dragon or Double Dragon with every technique enabled and no limits - but Double Dynamic Dragon Colouring (with no AIC or technique limits) can'
+                    : 'Turn on Double Dynamic Dragon Colouring in Dragon Configuration first'
+              }
+            >
+              Double Dynamic Dragon Colouring puzzle
             </button>
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Puzzle generation</h3>
+            <h3 className="dropdown-section-title">Dragon generation Settings</h3>
             <label
               className="menu-checkbox"
               title={
@@ -4610,7 +4738,7 @@ export default function App() {
                 disabled={!shortAicEnabled || dragonGenerationDisregardsSingleDigitAic}
                 onChange={toggleDragonGenerationDisregardsAic}
               />
-              Dragon Generation disregards AIC
+              Dragon disregards AIC
             </label>
             <label
               className="menu-checkbox"
@@ -4628,7 +4756,7 @@ export default function App() {
                 disabled={!genericAicEnabled || dragonGenerationDisregardsAic}
                 onChange={toggleDragonGenerationDisregardsGenericAic}
               />
-              Dragon Generation disregards Generic AIC
+              Dragon disregards Generic AIC
             </label>
             <label
               className="menu-checkbox"
@@ -4637,9 +4765,31 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={dynamicDragonPuzzleForbidsPlainDragon}
-                onChange={() => setDynamicDragonPuzzleForbidsPlainDragon((value) => !value)}
+                onChange={() => {
+                  // "must not allow double Dragons" only means anything on top of this.
+                  if (dynamicDragonPuzzleForbidsPlainDragon) {
+                    setDynamicDragonPuzzleForbidsDoubleDragon(false)
+                  }
+                  setDynamicDragonPuzzleForbidsPlainDragon((value) => !value)
+                }}
               />
               Dynamic Dragon puzzles must not allow plain Dragon
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                dynamicDragonPuzzleForbidsPlainDragon
+                  ? 'When on, a Dynamic Dragon puzzle is also never one that Double Dragon Colouring can progress, so Dynamic Dragon is the only way forward. When off, a Double Dragon may also progress it.'
+                  : 'Can only be turned on while "Dynamic Dragon puzzles must not allow plain Dragon" is on.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={dynamicDragonPuzzleForbidsDoubleDragon}
+                disabled={!dynamicDragonPuzzleForbidsPlainDragon}
+                onChange={() => setDynamicDragonPuzzleForbidsDoubleDragon((value) => !value)}
+              />
+              Dynamic Dragon puzzles must not allow double Dragons
             </label>
             <label
               className="menu-select"
@@ -4702,6 +4852,17 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
+            <h3 className="dropdown-section-title">Double Dragon Colouring</h3>
+            <label
+              className="menu-checkbox"
+              title="When on, the solver also looks for Double Dragons. Follows Exhaustive and Optimize Dragons. Ranked between Dragon and Dynamic Dragon. Also enables the Double Dragon practice puzzle."
+            >
+              <input type="checkbox" checked={doubleDragonEnabled} onChange={() => setDoubleDragonEnabled((value) => !value)} />
+              Enable Double Dragons
+            </label>
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
             <h3 className="dropdown-section-title">Dynamic Dragon Colouring</h3>
             <label
               className="menu-checkbox"
@@ -4717,10 +4878,11 @@ export default function App() {
               />
               Optimize Dynamic Dragons
             </label>
+          
             <label
               className="menu-checkbox"
               title={
-                dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When on, if AIC is enabled, at most one AIC may be chained into a single Dynamic Dragon Colouring step; when off, there is no limit.'
+                dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When on, if AIC is enabled, a single Dynamic Dragon Colouring step may rely on at most one AIC (an AIC that leads nowhere does not count - the next one is tried instead); when off, there is no limit.'
               }
             >
               <input
@@ -4766,6 +4928,25 @@ export default function App() {
               />
               Auto-solve includes AICs
             </label>
+          <div className="dropdown-divider" />
+
+             <h3 className="dropdown-section-title">Double Dynamic Dragon Colouring</h3>
+           <label
+              className="menu-checkbox"
+              title={
+                dynamicDragonDisabled
+                  ? 'Dynamic Dragons are disabled, so this has no effect'
+                  : 'When on, the solver also looks for Double Dynamic Dragon Colouring: two linked Dragons, like Double Dragon Colouring, where at least one of them is Dynamic. Only chains single Dynamic Dragon is stuck on are used. Follows the Dynamic Dragon settings (techniques, AIC limit, max techniques per step), Exhaustive Dragon Colouring and Optimize Dynamic Dragons. Also enables the Double Dynamic Dragon practice puzzle.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={doubleDynamicDragonEnabled}
+                disabled={dynamicDragonDisabled}
+                onChange={() => setDoubleDynamicDragonEnabled((value) => !value)}
+              />
+              Enable Double Dynamic Dragons
+            </label>
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
@@ -4775,7 +4956,7 @@ export default function App() {
             </p>
             <label
               className="menu-checkbox"
-              title="When on, Dynamic Dragon Colouring is not used anywhere - the Techniques list, Solve Path, the Solvable check, Find by elims, auto-solve and puzzle generation - so plain Dragon Colouring is the strongest technique."
+              title="When on, Dynamic Dragon Colouring is not used anywhere - the Techniques list, Solve Path, the Solvable check, Find by elims, auto-solve and puzzle generation - so plain Dragon Colouring becomes the strongest technique."
             >
               <input
                 type="checkbox"
@@ -5156,6 +5337,21 @@ export default function App() {
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
                             false)
+                        // Double Dragon's second Dragon: pink/purple and
+                        // lime green/dark green (see foldDragonMoves).
+                        const secondDragonColour =
+                          active && dragonHighlight
+                            ? (
+                                [
+                                  [dragonHighlight.pinkCandidates, 'technique-pink'],
+                                  [dragonHighlight.purpleCandidates, 'technique-purple'],
+                                  [dragonHighlight.limeGreenCandidates, 'technique-limegreen'],
+                                  [dragonHighlight.darkGreenCandidates, 'technique-darkgreen'],
+                                ] as const
+                              ).find(([refs]) =>
+                                refs.some((ref) => ref.row === r && ref.col === c && ref.digit === digit),
+                              )?.[1] ?? null
+                            : null
                         const aicCandidateSource = dragonAicChains
                           ? dragonAicChains.flatMap((chain) => chain.candidates)
                           : highlightedTechnique?.aicCandidates
@@ -5181,6 +5377,21 @@ export default function App() {
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
                             false)
+                        // Double Dragon: coloured by both Dragons (the
+                        // first's colour stays when the second absorbs it).
+                        const firstDragonColour: DragonHighlightClass | null = isTechniqueBlue
+                          ? 'technique-blue'
+                          : isTechniqueYellow
+                            ? 'technique-yellow'
+                            : isTechniqueDarkBlue
+                              ? 'technique-darkblue'
+                              : isTechniqueOrange
+                                ? 'technique-orange'
+                                : null
+                        const dragonSplit =
+                          firstDragonColour && secondDragonColour && !isTechniqueEliminated && !isTechniqueSolved
+                            ? ([firstDragonColour, secondDragonColour] as const)
+                            : null
                         const isTechniqueColored =
                           isTechniqueUsed ||
                           isTechniqueEliminated ||
@@ -5189,6 +5400,7 @@ export default function App() {
                           isTechniqueYellow ||
                           isTechniqueDarkBlue ||
                           isTechniqueOrange ||
+                          secondDragonColour !== null ||
                           isTechniqueAic ||
                           isTechniqueHypotheticalElimination
                         // A manually painted colour is a pure user
@@ -5211,10 +5423,12 @@ export default function App() {
                               isTechniqueUsed ? 'technique-used' : '',
                               isTechniqueEliminated ? 'technique-eliminated' : '',
                               isTechniqueSolved ? 'technique-solved' : '',
-                              isTechniqueBlue ? 'technique-blue' : '',
-                              isTechniqueYellow ? 'technique-yellow' : '',
-                              isTechniqueDarkBlue ? 'technique-darkblue' : '',
-                              isTechniqueOrange ? 'technique-orange' : '',
+                              dragonSplit ? 'candidate-painted technique-dragon-split' : '',
+                              !dragonSplit && isTechniqueBlue ? 'technique-blue' : '',
+                              !dragonSplit && isTechniqueYellow ? 'technique-yellow' : '',
+                              !dragonSplit && isTechniqueDarkBlue ? 'technique-darkblue' : '',
+                              !dragonSplit && isTechniqueOrange ? 'technique-orange' : '',
+                              !dragonSplit ? (secondDragonColour ?? '') : '',
                               isTechniqueAic ? 'technique-aic' : '',
                               isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
                               paint ? 'candidate-painted' : '',
@@ -5232,6 +5446,7 @@ export default function App() {
                             }
                           >
                             {paint && renderCandidatePaint(paint, swatchColors)}
+                            {dragonSplit && renderDragonSplit(dragonSplit[0], dragonSplit[1])}
                             {active ? digit : ''}
                           </span>
                         )

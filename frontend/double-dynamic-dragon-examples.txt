@@ -1,0 +1,101 @@
+# Double Dynamic Dragon research examples (2026-09-29) - reference only, nothing loads this file
+#
+# Each entry is a position where single Dynamic Dragon is stuck on every chain (and nothing else in the app applies
+# under that scenario), but Double Dynamic Dragon progresses and Double *plain* Dragon does not.
+# "state" is the exact position (board + candidates) as a Sudoku.Coach string - import it into the app or Sudoku.Coach.
+# "puzzle" is the original top1465 puzzle it was reached from; "solved without guessing" = with Double Dynamic added,
+# the whole puzzle was solved with no digit placed by brute force.
+# All eliminations/placements were checked against the real solution: 0 errors.
+
+## S5 - app defaults (Dynamic Dragon without AICs; AICs, fish, ALS-xz off)
+
+puzzle: 500400800000090010002001005600300400050070000004000008300600700060000080008002001
+solved without guessing: no
+first Medusa: 1r4c3 1r4c5 1r7c3 1r7c5 1r8c1 1r8c4
+second Medusa: 3r8c5 4r8c5
+result: -4r9c5 (21 steps; Dynamic extensions: 1 in the first Dragon, 1 in the second)
+link: 3r8c5 (pink) and 4r8c5 (dark blue) can't both be true: if light blue is true, 4r8c5 is true, so pink is false. So if pink is true, light blue is false and yellow is true - and so is every yellow/orange candidate: colour them purple as well, keeping yellow/orange (1r4c5, 1r7c3, 1r8c4, 5r8c3).
+state: SCv7_32_f2eaqjqbd81j235thfbnjs26ipi3jmvk0ouk28233045i9392smrquth7jq08df8ceuovr7fe9ump5vntllirhru53buqsttntmtfrfl5j3s5vpusl83t7nbsdno2bak68jdhic5khi329pb0t5276p6cfjah94jhlcjht9hgnto5krqneesttubeosrvlns164bdi681rgrouk6i984cjil0qh130q6h087q4fk3jbl0l0920b8l5gtq54rg3j7t654gqrf1pbkaqpqr31bq8tc1tqm9e1qri3d532ogo7g6pg1huelq1d6scipbfjrjdlstn956s4roaa4s4ooo1mpihof7329j76u5s1ac3svi1aet1la6
+
+puzzle: 500400800000090010002001005600300400050070000004000008300600700060000080008002001
+solved without guessing: no
+first Medusa: 2r7c2 2r8c1
+second Medusa: 3r8c6 3r9c5 5r9c5
+result: -3r1c5 (16 steps; Dynamic extensions: 0 in the first Dragon, 1 in the second)
+link: 3r8c6 (pink) and 7r8c6 (orange) can't both be true: if yellow is true, 7r8c6 is true, so pink is false. So if pink is true, yellow is false and light blue is true - and so is every light blue/dark blue candidate: colour it purple as well, keeping light blue/dark blue (2r7c2).
+state: SCv7_32_f2eaqjq1d81j237shf7hj66l9ap9oqvqgev21c6bc843i9391smvqutherkgmqkg4m7mchnievchsvbpttfmmednafcvlprqfvllmvptpesv1fqf76aovpvqv0dm04slhiutji49khi349r7hon8rb4qhjuot6bkm8pd78cfbls0pe5cmvduauivv9p7rbfp2c87b4jh7e2fnkpjii2344il34eoq61k8a26h4t04ku8eokm01gq3a2p266o9qrgiqj8hd7mt9o5bl5agcmjoam2r984f1lbodmihjc8d7s30o0mu0sdhcu06grmif5spkqn2juslf0d7mr3v1scsktof73ctk2sd9pfgb30v7sgbqbed9o0
+
+puzzle: 600100700000070080009008003700400500030000020004005008100200400000000050006009000
+solved without guessing: no
+first Medusa: 1r3c7 1r3c8
+second Medusa: 5r7c2 5r7c5 9r7c2
+result: -5r7c5 -9r7c2 +5r7c2 (39 steps; Dynamic extensions: 2 in the first Dragon, 1 in the second)
+link: 5r7c5 (lime green) and 5r7c2 (orange) can't both be true: if yellow is true, 5r7c2 is true, so lime green is false. So if lime green is true, yellow is false and light blue is true - and so is every light blue/dark blue candidate: colour it dark green as well, keeping light blue/dark blue (1r3c7).
+state: SCv7_32_f2eaqjqbd91j245rhfbh3i73v4stnt067l0i13vg41i9392tmjqethbud5to23k6q66384nu5jjtmujqbkvpdcnfndp5tnsntf5nkngvuup2vv7f5atv4tivdqvg37lcchm694298qfqq1d9ki8mp4olfkn24ap9edsdc41pr7vg43mbslp3gniftfkvgm769t0ah0lg2140s809qe2179iggtbgfk85ip1uqlb0g80rn8qe6a4dolgm17oo2kot646t7ppq7424rkbtqfaqtcufnflb1qb1l6ocs9v2oqla5te16ojo8frca08tqoada2al0srkhort52d88gdstoqk8lgi6jc2l126qmluno0l4cj7nk
+
+puzzle: 000000940000090005300005070080400100463000000000007080800700000700000028050260000
+solved without guessing: no
+first Medusa: 1r5c4 1r5c6
+second Medusa: 5r5c8 9r5c8
+result: -5r5c7 (8 steps; Dynamic extensions: 3 in the first Dragon, 0 in the second)
+link: 9r5c8 (lime green) and 5r5c8 (dark blue) can't both be true: if light blue is true, 5r5c8 is true, so lime green is false. So if lime green is true, light blue is false and yellow is true - and so is every yellow/orange candidate: colour it dark green as well, keeping yellow/orange (1r5c6).
+state: SCv7_32_f2ear3a1do1j2225tvh7bfk465g2dmvk0ouk390phkm4am94d4bqqunn19jd8anrm007ufvovutqpdphnu7qv98skt1ljhv7e9uhnqrorj5r3k5blceclhrtn4ugat4q4gt4qh545mv3993n46l48okdvj7q34s7tatsgoh74krfu3po5mbsnqbsjn3novhc25a8iof09781l0eg3ntugcdpvc7750uh4msjcgbn8dhgcco8hk1n90masp0110bq12lrdfviagm7ktak2ek0gb1mentom6fr29r3ajcd4j7hh7kn1pmosmgpao4jk9bd1pjqgijisri1ilpn9ptnolaedpjebpongd86eeg
+
+puzzle: 000070940070090005300005070087400100463080000000007080800700000700000028050268000
+solved without guessing: no
+first Medusa: 1r5c4 1r5c6
+second Medusa: 5r5c8 9r5c8
+result: -5r5c7 (8 steps; Dynamic extensions: 3 in the first Dragon, 0 in the second)
+link: 9r5c8 (lime green) and 5r5c8 (dark blue) can't both be true: if light blue is true, 5r5c8 is true, so lime green is false. So if lime green is true, light blue is false and yellow is true - and so is every yellow/orange candidate: colour it dark green as well, keeping yellow/orange (1r5c6).
+state: SCv7_32_f2ear3a1do1j2225tvh7bfk465g2dmvk0ouk390phkm4am94d4bqqunn19jd8anrm007ufvovutqpdphnu7qv98skt1ljhv7e9uhnqrorj5r3k5blceclhrtn4ugat4q4gt4qh545mv3993n46l48okdvj7q34s7tatsgoh74krfu3po5mbsnqbsjn3novhc25a8iof09781l0eg3ntugcdpvc7750uh4msjcgbn8dhgcco8hk1n90masp0110bq12lrdfviagm7ktak2ek0gb1mentom6fr29r3ajcd4j7hh7kn1pmosmgpao4jk9bd1pjqgijisri1ilpn9ptnolaedpjebpongd86eeg
+
+puzzle: 300060100650290000000000008810070500004300900005002007000430090000007006400000800
+solved without guessing: no
+first Medusa: 3r6c2 3r8c2 3r4c3 6r6c2
+second Medusa: 4r2c7 4r2c9 4r4c9 3r2c9
+result: -4r2c7 -4r4c9 -3r2c9 +4r2c9 (42 steps; Dynamic extensions: 1 in the first Dragon, 0 in the second)
+link: 4r2c7 (pink) and 4r2c9 (orange) can't both be true: if yellow is true, 4r2c9 is true, so pink is false. So if pink is true, yellow is false and light blue is true - and so is every light blue/dark blue candidate: colour it purple as well, keeping light blue/dark blue (3r6c2).
+state: SCv7_32_f2eaqjq1d81j237shf7hi669m8mef6nuk0nghr5i5i21p4lkgubfpfb82fr0b5c54k6q66frmsmbetfqbhvucsgsgupapnvjulhlrlm7nke0nvprpagnpnf7rdn50i9qgn1hmtfcmh54c26pr5pb8ikeph36l8hrij8kjdtdhfeu0d2v5qjv6taqkvpm7nju0ahq2hm0oh0l8mmur7jd25jrimj91qiggda86ev1so85fd74f10chtr2euq9saidadgigd10akgu79ddgek6qcqj8th5rdq1k4uu222k9dedooadc4dvndcl9928rj0u8g7kak514cshla7fcsoa0t5odjm2p14ooau3pvo0i2k6dbo
+
+puzzle: 030000082002090000004006700000043000010000500700605020090200006006500009000000310
+solved without guessing: yes
+first Medusa: 4r5c1 4r6c2 8r6c2
+second Medusa: 8r7c7 8r9c9 4r7c7
+result: -8r7c1 -8r7c3 (16 steps; Dynamic extensions: 1 in the first Dragon, 0 in the second)
+link: 8r9c9 (lime green) and 8r7c7 (dark blue) can't both be true: if light blue is true, 8r7c7 is true, so lime green is false. So if lime green is true, light blue is false and yellow is true - and so is every yellow/orange candidate: colour it dark green as well, keeping yellow/orange (4r6c2).
+state: SCv7_32_f2eaqjq1do1i237s1fjood0orec5pkovug2p2tgl452ji9391umvltoamrdnt8108phmdj4optqbjtv5mlvqpqeo1rkt5nunrd5rvt774ceh7vrrkl1nkutcuuvo0ggq3510lmv6a65de7qq0pj94oj44mekc8erg18t3rdnqddsiuu0d6ulsjv7rf99fsrj3l0lc0s4lcgan0ojlkkgh8ko89hj1j8j54482e9c20a4h336e6fndgk4a10j37p79128mael99a2kihoo9udse527556oqci3n5fio4ll49658te65sggigurr97c70j1lrqteq3n66r5av38v9sr00mgv718omvb8i7qv83bg0mh68
+
+## S4 - AIC limit 1, techniques per step unlimited (every AIC kind, fish and ALS-xz on)
+
+puzzle: 400600300010020060008007001900800500040050010000002007500000600030080040000009005
+solved without guessing: yes
+first Medusa: 1r1c5 1r1c6 9r1c5
+second Medusa: 4r2c9 4r4c9 4r6c7
+result: -4r2c6 (18 steps; Dynamic extensions: 2 in the first Dragon, 3 in the second)
+link: 4r4c9 (lime green) and 4r2c9 (orange) can't both be true: if yellow is true, 4r2c9 is true, so lime green is false. So if lime green is true, yellow is false and light blue is true - and so is every light blue/dark blue candidate: colour it dark green as well, keeping light blue/dark blue (1r1c5).
+state: SCv7_32_f2eaqjq1d81j237shf7hi669i9mef6nuk0nggp2p2p10sieq8d5vunlc5lsk23e2q9k4c8rtivqrsneumunqa767k6mdnpriffdtdrfp533s5vrusl83s7mbvlim0p4gimi916g57fckg6cp754smjvm1553djrce9lp4r3f1n9fu32epfqnkemv5rdubv2su89492ocob2q10p08par99kg7bouh1270t8kaca486q6t6625hjd74vaangjdac4hi0758ha3ksnfigl2ople6h2l5mje8tq35l2bahbgg0qu7e1iteisi8c288gls8ee61kd0gtll7t7718gh2e50dgvms81ee1bigm5aamj6ejkpg4b1v7s083tpl88
+
+puzzle: 400600300010020060008007001900800500040050010000002007500000600030080040000009005
+solved without guessing: yes
+first Medusa: 1r1c5 1r1c6 9r1c5
+second Medusa: 4r2c9 4r4c9 4r6c7
+result: -9r6c7 (26 steps; Dynamic extensions: 2 in the first Dragon, 0 in the second)
+link: 4r4c9 (lime green) and 4r2c9 (orange) can't both be true: if yellow is true, 4r2c9 is true, so lime green is false. So if lime green is true, yellow is false and light blue is true - and so is every light blue/dark blue candidate: colour it dark green as well, keeping light blue/dark blue (1r1c5).
+state: SCv7_32_f2eaqjq1d81j237shf7hi669i9mef6nuk0nggp2p2p10sieq8d5vunlc5lsk23e2kf8kg8rtivqrsneumunqa767k6mdnpriffdtdrfp533s5vrusl83s7mbvlim0p4gimi916g97fckg6c9jiiea9vr0gipm9sqrad25mqbgfq3v0ujeauptjlnpdr3ifsnng2d28k3e0oug848a4aqqad49ov3loeh87k0g32h22mhmpj34qpugafll9o9mki28p03imclhqe2n2l1m2c5gqc8iirdr378cqk9ba5e203botg4btrbi91h9122hh1rog6hkibmmgv4qst2209ci1u2urhg5pg6ee2okpdnpamd8c93o3pf62odfpl8u
+
+puzzle: 400600300010020060008007001900800500040050010000002007500000600030080040000009005
+solved without guessing: yes
+first Medusa: 1r1c5 1r1c6 9r1c5
+second Medusa: 4r2c9 4r4c9 4r6c7 8r6c7
+result: -9r2c9 (37 steps; Dynamic extensions: 2 in the first Dragon, 3 in the second)
+link: 4r4c9 (lime green) and 4r2c9 (orange) can't both be true: if yellow is true, 4r2c9 is true, so lime green is false. So if lime green is true, yellow is false and light blue is true - and so is every light blue/dark blue candidate: colour it dark green as well, keeping light blue/dark blue (1r1c5).
+state: SCv7_32_f2eaqjq1d81j237shf7hi669i9mef6nuk0nghr0i2p10sieq8d5vsnlc5luk23e2qb66g1jtiv5nqmuumunra767k5ebdjvluqr5rdn7kce0nvvril1viu5cuuvg08s3lgi8bl0sr34kdim8pp4lkvli7ckdif5rl6mijckt3aifu1ksqrlvat5u5ndn4vlef44q4h8ms5hd0g8gkcl5kkq8jls79gl3gf81265241d3fj653gjeiafll9o9mki28p03ikclhrq1bhagb365sqc8iir3r378cqk9ba5e203botg44uhqj2fk3ki245723nh0d3847dd9v8f952249ok1m3urh05po5ea2olplkp9iej60lc5sfoa9dl8e
+
+puzzle: 000000800070090010003007005100600000050020040008009007400000200060010050000006003
+solved without guessing: yes
+first Medusa: 6r1c5 6r3c5
+second Medusa: 1r9c2 1r9c3 1r1c3
+result: -2r9c3 -7r9c3 -9r9c3 (18 steps; Dynamic extensions: 1 in the first Dragon, 2 in the second)
+link: 4r4c3 (purple) and 4r4c6 (dark blue) can't both be true: if light blue is true, 4r4c6 is true, so pink is false. So if pink is true, light blue is false and yellow is true - and so is every yellow/orange candidate: colour it purple as well, keeping yellow/orange (6r3c5).
+state: SCv7_32_f2ear3i1d91j2324tvh7a1m6i8mcjmd66vk0i0nv2cv88b4imi5pdnltr0vqnbjbm0iu2dpjv8n9futmnhnluqppup1rir4vtfmmrercpt3ji5nuuskofsnhb3nnu0hip0g3ndciqgsr8ihqr4sav41mo00j2r5aojli1qgee7hfk2holnbunqbsberebv2s8u85egajgclu30hamc849qoedk7a4lk76b0teit447ah2v8c284lb7oi86lrtisde0fpqc9176t4g8i221qk810dr9mjhe53omo4s5foo23k6om6nehusaq570u08n8t4o3eiuomq7jm4rk65r9j239uqm8odbk2121kf8ir88sphs8vjpgfju85msqmi60
+

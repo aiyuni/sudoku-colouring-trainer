@@ -1,7 +1,7 @@
 import { useId } from 'react'
 import { markedCandidateDigits } from '../sudoku/boardUtils'
 import { candKey, stateForFrame } from './puzzleState'
-import type { CandRef, PuzzleState, TutorialFrame } from './tutorialTypes'
+import { TUTORIAL_COLOUR_HEX, type CandRef, type PuzzleState, type TutorialColor, type TutorialFrame } from './tutorialTypes'
 
 const NINE = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -24,7 +24,12 @@ const COLOUR_CLASS = {
   yellow: 'technique-yellow',
   darkBlue: 'technique-darkblue',
   orange: 'technique-orange',
+  pink: 'technique-pink',
+  purple: 'technique-purple',
+  limeGreen: 'technique-limegreen',
+  darkGreen: 'technique-darkgreen',
 } as const
+
 
 interface TutorialGridProps {
   state: PuzzleState
@@ -51,7 +56,12 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
   const solved = keys(frame.solved)
   const basis = keys(frame.basis)
   const fresh = keys(frame.fresh)
-  const colourByKey = new Map((frame.coloured ?? []).map((c) => [candKey(c), c.color]))
+  // A Double Dragon candidate both Dragons colour has two entries here.
+  const coloursByKey = new Map<string, TutorialColor[]>()
+  for (const c of frame.coloured ?? []) {
+    const key = candKey(c)
+    coloursByKey.set(key, [...(coloursByKey.get(key) ?? []), c.color])
+  }
   const cellSet = (cells: readonly (readonly [number, number])[] | undefined) =>
     new Set((cells ?? []).map(([r, c]) => `${r},${c}`))
   const outline = cellSet(frame.outlineCells)
@@ -122,7 +132,9 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
                       {DIGITS.map((digit) => {
                         const active = candidates[r][c][digit - 1]
                         const key = `${r},${c},${digit}`
-                        const colour = colourByKey.get(key)
+                        const colours = coloursByKey.get(key) ?? []
+                        const colour = colours[0]
+                        const split = colours.length > 1 ? colours : null
                         // One look per pip, most meaningful first: gone (red),
                         // the answer (green), a colour, a technique's basis.
                         const look = !active
@@ -131,11 +143,13 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
                             ? 'technique-eliminated'
                             : solved.has(key)
                               ? 'technique-solved'
-                              : colour
-                                ? COLOUR_CLASS[colour]
-                                : basis.has(key)
-                                  ? 'technique-used'
-                                  : ''
+                              : split
+                                ? 'candidate-painted technique-dragon-split'
+                                : colour
+                                  ? COLOUR_CLASS[colour]
+                                  : basis.has(key)
+                                    ? 'technique-used'
+                                    : ''
                         const dim = active && !look && isDim(r, c, digit)
                         return (
                           <span
@@ -150,6 +164,16 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
                               .filter(Boolean)
                               .join(' ')}
                           >
+                            {active && split && look.includes('technique-dragon-split') && (
+                              <>
+                                <span className="paint-layer paint-layer-bottom-left">
+                                  <span className="paint-shape paint-shape-circle" style={{ backgroundColor: TUTORIAL_COLOUR_HEX[split[0]] }} />
+                                </span>
+                                <span className="paint-layer paint-layer-top-right">
+                                  <span className="paint-shape paint-shape-circle" style={{ backgroundColor: TUTORIAL_COLOUR_HEX[split[1]] }} />
+                                </span>
+                              </>
+                            )}
                             {active ? digit : ''}
                           </span>
                         )

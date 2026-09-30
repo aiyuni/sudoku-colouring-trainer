@@ -113,8 +113,12 @@ export function listEffectiveEliminations(
   return removed
 }
 
+/** Simplest first - the tie-break between equally good matches, in the
+ * techniques' difficulty order. */
+const KIND_ORDER = ['dragon', 'double', 'dynamic', 'double-dynamic'] as const
+
 export interface DragonTargetMatch {
-  kind: 'dragon' | 'dynamic'
+  kind: (typeof KIND_ORDER)[number]
   /** Same key App uses to name a chain's technique instance. */
   chainKey: string
   /** The move log, cut off right after the first move by which every entered
@@ -145,6 +149,12 @@ export interface DragonTargetOptions {
   /** False under the "Disable Dynamic Dragons" setting: only plain Dragon
    * logs are searched. Defaults to true. */
   dynamicEnabled?: boolean
+  /** Double Dragon Colouring enabled: plain Double Dragon logs are searched
+   * too. Defaults to false. */
+  doubleEnabled?: boolean
+  /** Double Dynamic Dragon Colouring enabled (needs dynamicEnabled): its logs
+   * are searched too. Defaults to false. */
+  doubleDynamicEnabled?: boolean
 }
 
 function chainKeyOf(chain: MedusaChain): string {
@@ -218,7 +228,7 @@ export class SudokuDragonTargetFinder {
           extras.length < best.extras.length ||
           (extras.length === best.extras.length &&
             (cut.length < best.moves.length ||
-              (cut.length === best.moves.length && kind === 'dragon' && best.kind === 'dynamic')))
+              (cut.length === best.moves.length && KIND_ORDER.indexOf(kind) < KIND_ORDER.indexOf(best.kind))))
         if (better) {
           best = { kind, chainKey, moves: cut, eliminated, extras }
         }
@@ -226,6 +236,7 @@ export class SudokuDragonTargetFinder {
       }
     }
 
+    const stuckChains: MedusaChain[] = []
     for (const chain of this.medusaFinder.findChains(board, candidates)) {
       const stuck =
         this.medusaFinder.findMassElimination(chain, board, candidates) === null &&
@@ -236,6 +247,7 @@ export class SudokuDragonTargetFinder {
         continue
       }
       chainsTried++
+      stuckChains.push(chain)
       const chainKey = chainKeyOf(chain)
 
       const plain = this.dragonFinder.extend(chain, board, candidates, { exhaustive: true, optimize: true })
@@ -256,6 +268,38 @@ export class SudokuDragonTargetFinder {
       })
       if (dynamic && dynamic.moves.some((move) => move.kind === 'extension-rule3')) {
         consider('dynamic', chainKey, dynamic.moves)
+      }
+    }
+
+    // Double Dragons: every pair of stuck chains (see findDoubleDragons),
+    // Exhaustive and Optimize for the same reasons as above. A Double Dynamic
+    // log counts only when one of its Dragons really is Dynamic, and not for a
+    // pair plain Double Dragon (searched too, when enabled) already resolves.
+    const pairKey = (first: MedusaChain, second: MedusaChain) => `${chainKeyOf(first)}~${chainKeyOf(second)}`
+    const plainPairs = new Set<string>()
+    if (options.doubleEnabled) {
+      for (const { first, second, moves } of this.dragonFinder.findDoubleDragons(stuckChains, board, candidates, {
+        exhaustive: true,
+        optimize: true,
+      })) {
+        plainPairs.add(pairKey(first, second))
+        consider('double', pairKey(first, second), moves)
+      }
+    }
+    if (options.doubleDynamicEnabled && options.dynamicEnabled !== false) {
+      for (const { first, second, moves } of this.dragonFinder.findDoubleDragons(stuckChains, board, candidates, {
+        exhaustive: true,
+        optimize: true,
+        optimizeDynamic: options.optimizeDynamic,
+        dynamic: {
+          allowedRule3Techniques: options.allowedRule3Techniques,
+          aicLimitPerStep: options.aicLimitPerStep,
+          maxTechniquesPerStep: options.maxTechniquesPerStep,
+        },
+      })) {
+        if (!plainPairs.has(pairKey(first, second)) && moves.some((move) => move.kind === 'extension-rule3')) {
+          consider('double-dynamic', pairKey(first, second), moves)
+        }
       }
     }
 

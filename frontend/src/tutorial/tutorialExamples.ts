@@ -1,7 +1,9 @@
+import type { Rule3Technique } from '../sudoku/SudokuDragonFinder'
 import { SAMPLE_PUZZLE } from '../sudoku/types'
 import {
   buildBivalueOddagonLesson,
   buildBugPlusOneLesson,
+  buildDoubleDragonLesson,
   buildDragonLesson,
   buildHiddenSingleLesson,
   buildLockedCandidatesLesson,
@@ -284,6 +286,89 @@ export function buildUniquenessGroups(): LessonGroup[] {
           }),
         ),
       ],
+    },
+  ]
+}
+
+/** Double Dragons: one sub-tab each for the plain and the Dynamic version.
+ * Both assume single Dragons are understood. The plain position is a fresh
+ * autofill from the Double Dragon practice stock (plain Dragon is stuck on
+ * all 14 of its Medusas; the second Dragon's link absorbs one light blue 3
+ * that then forces a 6). The Dynamic one is a mid-solve position from the
+ * Double Dynamic research (frontend/double-dynamic-dragon-examples.txt, S5 -
+ * app defaults): single Dynamic Dragon, with the default techniques, is
+ * stuck on every Medusa and plain Double Dragon finds nothing, and the only
+ * helper techniques it uses are a naked pair and a locked candidate - so the
+ * lesson stays on the colouring. */
+export function buildDoubleDragonGroups(): LessonGroup[] {
+  return [
+    {
+      title: 'Double Plain Dragon Colouring',
+      blurb:
+        "This is the easiest Double Dragon to spot, and so we are using this example to demonstrate the concept of Double Dragons, but often times a single Dynamic Dragon is still stronger.",
+      lessons: safely(() =>
+        buildDoubleDragonLesson({
+          id: 'double-dragon',
+          title: 'Two stuck Dragons make progress',
+          hint: 'Every single normal Dragon is stuck here - a Double Dragon is not.',
+          state: decodePuzzleState('002001050900053000054600700080000100000030090700020000010500406500000810007010005'),
+          firstSeed: { row: 7, col: 3, digit: 3 },
+          secondSeed: { row: 0, col: 6, digit: 9 },
+        }),
+      ),
+    },
+    {
+      title: 'Double Dynamic Dragon Colouring example 1',
+      blurb:
+        'Dynamic Dragons reach a whole other level with Double Dynamic Dragons. Either Dragon may call on other techniques to keep colouring - and the colours the second Dragon absorbs can be exactly what those techniques need.',
+      lessons: safely(() =>
+        buildDoubleDragonLesson({
+          id: 'double-dynamic-dragon',
+          title: 'Two stuck Dynamic Dragons make progress',
+          hint: 'There are no easy single Dynamic Dragons that can progress this puzzle.  However, a short and sweet Double Dynamic Dragon can!',
+          state: decodePuzzleState(
+            '030050082002090000004026700000043000010002500700605020090200006006500209000069310',
+            'r2c8-6 r3c8-5 r4c1-9 r4c7-6 r5c8-9 r7c3-5',
+          ),
+          firstSeed: { row: 2, col: 1, digit: 5 },
+          secondSeed: { row: 0, col: 0, digit: 6 },
+          dynamic: true,
+        }),
+      ),
+    },
+    {
+      // Found by dragon-research/ddd-light-hunt.ts (a correct extra clue on a
+      // famous hard puzzle; also in DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK). At
+      // this position nothing in the app progresses with every setting maxed -
+      // every technique, no AIC limit, no cap, Exhaustive, so not even a
+      // single Dynamic Dragon - until Double Dynamic is on. It is taught with
+      // the smallest technique set that works (no AIC limit either way), so
+      // the only helpers shown are a single-digit AIC, a locked candidate and
+      // a naked triple.
+      title: 'Double Dynamic Dragon Colouring example 2',
+      blurb:
+        'Another example showcasing the true power of Double Dynamic Dragons. In this puzzle, even the strongest single Dynamic Dragon (every technique available, with no AIC/technique limitations) is stuck. However, a Double Dynamic Dragon solves this puzzle with only a few easy helper techniques.',
+      lessons: safely(() =>
+        buildDoubleDragonLesson({
+          id: 'double-dynamic-dragon-strongest',
+          title: 'Beyond every single Dragon',
+          hint: 'Every single Dynamic Dragon is stuck here (this is already extremely rare!).  However, a relatively straightforward Double Dynamic Dragon can crack the puzzle!',
+          state: decodePuzzleState('120300004350000100004000050005400200600070000000008090003180500000009070000060008'),
+          firstSeed: { row: 0, col: 4, digit: 5 },
+          secondSeed: { row: 1, col: 4, digit: 4 },
+          dynamic: true,
+          techniques: new Set<Rule3Technique>([
+            'hidden single',
+            'naked pair',
+            'locked candidate',
+            'hidden pair',
+            'naked triple',
+            'naked quad',
+            'x-wing',
+            'short single-digit aic',
+          ]),
+        }),
+      ),
     },
   ]
 }

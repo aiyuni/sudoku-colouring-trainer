@@ -1,6 +1,22 @@
 import type { Board, CandidateGrid } from '../sudoku/types'
 
-export type TutorialColor = 'blue' | 'yellow' | 'darkBlue' | 'orange'
+/** The first four are Dragon Colouring's usual colours; the last four are a
+ * Double Dragon's second Dragon (pink/purple, lime green/dark green). */
+export type TutorialColor = 'blue' | 'yellow' | 'darkBlue' | 'orange' | 'pink' | 'purple' | 'limeGreen' | 'darkGreen'
+/** The same hexes as the technique-* colour classes (App.css), for the two
+ * halves of a split pip and the colour key's split swatch - App.tsx's
+ * DRAGON_HIGHLIGHT_HEX draws the board's split pips the same way. */
+export const TUTORIAL_COLOUR_HEX: Record<TutorialColor, string> = {
+  blue: '#38bdf8',
+  yellow: '#fde047',
+  darkBlue: '#1d4ed8',
+  orange: '#fb923c',
+  pink: '#e6a3e6',
+  purple: '#9313b5',
+  limeGreen: '#7bc82c',
+  darkGreen: '#3d5c0e',
+}
+
 export type TutorialCell = readonly [row: number, col: number]
 
 export interface CandRef {
@@ -33,6 +49,9 @@ export interface TutorialFrame {
   caption: string
   /** A tiny label above the caption ("Colour", "Extend", "Result"...). */
   badge?: string
+  /** A candidate may appear in `coloured` twice, once per Dragon of a Double
+   * Dragon (a first-Dragon candidate the second Dragon absorbs): it is then
+   * drawn as a split pip, the first colour listed bottom-left. */
   coloured?: ColouredCand[]
   /** Candidates that just appeared in this step - ringed so the eye goes
    * straight to them. */

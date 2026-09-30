@@ -977,6 +977,46 @@ html.app-busy .busy-cancel,
   margin: 1px;
 }
 
+/* Double Dragon Colouring's second Dragon: pink/purple for one side, lime
+   green/dark green for the other - the candidate palette's Light pink, Lime
+   green, Purple and Dark green defaults (DEFAULT_CANDIDATE_COLOR_SWATCHES). */
+.candidate.technique-pink {
+  color: #2a0a2a;
+  background: #e6a3e6;
+  border-radius: 999px;
+  margin: 1px;
+}
+
+.candidate.technique-purple {
+  color: #faf5ff;
+  background: #9313b5;
+  border-radius: 999px;
+  margin: 1px;
+}
+
+.candidate.technique-limegreen {
+  color: #132503;
+  background: #7bc82c;
+  border-radius: 999px;
+  margin: 1px;
+}
+
+.candidate.technique-darkgreen {
+  color: #f0fdf4;
+  background: #3d5c0e;
+  border-radius: 999px;
+  margin: 1px;
+}
+
+/* A Double Dragon candidate coloured by both Dragons: the two colours are
+   drawn by child .paint-layer spans (renderDragonSplit in App.tsx); the
+   halo keeps the digit readable on any of the eight colours. */
+.candidate.technique-dragon-split {
+  color: #111827;
+  font-weight: 700;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+}
+
 /* Short AIC's chain candidates - purple, distinct from the yellow
    .technique-used a naked pair/triple/etc. basis gets, since an AIC node
    isn't quite the same relationship (it's one end of an alternating

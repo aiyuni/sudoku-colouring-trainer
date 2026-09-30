@@ -51,6 +51,12 @@ export type DragonMoveKind =
   | 'rule4'
   | 'rule5'
   | 'solution'
+  /** Double Dragon Colouring only: a candidate of one side of the second
+   * Dragon can't be true together with one of the first (stuck) Dragon's, so
+   * that side implies the first Dragon's other side - whose every candidate
+   * is coloured into the second Dragon's side as its dragon colour. See
+   * SudokuDragonFinder.extendDouble. */
+  | 'dragon-link'
 
 /** extend()'s options. `dynamic` turns on Dynamic Dragon Colouring:
  * Extension Rule 3, which reaches further than Rules 1-2 by simulating
@@ -65,9 +71,10 @@ export interface DragonExtendOptions {
    * pair' is always allowed regardless of what's passed here, since the
    * settings UI never lets it be excluded. */
   allowedRule3Techniques?: ReadonlySet<Rule3Technique>
-  /** At most one of a combined move's chained technique applications may
-   * be an AIC (either kind) - defaults to true. False allows as many as
-   * the chain needs. */
+  /** No Extension Rule 3 move may rely on more than one AIC (any kind) -
+   * defaults to true. An AIC that turns out to be a dead end doesn't count:
+   * each AIC is tried in its own branch (see extensionRule3Moves). False
+   * allows as many as the chain needs. */
   aicLimitPerStep?: boolean
   /** The most technique applications (of any kind, AICs included) one
    * Extension Rule 3 move may lean on - its relevant antecedents plus the
@@ -185,6 +192,79 @@ export interface DragonMove {
    * that would be left with no candidates at all (every one of them sees
    * the false side) - that cell, for the grid to highlight. */
   emptiedCell?: readonly [number, number]
+  /** Double Dragon Colouring only: this move belongs to the second Dragon,
+   * so its colours are that Dragon's own - 'blue'/'darkBlue'/'yellow'/
+   * 'orange' in `colored` stand for pink/purple/lime green/dark green (and
+   * `provenTrueColor` 'blue'/'yellow' for pink/lime green), which is also
+   * what its description calls them. The first Dragon's moves, and a
+   * conclusion about the first Dragon's colours, leave this unset. */
+  secondDragon?: boolean
+}
+
+/** Double Dragon Colouring: the first Dragon's stuck colouring (see
+ * SudokuDragonFinder.stuckColouring) - its final nodes and the moves that
+ * built it, which open every Double Dragon log built on it. */
+export interface StuckDragonColouring {
+  nodes: readonly DragonNode[]
+  moves: readonly DragonMove[]
+}
+
+/** How the second Dragon's colours read in its moves - see
+ * DragonMove.secondDragon. */
+const SECOND_DRAGON_LABELS: Record<DragonColor, string> = {
+  blue: 'pink',
+  darkBlue: 'purple',
+  yellow: 'lime green',
+  orange: 'dark green',
+}
+
+/** A label for `color` as the second Dragon's (`second`) or the first's. */
+export function dragonColourLabel(color: DragonColor, second = false): string {
+  return second ? SECOND_DRAGON_LABELS[color] : colorLabel(color)
+}
+
+/** The second Dragon's moves are built by the same rules as any Dragon's,
+ * so their descriptions name Dragon's usual colours - renamed here. */
+function renameToSecondDragon(text: string): string {
+  const byLabel: Record<string, DragonColor> = {
+    'light blue': 'blue',
+    'dark blue': 'darkBlue',
+    yellow: 'yellow',
+    orange: 'orange',
+  }
+  return text.replace(/\b(light blue|dark blue|yellow|orange)\b/g, (label) => SECOND_DRAGON_LABELS[byLabel[label]])
+}
+
+/** Two candidates that can't both be true: the same cell and different
+ * digits, or the same digit in a shared unit - a weak link. */
+function cannotBothBeTrue(a: DragonCandidateRef, b: DragonCandidateRef): boolean {
+  return a.row === b.row && a.col === b.col ? a.digit !== b.digit : a.digit === b.digit && sameUnit([a.row, a.col], [b.row, b.col])
+}
+
+/** Whether some node of one colouring and some node of the other can't both
+ * be true - what a Dragon link needs. */
+function anyDragonLink(a: readonly DragonNode[], b: readonly DragonNode[]): boolean {
+  return a.some((x) => b.some((y) => cannotBothBeTrue(x, y)))
+}
+
+/** Double *Dynamic* Dragon Colouring: both Dragons may use Extension Rule 3,
+ * each under these same limits, applied per extension step exactly as in a
+ * single Dynamic Dragon. Passing them to stuckColouring/extendDouble/
+ * findDoubleDragons makes the first Dragon a stuck *Dynamic* Dragon (so a
+ * chain single Dynamic Dragon resolves is never part of a pair) and the
+ * second a Dynamic Dragon with the link. A result only counts as Double
+ * Dynamic when some step of either Dragon is an Extension Rule 3 move - the
+ * caller checks (computeDoubleDynamicDragonExtensions). */
+export interface DynamicDragonLimits {
+  allowedRule3Techniques?: ReadonlySet<Rule3Technique>
+  aicLimitPerStep?: boolean
+  maxTechniquesPerStep?: number
+}
+
+/** Double Dragon Colouring: what the second Dragon is linked to - the first
+ * Dragon's stuck colouring, fixed for the whole run. */
+interface LinkedDragonState {
+  firstNodes: readonly DragonNode[]
 }
 
 /** One entry within a Dynamic Dragon Colouring step's chained reasoning
@@ -461,6 +541,12 @@ function sameUnit(a: readonly [number, number], b: readonly [number, number]): b
  * layout is capped here rather than risking the UI hanging on it (this
  * runs live, on every board/candidate change). */
 const MAX_RULE3_SIMULATION_STEPS = 200
+
+/** "Limit to 1 AIC per step" while collecting every move (Optimize Dynamic
+ * Dragons' enumeration, Autocomplete): the most AIC branches one simulation
+ * tries - see extensionRule3Moves. A single move (the default loop) tries
+ * every branch until one works. */
+const MAX_RULE3_ENUMERATION_AIC_BRANCHES = 8
 
 /** When collecting *every* move (Optimize Dynamic Dragons), the simulation
  * runs until nothing more applies instead of stopping at its first forced
@@ -785,6 +871,178 @@ export class SudokuDragonFinder {
     return this.extendFromState(nodeMap, [this.buildMedusaMove(seed)], board, candidates, options)
   }
 
+  /** Double Dragon Colouring's first Dragon: plain Dragon Colouring (the
+   * default extend(), no options) from `medusaChain`, carried on until it
+   * gets stuck - its final colouring and the moves that built it. Null when
+   * plain Dragon resolves the chain instead (it isn't stuck). The colouring
+   * is only ever "side true => candidate true" facts, so it stays valid after
+   * the run finds nothing; extend() just discards it. */
+  stuckColouring(
+    medusaChain: MedusaChain,
+    board: Board,
+    candidates: CandidateGrid,
+    dynamicOptions: DynamicDragonLimits | null = null,
+  ): StuckDragonColouring | null {
+    const nodeMap = new Map<string, DragonNode>()
+    const seed: DragonNode[] = medusaChain.candidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit, color: c.color }))
+    for (const n of seed) {
+      nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+    }
+    const moves = [this.buildMedusaMove(seed)]
+    if (this.extendFromState(nodeMap, moves, board, candidates, dynamicOptions ? { ...dynamicOptions, dynamic: true } : {})) {
+      return null
+    }
+    return { nodes: Array.from(nodeMap.values()), moves }
+  }
+
+  /**
+   * Double Dragon Colouring: a second plain Dragon, from `secondChain`, that
+   * may also lean on a first, stuck Dragon (`first`, from stuckColouring on
+   * another chain).
+   *
+   * Sides: the first Dragon's A (light blue/dark blue) and B (yellow/orange),
+   * exactly one true; the second Dragon's X/X' (pink/purple and lime green/
+   * dark green), exactly one true. Every node is "true if its side is true".
+   * The one new step, the *Dragon link* (findDragonLinkMove): when a node of
+   * side X and a node of the first Dragon's side S can't both be true (same
+   * cell, or same digit in a shared unit), then X => not S => S' (the first
+   * Dragon's other side), so X => every node of S' - which are coloured in
+   * X's dragon colour and used from then on like any other of X's nodes. It
+   * is tried after Rules 1-2 and the hidden single, per side, like Extension
+   * Rule 3 in a Dynamic Dragon. Everything else is plain Dragon, so every
+   * elimination rule stays sound for the same reason it always is (exactly
+   * one of X/X' is true, and each implies its own nodes).
+   *
+   * The link's special outcomes (all sound for the same reason): X linking
+   * to both of the first Dragon's sides, or implying a candidate X' has as a
+   * Medusa colour, proves X false; X and X' both implying the same side S'
+   * proves S' true (the first Dragon's own mass-elimination-style move).
+   *
+   * Returns the whole log - the first Dragon's moves, then the second's
+   * (DragonMove.secondDragon, named in the second Dragon's colours) - or null
+   * when nothing comes of it. `exhaustive` and `optimize` work exactly as for
+   * a plain Dragon (the link is one more extension Optimize's search branches
+   * on). With `dynamic` (Double Dynamic Dragon Colouring) the second Dragon
+   * may also use Extension Rule 3 under those limits, and `optimizeDynamic`
+   * works as for a single Dynamic Dragon. A second Dragon that never links is
+   * exactly the single Dragon (plain or Dynamic) on `secondChain`, so callers
+   * pass only chains that single Dragon is stuck on.
+   */
+  extendDouble(
+    first: StuckDragonColouring,
+    secondChain: MedusaChain,
+    board: Board,
+    candidates: CandidateGrid,
+    options: { exhaustive?: boolean; optimize?: boolean; optimizeDynamic?: boolean; dynamic?: DynamicDragonLimits } = {},
+  ): DragonResult | null {
+    const nodeMap = new Map<string, DragonNode>()
+    const seed: DragonNode[] = secondChain.candidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit, color: c.color }))
+    for (const n of seed) {
+      nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
+    }
+    const pinkCount = seed.filter((n) => n.color === 'blue').length
+    const greenCount = seed.length - pinkCount
+    const secondMedusa: DragonMove = {
+      id: 'second-medusa',
+      kind: 'medusa',
+      description: `The light blue/yellow Dragon is stuck. Start a second Dragon from this 3d Medusa: ${pinkCount} candidate${pinkCount === 1 ? '' : 's'} pink, and ${greenCount} candidate${greenCount === 1 ? '' : 's'} lime green.`,
+      colored: seed,
+      eliminated: [],
+      solved: [],
+      secondDragon: true,
+    }
+    const moves = [...first.moves, secondMedusa]
+    const linked: LinkedDragonState = { firstNodes: first.nodes }
+    const result = this.extendFromState(
+      nodeMap,
+      moves,
+      board,
+      candidates,
+      {
+        exhaustive: options.exhaustive ?? false,
+        optimize: options.optimize ?? false,
+        ...(options.dynamic ? { ...options.dynamic, dynamic: true, optimizeDynamic: options.optimizeDynamic ?? false } : {}),
+      },
+      linked,
+    )
+    if (!result) {
+      return null
+    }
+    // Moves the second Dragon's ordinary rules made name Dragon's usual
+    // colours; the link's own moves set secondDragon (true or, for a
+    // conclusion about the first Dragon's colours, false) and are already
+    // worded.
+    for (const move of result.moves.slice(first.moves.length)) {
+      if (move.secondDragon === undefined) {
+        move.secondDragon = true
+        move.description = renameToSecondDragon(move.description)
+        // A Dynamic step's substep clauses name colours too ("... so colour
+        // 6r2c8 dark blue"). Copies: the substeps can be shared with memoized
+        // finder results.
+        if (move.substeps) {
+          move.substeps = move.substeps.map((substep) => ({ ...substep, clause: renameToSecondDragon(substep.clause) }))
+        }
+      }
+    }
+    return result
+  }
+
+  /** Double Dragon Colouring over a whole board: every ordered pair of
+   * `chains` (callers pass only chains 3D Medusa is stuck on) plain Dragon is
+   * stuck on too, as (first Dragon, second Dragon) - extendDouble for each,
+   * up to `limit` results. `minBaseCandidates` applies to the first
+   * Dragon's Medusa only (the user's choice: the second Medusa is often
+   * tiny). A chain plain Dragon resolves is never part of a pair. */
+  findDoubleDragons(
+    chains: readonly MedusaChain[],
+    board: Board,
+    candidates: CandidateGrid,
+    options: {
+      exhaustive?: boolean
+      optimize?: boolean
+      minBaseCandidates?: number
+      limit?: number
+      dynamic?: DynamicDragonLimits
+      optimizeDynamic?: boolean
+    } = {},
+  ): Array<{ first: MedusaChain; second: MedusaChain; moves: DragonMove[] }> {
+    const stuck: Array<{ chain: MedusaChain; colouring: StuckDragonColouring }> = []
+    for (const chain of chains) {
+      const colouring = this.stuckColouring(chain, board, candidates, options.dynamic ?? null)
+      if (colouring) {
+        stuck.push({ chain, colouring })
+      }
+    }
+    const limit = options.limit ?? Infinity
+    const results: Array<{ first: MedusaChain; second: MedusaChain; moves: DragonMove[] }> = []
+    for (const second of stuck) {
+      for (const first of stuck) {
+        if (first.chain.candidates.length < (options.minBaseCandidates ?? 0)) {
+          continue
+        }
+        // Until its first Dragon link, the second Dragon runs exactly as it
+        // did on its own, when it got stuck - so a pair with no link anywhere
+        // between the two stuck colourings can't come to anything.
+        if (first === second || !anyDragonLink(first.colouring.nodes, second.colouring.nodes)) {
+          continue
+        }
+        const result = this.extendDouble(first.colouring, second.chain, board, candidates, {
+          exhaustive: options.exhaustive,
+          optimize: options.optimize,
+          optimizeDynamic: options.optimizeDynamic,
+          dynamic: options.dynamic,
+        })
+        if (result) {
+          results.push({ first: first.chain, second: second.chain, moves: result.moves })
+          if (results.length >= limit) {
+            return results
+          }
+        }
+      }
+    }
+    return results
+  }
+
   /** Every Dragon log's first move: the whole seed Medusa chain coloured. */
   private buildMedusaMove(seed: DragonNode[]): DragonMove {
     const blueCount = seed.filter((n) => n.color === 'blue').length
@@ -792,7 +1050,7 @@ export class SudokuDragonFinder {
     return {
       id: 'medusa',
       kind: 'medusa',
-      description: `Consider this 3d Medusa with: ${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue, and ${yellowCount} candidates yellow.`,
+      description: `Consider this 3d Medusa with: ${blueCount} candidate${blueCount === 1 ? '' : 's'} light blue, and ${yellowCount} candidate${yellowCount === 1 ? '' : 's'} yellow.`,
       colored: seed,
       eliminated: [],
       solved: [],
@@ -1014,13 +1272,16 @@ export class SudokuDragonFinder {
   /** extend()'s whole run, from a colouring already in `nodeMap` whose moves
    * so far are `moves` (both taken over and added to). extend() starts it
    * from a bare Medusa chain; continueColouring from a colouring the user
-   * painted by hand, once it has been checked. */
+   * painted by hand, once it has been checked. `linked` (Double Dragon
+   * only, never with `optimize`/`dynamic`) adds the Dragon link - see
+   * extendDouble. */
   private extendFromState(
     nodeMap: Map<string, DragonNode>,
     moves: DragonMove[],
     board: Board,
     candidates: CandidateGrid,
     options: DragonExtendOptions,
+    linked: LinkedDragonState | null = null,
   ): DragonResult | null {
     const exhaustive = options.exhaustive ?? false
     // What every rule below reads. The caller's `candidates` is never
@@ -1071,6 +1332,7 @@ export class SudokuDragonFinder {
         aicLimitPerStep,
         maxTechniquesPerStep,
         options.optimizeDynamic ?? false,
+        linked,
       )
     }
 
@@ -1110,6 +1372,7 @@ export class SudokuDragonFinder {
         this.findExtensionRule1Move(nodeMap, board, workingCandidates, primary) ??
         this.findExtensionRule2Move(nodeMap, board, workingCandidates, primary) ??
         this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, primary) ??
+        (linked ? this.findDragonLinkMove(nodeMap, linked, primary, workingCandidates) : null) ??
         (options.dynamic
           ? this.findExtensionRule3Move(
               nodeMap,
@@ -1192,6 +1455,14 @@ export class SudokuDragonFinder {
       const isMassElimination = eliminationMoves.length === 1 && eliminationMoves[0].kind === 'mass-elimination'
       if (eliminationMoves.length > 0 && (!exhaustive || isMassElimination)) {
         moves.push(...eliminationMoves)
+        return { moves }
+      }
+      // Double Dragon: what the links settle outright ends it, like a mass
+      // elimination (checked once any pending elimination has been applied).
+      const linkConclusion =
+        linked && eliminationMoves.length === 0 ? this.findDragonLinkConclusion(nodeMap, linked) : null
+      if (linkConclusion) {
+        moves.push(linkConclusion)
         return { moves }
       }
 
@@ -1317,6 +1588,7 @@ export class SudokuDragonFinder {
     aicLimitPerStep: boolean,
     maxTechniquesPerStep: number,
     optimizeDynamic: boolean,
+    linked: LinkedDragonState | null,
   ): DragonResult | null {
     // Same meaning as in extend(): fixed within a phase, changed only when
     // an exhaustive-mode elimination is applied between phases.
@@ -1343,6 +1615,7 @@ export class SudokuDragonFinder {
       this.findExtensionRule1Move(state.nodeMap, board, workingCandidates, primary) ??
       this.findExtensionRule2Move(state.nodeMap, board, workingCandidates, primary) ??
       this.findExtensionHiddenSingleMove(state.nodeMap, board, workingCandidates, primary) ??
+      (linked ? this.findDragonLinkMove(state.nodeMap, linked, primary, workingCandidates) : null) ??
       (dynamic
         ? this.findExtensionRule3Move(
             state.nodeMap,
@@ -1401,6 +1674,12 @@ export class SudokuDragonFinder {
         const isMassElimination = eliminationMoves.length === 1 && eliminationMoves[0].kind === 'mass-elimination'
         if (eliminationMoves.length > 0 && (!exhaustive || isMassElimination)) {
           return { kind: 'final', moves: eliminationMoves }
+        }
+        // Same as extend(): Double Dragon's link conclusions end it.
+        const linkConclusion =
+          linked && eliminationMoves.length === 0 ? this.findDragonLinkConclusion(state.nodeMap, linked) : null
+        if (linkConclusion) {
+          return { kind: 'final', moves: [linkConclusion] }
         }
         // Same as extend(): a solution counts before the first elimination too.
         if (continuing || eliminationMoves.length === 0) {
@@ -1526,6 +1805,12 @@ export class SudokuDragonFinder {
         sideExtensionCache.set(cacheKey, cached)
       }
       const moves = cached.plain.filter((move) => usableIn(state, move))
+      // Double Dragon: the Dragon link is one more branch. Computed per state
+      // (cheap), since it skips everything either side has coloured.
+      const linkMove = linked ? this.findDragonLinkMove(state.nodeMap, linked, primary, workingCandidates) : null
+      if (linkMove) {
+        moves.push(linkMove)
+      }
       // Rule 3: with Optimize Dynamic Dragons (everyRule3) every move it can
       // force is a branch; otherwise, as in the default loop, only one, and
       // only when the side has no plain extension.
@@ -2014,9 +2299,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     limit: number,
   ): DragonMove[] {
     const moves: DragonMove[] = []
-    // nodeMap plus every candidate already reported this call - what the
-    // "newly forced" checks skip.
-    const known = new Map(nodeMap)
+    // nodeMap plus every candidate already reported this call.
+    const emitted = new Map(nodeMap)
+    // What the "newly forced" checks skip in the simulation running now:
+    // `emitted` plus the candidates it has dropped (see emit). Each branch of
+    // the AIC limit's search (see branchOnAicTier) starts again from
+    // `emitted`, so a candidate one branch had to drop can still come out of
+    // another.
+    let known = new Map(emitted)
     /** Records a move; true once `limit` is reached (stop simulating).
      * Never one for a candidate that's already coloured, by either side -
      * the same rule every other extension path follows. The direct-solve
@@ -2041,13 +2331,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     const emit = (move: DragonMove): boolean => {
       const [n] = move.colored
       const key = nodeKey(n.row, n.col, n.digit)
-      if (known.has(key)) {
+      if (known.has(key) || emitted.has(key)) {
         return false
       }
       known.set(key, n)
       if ((move.dynamicTechniques?.length ?? 0) > maxTechniquesPerStep) {
         return false
       }
+      emitted.set(key, n)
       moves.push(move)
       return moves.length >= limit
     }
@@ -2057,18 +2348,78 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     if (!hypothetical) {
       return moves
     }
-    const { hypBoard, hypCandidates } = hypothetical
+    const { hypBoard } = hypothetical
 
-    const steps: Rule3ChainStep[] = []
-    // Counts every AIC application actually tried during this simulation
-    // (antecedent or final), not just the ones that end up relevant to the
-    // final conclusion - simpler to reason about, and "used" is a fair
-    // reading of "used once within a step" either way.
-    let aicStepsUsed = 0
+    // "Limit to 1 AIC per step" (the user's definition, 2026-09-30): no move
+    // may *rely on* more than one AIC, and an AIC that leads nowhere must not
+    // use up the quota. So with the limit on, the simulation never applies an
+    // AIC on its main line ('branch' mode). Wherever an AIC tier is reached
+    // (nothing simpler applies), each of that tier's AICs is tried in its own
+    // branch - applied to a copy, then the simulation carries on with AICs off
+    // ('none') - and afterwards the main line carries on as if the tier had
+    // found nothing. Every move a branch finds rests on at most that one AIC;
+    // a branch that finds nothing is a dead end and is dropped. The first
+    // branch is exactly what the old one-AIC-then-stop simulation did, so
+    // nothing it found is lost. With the limit off ('all') AICs are applied
+    // as they come, as always.
+    type AicMode = 'all' | 'branch' | 'none'
+    let branchesTried = 0
 
     // Collecting every move: how many more times the AIC search may run
     // (see MAX_RULE3_ENUMERATION_AIC_SEARCHES). Unlimited for one move.
     let aicSearchesLeft = limit === 1 ? Infinity : MAX_RULE3_ENUMERATION_AIC_SEARCHES
+
+    /** 'branch' mode at an AIC tier: every AIC of the tier (one per
+     * elimination set, in the finder's order) in its own branch from this
+     * state. True once `limit` moves are found. An AIC whose eliminations a
+     * failed branch here already made is skipped - the simulation only ever
+     * gets further with more eliminations. */
+    const branchOnAicTier = (
+      hypCandidates: CandidateGrid,
+      steps: Rule3ChainStep[],
+      tierSteps: Rule3ChainStep[],
+    ): boolean => {
+      const failed: Set<string>[] = []
+      for (const aicStep of tierSteps) {
+        const eliminationKeys = aicStep.eliminatedCandidates.map((e) => nodeKey(e.row, e.col, e.digit))
+        if (failed.some((set) => eliminationKeys.every((key) => set.has(key)))) {
+          continue
+        }
+        if (limit !== 1 && branchesTried >= MAX_RULE3_ENUMERATION_AIC_BRANCHES) {
+          return false
+        }
+        branchesTried++
+        const found = moves.length
+        const branchCandidates = cloneCandidates(hypCandidates)
+        for (const { row, col, digit } of aicStep.eliminatedCandidates) {
+          branchCandidates[row][col][digit - 1] = false
+        }
+        const branchSteps = [...steps]
+        const mainKnown = known
+        known = new Map(emitted)
+        if (
+          this.emitForcedCells(hypBoard, branchCandidates, known, (forced) =>
+            emit(this.buildRule3CombinedMove(primary, branchSteps, aicStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+          )
+        ) {
+          return true
+        }
+        branchSteps.push(aicStep)
+        if (run(branchCandidates, branchSteps, 'none')) {
+          return true
+        }
+        known = mainKnown
+        if (moves.length === found) {
+          failed.push(new Set(eliminationKeys))
+        }
+      }
+      return false
+    }
+
+    /** One simulation from `hypCandidates` (mutated), recording applied
+     * techniques in `steps` (mutated): true once `limit` moves are found
+     * (stop), false when nothing more applies. */
+    const run = (hypCandidates: CandidateGrid, steps: Rule3ChainStep[], aicMode: AicMode): boolean => {
     for (let step = 0; step < MAX_RULE3_SIMULATION_STEPS; step++) {
       let appliedSomething = false
       const grid = gridKey(hypBoard, hypCandidates)
@@ -2093,7 +2444,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             hiddenSingle.unit,
           )
           if (emit(move)) {
-            return moves
+            return true
           }
         }
       }
@@ -2119,7 +2470,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
             )
           ) {
-            return moves
+            return true
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -2152,7 +2503,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
           )
         ) {
-          return moves
+          return true
         }
         steps.push(chainStep)
         appliedSomething = true
@@ -2197,7 +2548,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
             )
           ) {
-            return moves
+            return true
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -2232,7 +2583,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
             )
           ) {
-            return moves
+            return true
           }
           steps.push(chainStep)
           appliedSomething = true
@@ -2266,7 +2617,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               { kind: 'direct' },
             )
             if (emit(move)) {
-              return moves
+              return true
             }
             continue
           }
@@ -2288,7 +2639,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
                 emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
               )
             ) {
-              return moves
+              return true
             }
             steps.push(chainStep)
             appliedSomething = true
@@ -2322,7 +2673,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             { kind: 'direct' },
           )
           if (emit(move)) {
-            return moves
+            return true
           }
         }
       }
@@ -2346,7 +2697,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               { kind: 'direct' },
             )
             if (emit(move)) {
-              return moves
+              return true
             }
             continue
           }
@@ -2367,7 +2718,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
                 emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
               )
             ) {
-              return moves
+              return true
             }
             steps.push(chainStep)
             appliedSomething = true
@@ -2403,21 +2754,18 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       for (const technique of FISH_AND_AIC_RULE3_ORDER) {
         let chainStep: Rule3ChainStep
         if (technique === 'short single-digit aic' || technique === 'short aic' || technique === 'generic aic') {
-          aicSearchAllowed ??= !(aicLimitPerStep && aicStepsUsed >= 1) && aicSearchesLeft-- > 0
+          aicSearchAllowed ??= aicMode !== 'none' && aicSearchesLeft-- > 0
           if (!aicSearchAllowed || !allowedTechniques.has(technique)) {
             continue
           }
-          const aic =
+          const tierAics = (
             technique === 'generic aic'
-              ? this.memoFind('genericAic', grid, () => this.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, graph()))[0]
-              : this.memoFind('shortAic', grid, () => this.shortAicFinder.findShortAics(hypBoard, hypCandidates, graph())).find(
+              ? this.memoFind('genericAic', grid, () => this.genericAicFinder.findGenericAics(hypBoard, hypCandidates, undefined, graph()))
+              : this.memoFind('shortAic', grid, () => this.shortAicFinder.findShortAics(hypBoard, hypCandidates, graph())).filter(
                   (candidate) => (classifyShortAic(candidate) === 'single-digit') === (technique === 'short single-digit aic'),
                 )
-          if (!aic) {
-            continue
-          }
-          aicStepsUsed++
-          chainStep = {
+          ).filter((candidate) => candidate.eliminations.length > 0)
+          const toStep = (aic: ShortAicInstance): Rule3ChainStep => ({
             technique,
             basisCells: aic.nodes.map((n) => [n.row, n.col] as const),
             affectedCells: uniqueCells(aic.eliminations),
@@ -2425,7 +2773,27 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             clause: this.aicClause(aic, technique),
             summaryName: `a ${this.aicLabel(technique)} (Type ${aic.eliminationType})`,
             aic,
+          })
+          if (aicMode === 'branch') {
+            // Each of the tier's AICs in its own branch, then on as if the
+            // tier had nothing (see the AicMode comment above).
+            const seen = new Set<string>()
+            const tierSteps = tierAics
+              .filter((aic) => {
+                const key = aic.eliminations.map((e) => nodeKey(e.row, e.col, e.digit)).sort().join('|')
+                return !seen.has(key) && seen.add(key) !== undefined
+              })
+              .map(toStep)
+            if (branchOnAicTier(hypCandidates, steps, tierSteps)) {
+              return true
+            }
+            continue
           }
+          const aic = tierAics[0]
+          if (!aic) {
+            continue
+          }
+          chainStep = toStep(aic)
         } else if (technique === 'als-xz') {
           if (!allowedTechniques.has(technique)) {
             continue
@@ -2472,7 +2840,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
           )
         ) {
-          return moves
+          return true
         }
         steps.push(chainStep)
         appliedSomething = true
@@ -2484,12 +2852,16 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
 
       // Nothing more applies - whatever's accumulated in `steps` that
       // never led anywhere actionable is discarded rather than surfaced.
-      return moves
+      return false
     }
 
     // Exceeded the safety cap without getting stuck - keep what was found
     // (always nothing when `limit` is 1, which returns at its first find),
     // rather than risk an unbounded simulation.
+    return false
+    }
+
+    run(hypothetical.hypCandidates, [], aicLimitPerStep ? 'branch' : 'all')
     return moves
   }
 
@@ -2839,6 +3211,160 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         return `${[...digits].sort((x, y) => x - y).join('')}${cellRef(row, col)}`
       })
       .join(', ')
+  }
+
+  /** Which of the first Dragon's sides each second-Dragon node of side
+   * `side` can't be true together with (a weak link: same cell and different
+   * digits, or same digit in a shared unit) - the first such pair per first
+   * side. X linked to S means X => not S => S'. */
+  private dragonLinks(
+    nodeMap: Map<string, DragonNode>,
+    linked: LinkedDragonState,
+    side: Side,
+  ): Record<Side, { own: DragonNode; theirs: DragonNode } | null> {
+    const links: Record<Side, { own: DragonNode; theirs: DragonNode } | null> = { A: null, B: null }
+    for (const own of nodeMap.values()) {
+      if (sideOf(own.color) !== side) {
+        continue
+      }
+      for (const theirs of linked.firstNodes) {
+        const firstSide = sideOf(theirs.color)
+        if (!links[firstSide] && cannotBothBeTrue(own, theirs)) {
+          links[firstSide] = { own, theirs }
+        }
+      }
+      if (links.A && links.B) {
+        break
+      }
+    }
+    return links
+  }
+
+  private linkClause({ own, theirs }: { own: DragonNode; theirs: DragonNode }): string {
+    const ref = (n: DragonNode) => `${n.digit}${cellRef(n.row, n.col)}`
+    return `${ref(own)} (${SECOND_DRAGON_LABELS[own.color]}) and ${ref(theirs)} (${colorLabel(theirs.color)}) can't both be true`
+  }
+
+  /** "X is linked to S, so X implies S'", worded for a move description. */
+  private linkReasoning(link: { own: DragonNode; theirs: DragonNode }, primary: PrimaryColor): string {
+    const xName = SECOND_DRAGON_LABELS[primary]
+    const falseSide = sideOf(link.theirs.color)
+    const falseName = colorLabel(primaryForSide(falseSide))
+    const impliedName = colorLabel(primaryForSide(oppositeSide(falseSide)))
+    return `${this.linkClause(link)}: if ${falseName} is true, ${link.theirs.digit}${cellRef(link.theirs.row, link.theirs.col)} is true, so ${xName} is false. So if ${xName} is true, ${falseName} is false and ${impliedName} is true`
+  }
+
+  /** Double Dragon Colouring's Dragon link, as an extension of the second
+   * Dragon's side of `primary` (X) - see extendDouble. When X is linked to
+   * exactly one of the first Dragon's sides, S, it implies every node of S':
+   * those not coloured yet (by either of the second Dragon's sides) and still
+   * candidates are coloured X's dragon colour. Null when there's no link, when
+   * X is linked to both sides (findDragonLinkConclusion's case), or when
+   * nothing is left to colour. A pure function of the colouring, like every
+   * other extension rule, so it works unchanged in Optimize's search. */
+  private findDragonLinkMove(
+    nodeMap: Map<string, DragonNode>,
+    linked: LinkedDragonState,
+    primary: PrimaryColor,
+    candidates: CandidateGrid,
+  ): DragonMove | null {
+    const side = sideOfPrimary(primary)
+    const links = this.dragonLinks(nodeMap, linked, side)
+    if (!links.A === !links.B) {
+      return null
+    }
+    const link = (links.A ?? links.B)!
+    const impliedSide = oppositeSide(sideOf(link.theirs.color))
+    const secondary = secondaryForSide(side)
+    const colored: DragonNode[] = []
+    for (const n of linked.firstNodes) {
+      if (
+        sideOf(n.color) === impliedSide &&
+        candidates[n.row][n.col][n.digit - 1] &&
+        !nodeMap.has(nodeKey(n.row, n.col, n.digit))
+      ) {
+        colored.push({ row: n.row, col: n.col, digit: n.digit, color: secondary })
+      }
+    }
+    if (colored.length === 0) {
+      return null
+    }
+    const impliedNames = `${colorLabel(primaryForSide(impliedSide))}/${colorLabel(secondaryForSide(impliedSide))}`
+    return {
+      id: '',
+      kind: 'dragon-link',
+      description: `${this.linkReasoning(link, primary)} - and so is every ${impliedNames} coloured candidate: thus, we can colour ${colored.length === 1 ? 'it' : 'them'} ${SECOND_DRAGON_LABELS[secondary]} as well, while keeping the original ${impliedNames} (${colored.map((n) => `${n.digit}${cellRef(n.row, n.col)}`).join(', ')}).`,
+      colored,
+      eliminated: [],
+      solved: [],
+      secondDragon: true,
+    }
+  }
+
+  /** What Dragon links settle outright, checked alongside the elimination
+   * rules (a pure function of the colouring, like them):
+   *  - a second-Dragon side X linked to both of the first Dragon's sides
+   *    would make both false - X is false;
+   *  - X linked to S (so X => S') while a node of S' is a Medusa colour of
+   *    the other side X' - X would imply X', so X is false;
+   *  - both X and X' linked to the same S - S' is true either way (a move
+   *    about the first Dragon's own colours, `secondDragon: false`).
+   * Each is a mass-elimination move; null when none applies. */
+  private findDragonLinkConclusion(nodeMap: Map<string, DragonNode>, linked: LinkedDragonState): DragonMove | null {
+    const links: Record<Side, Record<Side, { own: DragonNode; theirs: DragonNode } | null>> = {
+      A: this.dragonLinks(nodeMap, linked, 'A'),
+      B: this.dragonLinks(nodeMap, linked, 'B'),
+    }
+    const nodes = Array.from(nodeMap.values())
+    for (const side of ['A', 'B'] as const) {
+      const primary = primaryForSide(side)
+      const xName = SECOND_DRAGON_LABELS[primary]
+      const { A: linkA, B: linkB } = links[side]
+      if (linkA && linkB) {
+        return {
+          ...this.buildMassMove(
+            nodes,
+            side,
+            `${this.linkClause(linkA)}, and ${this.linkClause(linkB)}. So if ${xName} were true, light blue and yellow would both be false - but one of them is true, so ${xName} is false.`,
+          ),
+          secondDragon: true,
+        }
+      }
+      const link = linkA ?? linkB
+      if (!link) {
+        continue
+      }
+      const impliedSide = oppositeSide(sideOf(link.theirs.color))
+      const clash = linked.firstNodes.find((n) => {
+        const existing = sideOf(n.color) === impliedSide ? nodeMap.get(nodeKey(n.row, n.col, n.digit)) : undefined
+        return existing !== undefined && sideOf(existing.color) !== side && isPrimary(existing.color)
+      })
+      if (clash) {
+        const clashName = SECOND_DRAGON_LABELS[primaryForSide(oppositeSide(side))]
+        return {
+          ...this.buildMassMove(
+            nodes,
+            side,
+            `${this.linkReasoning(link, primary)}, which includes ${clash.digit}${cellRef(clash.row, clash.col)} - coloured ${clashName}. So ${xName} would make ${clashName} true as well, and ${xName} is false.`,
+          ),
+          secondDragon: true,
+        }
+      }
+      const otherLink = links[oppositeSide(side)][sideOf(link.theirs.color)]
+      if (otherLink) {
+        const impliedName = colorLabel(primaryForSide(impliedSide))
+        const otherName = SECOND_DRAGON_LABELS[primaryForSide(oppositeSide(side))]
+        return {
+          ...this.buildMassMove(
+            [...linked.firstNodes],
+            sideOf(link.theirs.color),
+            `${this.linkReasoning(link, primary)}. Likewise ${this.linkClause(otherLink)}, so ${otherName} implies ${impliedName} too - ${impliedName} is true whichever of pink and lime green is.`,
+          ),
+          secondDragon: false,
+        }
+      }
+    }
+    return null
   }
 
   /** Promotion: an opposite-side pair of the same candidate seeing each

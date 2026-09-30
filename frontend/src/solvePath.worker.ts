@@ -26,6 +26,10 @@ export interface SolvePathOptions {
   /** Dynamic Dragon's "Max techniques per step" (Infinity = no limit;
    * structured clone keeps Infinity intact). */
   maxTechniquesPerDragonStep: number
+  /** Double Dragon Colouring enabled (off by default). */
+  doubleDragonEnabled: boolean
+  /** Double Dynamic Dragon Colouring enabled (off by default). */
+  doubleDynamicDragonEnabled: boolean
 }
 
 export interface SolvePathWorkerRequest {
@@ -62,6 +66,8 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         new Set(options.enabledFish),
         options.alsXzEnabled,
         options.maxTechniquesPerDragonStep,
+        options.doubleDragonEnabled,
+        options.doubleDynamicDragonEnabled,
       ),
     }
   } catch (error) {

@@ -4,14 +4,15 @@ import TutorialGrid from './TutorialGrid'
 import {
   buildBasicsGroups,
   buildColourLessons,
+  buildDoubleDragonGroups,
   buildUniquenessGroups,
   type ColourTabId,
   type LessonGroup,
 } from './tutorialExamples'
-import type { TutorialColor, TutorialLesson } from './tutorialTypes'
+import { TUTORIAL_COLOUR_HEX, type TutorialColor, type TutorialLesson } from './tutorialTypes'
 import './tutorial.css'
 
-type TabId = 'basics' | ColourTabId | 'uniqueness'
+type TabId = 'basics' | ColourTabId | 'double' | 'uniqueness'
 
 /** The tab bar and the one line under it. Edit the wording here. */
 const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
@@ -37,21 +38,32 @@ const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
     tagline: 'The strongest Colouring technique.  Dynamic Dragons are Dragons that can call on other techniques to keep the colouring going when regular Dragons get stuck.',
   },
   {
+    id: 'double',
+    label: 'Double Dragons',
+    tagline:
+      "When every single Dragon is stuck, using two dragons at the same time can make progress. Keep one stuck Dragon's colours and run a second Dragon from another Medusa set: wherever the two clash, an interesting relationship is formed...",
+  },
+  {
     id: 'uniqueness',
     label: 'Abusing Uniqueness',
     tagline:
-      "Shortcuts (primarily Unique Rectangles) that rely on a proper puzzle having exactly one solution: a pattern that would allow two solutions can never happen, so whatever prevents it must be true. Uniqueness is never needed to solve a puzzle - you can always solve it without these - so this whole section can be skipped.",
+      "Shortcuts (primarily Unique Rectangles) that rely on a proper puzzle having exactly one solution: a pattern that would allow two solutions can never happen, so whatever prevents it must be true. Uniqueness is never needed to solve a puzzle - you can always solve it without these - so this whole section consists of optional yet rewarding techniques.",
   },
 ]
 
 // What each look on the board means - shown under the player, and only the
 // ones the current example actually uses.
-type LegendKind = TutorialColor | 'eliminated' | 'solved' | 'link' | 'helper'
+type LegendKind = TutorialColor | 'split' | 'eliminated' | 'solved' | 'link' | 'helper'
 const LEGEND_TEXT: Record<LegendKind, { label: string; note?: string }> = {
   blue: { label: 'Blue' },
   yellow: { label: 'Yellow' },
   darkBlue: { label: 'Dark blue', note: 'true if light blue is' },
   orange: { label: 'Orange', note: 'true if yellow is' },
+  pink: { label: 'Pink', note: 'second Dragon' },
+  limeGreen: { label: 'Lime green', note: 'second Dragon' },
+  purple: { label: 'Purple', note: 'true if pink is' },
+  darkGreen: { label: 'Dark green', note: 'true if lime green is' },
+  split: { label: 'Two colours', note: 'coloured by both Dragons' },
   eliminated: { label: 'Eliminated' },
   solved: { label: 'Answer' },
   link: { label: 'Link' },
@@ -61,20 +73,56 @@ const LEGEND_TEXT: Record<LegendKind, { label: string; note?: string }> = {
 function legendFor(lesson: TutorialLesson): LegendKind[] {
   const used = new Set<LegendKind>()
   for (const frame of lesson.frames) {
-    for (const c of frame.coloured ?? []) used.add(c.color)
+    const seen = new Set<string>()
+    for (const c of frame.coloured ?? []) {
+      used.add(c.color)
+      const key = `${c.row},${c.col},${c.digit}`
+      if (seen.has(key)) used.add('split')
+      seen.add(key)
+    }
     if (frame.eliminated?.length) used.add('eliminated')
     if (frame.solved?.length) used.add('solved')
     if (frame.links?.some((l) => l.kind === 'strong')) used.add('link')
     if (frame.greenCells?.length) used.add('helper')
   }
-  const order: LegendKind[] = ['blue', 'yellow', 'darkBlue', 'orange', 'link', 'eliminated', 'solved', 'helper']
+  const order: LegendKind[] = [
+    'blue',
+    'yellow',
+    'darkBlue',
+    'orange',
+    'pink',
+    'limeGreen',
+    'purple',
+    'darkGreen',
+    'split',
+    'link',
+    'eliminated',
+    'solved',
+    'helper',
+  ]
   return order.filter((kind) => used.has(kind))
+}
+
+/** The first candidate the lesson draws in two colours, as [first Dragon,
+ * second Dragon] - the key's split swatch shows that pair. */
+function firstSplitPair(lesson: TutorialLesson): [TutorialColor, TutorialColor] | null {
+  for (const frame of lesson.frames) {
+    const seen = new Map<string, TutorialColor>()
+    for (const c of frame.coloured ?? []) {
+      const key = `${c.row},${c.col},${c.digit}`
+      const earlier = seen.get(key)
+      if (earlier) return [earlier, c.color]
+      seen.set(key, c.color)
+    }
+  }
+  return null
 }
 
 function Legend({ lesson }: { lesson: TutorialLesson }) {
   // Dragon lessons talk about "light blue" next to "dark blue".
   const hasDragonColours = lesson.frames.some((f) => f.coloured?.some((c) => c.color === 'darkBlue' || c.color === 'orange'))
   const items = legendFor(lesson)
+  const split = firstSplitPair(lesson)
   if (items.length === 0) return null
   return (
     <ul className="tutorial-legend" aria-label="Colour key">
@@ -83,7 +131,15 @@ function Legend({ lesson }: { lesson: TutorialLesson }) {
         const text = kind === 'blue' && hasDragonColours ? 'Light blue' : label
         return (
           <li key={kind}>
-            <span className={`tutorial-swatch tutorial-swatch-${kind}`} aria-hidden="true" />
+            <span
+              className={`tutorial-swatch tutorial-swatch-${kind}`}
+              style={
+                kind === 'split' && split
+                  ? { background: `linear-gradient(to top right, ${TUTORIAL_COLOUR_HEX[split[0]]} 50%, ${TUTORIAL_COLOUR_HEX[split[1]]} 50%)` }
+                  : undefined
+              }
+              aria-hidden="true"
+            />
             <span>
               {text}
               {note && <span className="tutorial-legend-note"> - {note}</span>}
@@ -250,6 +306,19 @@ function BasicsView() {
   )
 }
 
+/** Double Dragons: a sub-tab each for plain and Dynamic, played step by step. */
+function DoubleDragonView() {
+  const groups = useMemo(() => buildDoubleDragonGroups(), [])
+  return (
+    <GroupTabs
+      groups={groups}
+      label="Double Dragon techniques"
+      tab="double"
+      render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
+    />
+  )
+}
+
 /** Abusing Uniqueness: a sub-tab per technique, each played step by step. */
 function UniquenessView() {
   const groups = useMemo(() => buildUniquenessGroups(), [])
@@ -369,7 +438,15 @@ export default function TutorialPage({ onClose, initialTab = 'basics' }: Tutoria
 
       <div className="tutorial-content" role="tabpanel" id="tutorial-panel" aria-labelledby={`tutorial-tab-${tab}`}>
         <p className="tutorial-tagline">{current.tagline}</p>
-        {tab === 'basics' ? <BasicsView /> : tab === 'uniqueness' ? <UniquenessView /> : <ColourView key={tab} tab={tab} />}
+        {tab === 'basics' ? (
+          <BasicsView />
+        ) : tab === 'uniqueness' ? (
+          <UniquenessView />
+        ) : tab === 'double' ? (
+          <DoubleDragonView />
+        ) : (
+          <ColourView key={tab} tab={tab} />
+        )}
       </div>
     </div>
   )

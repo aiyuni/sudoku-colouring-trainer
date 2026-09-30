@@ -1,0 +1,27 @@
+/** Pre-found "Double Dynamic Dragon Colouring" positions, as Sudoku.Coach
+ * "SCv7_32_" states (board, givens and candidates - PuzzleImporter reads
+ * them), served by dynamicDragonPuzzleStock.ts's
+ * pickStockDoubleDynamicDragonPuzzle. Each was verified through the app's own
+ * engine (buildTechniqueInstances) with every setting maxed out - all AIC
+ * kinds, no AIC limit, every Dynamic Dragon technique, no technique cap,
+ * Exhaustive, every fish, ALS-xz, Double Dragon: at the stored position
+ * nothing in the Techniques list applies until Double Dynamic Dragon
+ * Colouring is turned on, and then only Double Dynamic rows do; continuing
+ * with it on solves the whole puzzle with no guessing, every step checked
+ * against the solution. The positions are mid-solve (reached from the
+ * puzzle's clues by the easier techniques), so a re-autofill makes them
+ * easier again. They come from the famous hardest puzzles (Easter Monster,
+ * Kolk, ...) plus one or two correct extra clues - no ordinary puzzle
+ * collection tried (3,301 hard puzzles) had such a position. Regenerate with
+ * the scratch harness described in DRAGON_COLOURING_HANDOFF.md. */
+export const DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK: readonly string[] = [
+  'SCv7_32_f2e9b3i1d91j2324tvh7a1m6m8mcnmd66vk0i0nv2cv88b4imi5pdnlt916q3d5b18m68qfk8rnuat6tirjuqr9dvesin9vdemujord7tlv2nuq26r9eg92p95gsc859sgi9r5gipnsng22qkif3n4cdjh4m0pupimbtmuntc7o2nr2fstvv2c1oljjv7obob6reau2voekbl84rgbk4ct3l20r39cq0jdi5ui8g9p3mu5ljqiqutc1ad1h3i8tq51t5et4hv12g38kq8epv006n45k3qc2d2jhg295671647ka6r2qpdhqk9ue0fejt3esk5aj01q1ieo2mgmkm34l8f5eg12f1ghco5j1hv4qoind9grgqgfaubqjio7sv07h6lpg',
+  'SCv7_32_f2ear3qddo132345tu93ajrqeoedmoabdv81681h88hi25i0ndkdbeqnp584sk3fkbs7mfu9esstvlmjvftbb53truav7ulpbjftdsvqn2bnq4bekfm38kgq94jhi90r7flp71rdcsrd49mtei1nfpic30hmalputr5uqlfgugtvuqsu0m3uashp3inqftbkfgmb6226ka544f0hs4o72h2n2227l0l8udbangmqrvf51hd1s4gco4d9q1n216jiralgr8bh31hf642i1lj8id23al3k8rkg918j8tb451d2d917nhmiohnc107his8qgqa1pfcqvrl3ad2fp2a38ghbi4v0i2098vjfhhaod4egud2oeaddo4hc7uvraf3a7s',
+  'SCv7_32_f2eaajphdo1j237rhfjh1834b69b79hvt05g5p0g3g868i6i1omvltu2nor41prim52ol97tb77bftfkn9v2opevevirpfhfqubvbf1utpilv10jlrm394jd1gi67nhrtej36r1rme8jdlbddvk9qiai4sjmaluutr5uqme0ns8fs5pv0m3uashp3inqftbkfgmb6226ka544f0hs4o72h2n2227l0l8eel5aofdisrl8sb870476h1amgdoh9ksupl67k9o1ioni2590qpk96l1l8hi4dsh918j8tb451d2d917nhmll36o24f35ohk1gkjiuhlvncmmq4ui2st425d8jt58g2870pcebo6klqjpk30p5kn4itgfhug7dp1d8vg',
+  'SCv7_32_f2e8b3edd81j2344rv2ue34cfpmcned6dv82e234145i31p4tmgibrqumiturad509dm5t39sqpporvjt5qvt66afrmckubujun2vsrpfrecnfk8q94d5bb6idiqcsl9tb6b34fchham6s4g6ggun9gcuqiie5r5avfetkvd4u0bv5vsk7vlumu0c6t5o3m7tdkjs78vqc908olkvi1o9al3qdglagbstvpfas180e22qj108rdithqot4n0kiumfner4bbqal2kv9578s7da0il0bat7k9tkm02nh03a8em43h1ach59ki7pkoq8ofkqlavn2gjs6k42603co0t61gt1a9jp3h4fag0qhdbg7j0rkhia4h51be112bee5o0l9knc',
+  'SCv7_32_f2eaqjqbd91k235rpem2741vsfom96uuk0jghp0h3q22p4lkhebdtfecsiiifa0moqr88p3vivpmqfdtltfknmfnbksqv7ubulmjrbsfffchek8q96t5bkh9mfjh6mctagp4gdlui3m28je8n9mvlhgebmb5rudo5urru07u6ur81grin4e8tlujf8t3t5gp0ihcfa298bauep2l86ubg7ge89t80c3l6gjb41oqouvfeg1ik0r9828b8vpk8e1nhul8kdl4pmghpjml29ah5l8jgg3r8aac3in10jq8em43j14j4la6cda7it0d79th0qjpoi279n1ccp8aqe07d1bh7or08b8hbk8na70mi3jkn6d82oo85pf72vdiuqel',
+  // 2026-09-30, dragon-research/ddd-light-hunt.ts: puzzle 120300004350000100004000050005400200600070000000008090003180500000009070000060008
+  // (a correct extra clue on a famous hard puzzle). Verified like the rest; its Double Dynamic step needs only
+  // a single-digit AIC, a locked candidate and a naked triple - the How It Works page teaches from it.
+  'SCv7_32_f2eaqjibdp13235s9fb8od7uohothkgrug24gf1t7k4r206q8mlttfaa1aea1csor0coufevcmumt9vntllijutu5flvdeasrqr7beuvpav8hki8qamoshr67lkb9la94m1m9oojp57d4977p107va335r5qsv6sirlum07v3e7g71v5fgv1obt7tlqbobvj2241t0tb7da7qtl6sfjqjtbgah9qga46spk4op4fgtpul4kgjrk9284qoifst62rl8l9k3tj275b39jl8tlotqm3s00kqgijs45f312kguc46e2l89ir4e92h3r4ka3j84t6k4m6ghcs4d30g4ciupt28hq4bl24f106594h9ha0m661ubpgnpuqd7k0',
+]

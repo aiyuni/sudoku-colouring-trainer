@@ -1,0 +1,111 @@
+# Double Dynamic Dragon puzzles - AIC limit 1, max 3 techniques per step (reference list; nothing in the app loads this file)
+#
+# Verified 2026-09-30 with the corrected "Limit to 1 AIC per step" (a step may rely on at most one AIC; dead-end AICs don't count).
+# Settings: every Dynamic Dragon technique enabled, "Limit to 1 AIC per step" ON, "Max techniques per step" = 3,
+# plus every standalone technique (all AIC kinds, all fish, ALS-xz, Double Dragon Colouring), Exhaustive Dragon Colouring ON.
+#
+# Each puzzle was verified through the app's own engine (buildTechniqueInstances) with those settings:
+#  - at the "stuck" position(s) nothing progresses - not single Dynamic Dragon, not Double (plain) Dragon, nothing else -
+#    until Double Dynamic Dragon Colouring is turned on, and then only Double Dynamic rows appear;
+#  - with it on, the whole puzzle is solved with no guessing, every step checked against the real solution.
+#
+# "puzzle" = the clues (81 chars, 0 = empty). "stuck at" = the first stuck position as a Sudoku.Coach state
+# (board, givens and candidates) - import it into the app, or import the puzzle string and solve up to it.
+# Most are famous hardest puzzles (Easter Monster, Kolk, Inkala 2012, AI Escargot, ...) or those plus one correct
+# extra clue; some come straight from the magictour top1465 collection.
+#
+# Count: 9
+
+1. puzzle: 120300004350000100004000050005400200600070000000008090003180500000009070000060008
+   Double Dynamic needed 1 time; solved in 2 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, UR, x-wing, short single-digit aic): 47 steps - pink is true; eliminates 4 candidates.
+   stuck at: SCv7_32_f2eaqjibdp13235s9fb8od7uohothkgrug24gf1t7k4r206q8mlttfaa1aea1csor0coufevcmumt9vntllijutu5flvdeasrqr7beuvpav8hki8qamoshr67lkb9la94m1m9oojp57d4977p107va335r5qsv6sirlum07v3e7g71v5fgv1obt7tlqbobvj2241t0tb7da7qtl6sfjqjtbgah9qga46spk4op4fgtpul4kgjrk9284qoifst62rl8l9k3tj275b39jl8tlotqm3s00kqgijs45f312kguc46e2l89ir4e92h3r4ka3j84t6k4m6ghcs4d30g4ciupt28hq4bl24f106594h9ha0m661ubpgnpuqd7k0
+
+2. puzzle: 810000000003600000070090200050007000000045700000100030001070068008500010090000400
+   Double Dynamic needed 2 times; solved in 80 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, UR, finned swordfish, generic aic): 11 steps - eliminates 2 candidates.
+   stuck at: SCv7_32_f2eaqjqbd91j235shfbhi62bm8m6f6uuk0jghf27f08b4i6i5pd7ltr2veqv804lq5nj8q74ptqbirubtfrb39j37eicntlurpfbdivmfii672mc3t9pvecihl1b5j36j2alitdqhpe4i3pip92dmo4ht68ds7nbvlbu1jsevuolro5kbqnqfsrdr6bf6sot88g5o0k434ie1mahjho1a51n90jh1kgca81k2g9jgcri4pu1hg9864ttasdb424s1qh38hod8aqsuggd6k1aatcvd04gthjsmlr48k65k339228l8ek27n7meeusntftooupc8nja8gtkb5bodkihoofbo2a4fgo07oo1agd4up1msklujqgq8rvd9cg
+
+3. puzzle: 003006080000100200000070004009008060030040001070200000300005000005000600980700053
+   Double Dynamic needed 1 time; solved in 82 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, naked pair, short aic, als-xz): 47 steps - lime green is true; eliminates 5 candidates.
+   stuck at: SCv7_32_f2e8qjqbd91j235shfbhi66riam9erbqgef21s0uo48b4i6i5pd7ltp2i79d4rhahhga9ue8tvin97fbududnijur6at6v6t5p7v6d7fmup2up17hl7955bcpgd291as92jiahbi7sf887idv7aoqn1s8ndcnblsriren3s0btinu9mvj7vqihu0c4tpu3u7pctdforthegek3ba0p18qk3h20r28us3uib768a170etl0rbp7lulc1at36n4hr82ek0ld5l8092vl4go3ag6l8jeg6pepk4kknbo2dd67mi6s7ff54vbt7iu3mpcb621mmgkn0sjqqe21ljgoohlagij4v9d1ghnv5uom1fl573qcciaoprqv3s099a2q89
+
+4. puzzle: 100000002090400050006000700050903000000070300000851040700000600030009080002000001
+   Double Dynamic needed 1 time; solved in 6 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (naked triple, UR, short single-digit aic, als-xz): 31 steps - lime green is true; eliminates 4 candidates.
+   stuck at: SCv7_32_f2e9b3q1d91j2324tvh7a1m6m8mcnmd66vk0i0npgg7i32p4tmh2atpfa8v5rdpi32ghjjtjnr5vjdkurrbqv9fcsun9plufsntbd7mnouuuoiv5le296iliicq948vrp6reiovbnhbmlahfbt62ef8jk9ldj5cfvdpfm1fg3vavuomq023uashp3inqftbkfgm0j0kia0iq82as15qm5e52ne110sogdl5dojd1bkg3qpv2d3ai1gq0l1grgg6ir12j0pm4g6k1lugm4qkd78fau0n6gagodp44celqsttnfl39606i2jlf24p9gaa3s7ag6abed3q48ajq6fa9k0dh1rgpciju8bghsau451b6ramgd7kcc5t77hvg0og0d8ig
+
+5. puzzle: 120300004350000100004000000005400200600970000000008090003100500010009070000060008
+   Double Dynamic needed 1 time; solved in 81 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, naked pair, short aic): 51 steps - pink is true; eliminates 8 candidates.
+   stuck at: SCv7_32_f2eaqjibd81j235thfbnjs14pep9orbqgef20c63c045i9392smrquth6fkgjak5djkvrt4tmpdlvnnrqud8trcgmrvbinmvvbb1vtrk9ihco939n664fpkvfcai75bkmbatf3m18op0mmbm87hh7tc1kp1vle5fmuvg1vjf17ro1krqn6ectlt55vjseek380q1ufa8l3d9osih20nsp2l28p06ar5j38l07kbsatd1h0gepm1hvi3el2r36q6j8u46kkota071u3a2vmcm6fm75g557205kgk286s42cil8pmfgoj8sljt1aqvl90jc4kc70lhruk4r4d7533akels56u3hn0csbhhl2a0p79ilvfs0bb7kqee
+
+6. puzzle: 003006080000100200000070004009008060030040001070200000300005008015000600980000050
+   Double Dynamic needed 1 time; solved in 73 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, generic aic, als-xz): 32 steps - pink is true; eliminates 7 candidates.
+   stuck at: SCv7_32_f2e9b3hhd91k2324tupba1r6mm95dntdee1ppg70hvsm0n6o9q589n1t92s0gi8lo45aqd3qjb7ndfjdkvbuqordvditfjmrvdt7rmeerfhtttkd3ii36i5iif18kiaip62goui9mjjf6a8oj4mafncovde8kg33reqrfurqvdou0lvojv7fvojps2o5sbk7sfqr97cehsqgvt8gj0lggsu26h0fhl6a08el4v9584206dhscuihm5ng5oce4d939ga6c2gjp5fhc85q0uq8ki3gju16328pkac4u85h9303a5b3sqsj3iichv14b8k7oc51i2n9g8ko8hca7mumh8jqf55hocc3e0noo1tsapcpnkgt6f82qnrpaeraurpiatl72
+
+7. puzzle: 003406080000100200000070004009008060030040021070200000300005000005000600980000050
+   Double Dynamic needed 1 time; solved in 79 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, naked pair, naked triple, naked quad, hidden pair, UR, als-xz): 44 steps - lime green is true; eliminates 7 candidates.
+   stuck at: SCv7_32_f2e7ajmbd81j237s2ufi667bclmqtq8vug5g5epcgq8474nmq297ubqmmcir8l1mgf3d5j7omem9eflvuq7qbr57blcvnurifrkmnfqtpev018jg0g05904hqk02gc01043i86anmj3o431gdjkc050faprebrdqbif04vklvtsmijvovvb5d3s0odp3k7cesussvhur6a1akespg7332382f79up5akj36432hh1k21j3ueed7iokh9tgsg669bj4khispqhgtt99697l1s81gh0psol1nheuub8h699va4h6ooiqp0b05ag5h74qnpp6kile85mn33jies1552r61cafepqmn08v601d9035m5gl1eusng1v389c
+
+8. puzzle: 003406080000100200000070004009008067030040001070200000300005000005000600980000050
+   Double Dynamic needed 1 time; solved in 79 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, naked pair, naked triple, naked quad, hidden pair, UR, als-xz): 44 steps - lime green is true; eliminates 7 candidates.
+   stuck at: SCv7_32_f2e8r3idd81j2345tvh7a16fvapporbqgef20c236222p4lkhebdtfaopmad4rja3egmeiffqdtjine7u8udtllitutn46lftfimj766vlbfc18ggkhg1802hgu0r0023k47h0t4892nmd681i32qemgsegslblsrjbem3u0lvhnuvhm4rvq62ors2o9tjs7sdihjivhnp750t976f8bp9i141npleci1a9jii1hle0i1ospf7r8ihae19ttcg6699j4lhks1rpsqqeiqif11c99gh0psgujv05iubd3sg93bkh6kqimo02g6l8799sm9fralp0mqgd6e9dp3l52r61cl7n4sbfg7n601d90j5l5kl1e3ufg5ob89c
+
+9. puzzle: 800000000003602070070090200050007000000045700000100030001000068008500010090000400
+   Double Dynamic needed 1 time; solved in 84 steps with no guessing
+   at the first stuck position: Double Dynamic Dragon Colouring (locked candidate, naked pair, finned x-wing, als-xz): 36 steps - pink is true; eliminates 6 candidates.
+   stuck at: SCv7_32_f2eaqji1d81j237shf7hi629iomef6nuk0nggp091cgoe97dk6inubvmgrq0678rbdhoqdfjbn7bftfknpv2qpevevirovhequrvbf1utpilv4hfb18die3mku978jhia5uqmp08jsri7ifkhnqqi8mblpudp5urpfg3bfnjfvo38e1civ5u2u1tlmju6osp8r480i20bggork209318625b40i4246qvt72eki79ca9lsrte9hoba52htvts0pd16pt2ilbd2cv17j816pgkjqeo6r5kkro59a18lk9kphogqa5j8h67c6gghi44ht4h2259ghds2n5mi15vapm8hcge0eion512ohn63qo1va5164djo2q8qfpv42tmr39n8
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# No longer qualifying (43): these were on this list until 2026-09-30, when "Limit to 1 AIC per step" was changed
+# to count only the AICs a step relies on (a dead-end AIC no longer uses up the step's quota). Single Dynamic Dragon
+# with the same settings now solves each of them outright, so they don't need Double Dynamic any more.
+# 100080002090400050006000700050923000000070000000850040700000600030009080002000001
+# 700000400020070080003008009000500300060020097001007006000300900030040060009001005
+# 100080002090400050006000700050903000000070000000850040709000600030009080002000001
+# 100000002090400050506090700050903000000070000000850040700000600030009080002000001
+# 500200300000080090002004006600140900010000040007003008700300400090070020005006009
+# 100005002090400050006090700050903000000070000000850040700000600030009080002000001
+# 400600300010020060008007001900800500040050010000002007500000600030080040000009005
+# 100000002090400050006000700050903000000074000000850040700000600030009080002030001
+# 100000002090400050006000700050903000000070000000850040700000603030009080002030001
+# 120300004350040100004000000005400200600070005000008090003100500000009070000060008
+# 100000002090400050006000700050903000000070000000850040700008600030009080002030001
+# 120300004350000100004000003005400200600070000200008090003100500000009070000060008
+# 100000002090400050006000700050903000000070005000850040700000600030009087002000001
+# 000000800070090010003007005100600000050020040008009007400000200060010050000006003
+# 000000800070090010003007005100600000050020040008009037400000200060010050000006003
+# 000000870070090010003007005100600000050020040008009007400000200060010050000006003
+# 000000800070090010003007005100600500050020040008009007400000200060010050000006003
+# 003006080000100230006070004009008060030040001070200000300005000005000600980000050
+# 100000002090400050006000700050903800000070000000850040700008600030009080002000001
+# 100000002090400050006000700050903000000070005000850040700000620030009080002000001
+# 000000800070090310003007005100600000050020040008009007400000200060010050000006003
+# 003006780007100200000070004009008060030040001070200000300005000005000600980000050
+# 003006080000100200000070504209008060030040001070200000300005000005000600980000050
+# 003006780000100200000070004009008060030040001070200000300005000705000600980000050
+# 003006080000100200000070004009008067030040001070200000300005000005000600980000053
+# 100000002090400050006000700050903070000070005000850040700000600030009080002000001
+# 003006080050100200000070004049008060030040001070200000300005000005000600980000050
+# 100080002090400050006090700050923000000070000000850040700000600030009080002000001
+# 100080002090400050006000700050923000000074000000850040700000600030009080002000001
+# 003006080000100200000070014009008060030040001070200005300005000005000600980000050
+# 000000800070090010003007005100600000050020040008009007400000260060010050000006003
+# 000000800070090010003007005100600000050020040008009007400000201060010050000006003
+# 100080002090400050006000700050903000000074000000850040709000600030009080002000001
+# 700000400020070080003008009000506300060020097001007006000300900030040060009001005
+# 103006080000100200000070004009008060030040001070200000300005100005000600980000050
+# 500200300000080090002034006600140900010000040007003008700300400090070020005006009
+# 003006080000100200000070004009008060030040001070200005300005100005000600980000050
+# 100080002090400050006090700050903000000070000000850040709000600030009080002000001
+# 700000400020070080003008009000500300060020097001007006000300900030040060009001035
+# 100005002090400050506090700050903000000070000000850040700000600030009080002000001
+# 100080002090400050006000700050903000000074000000851040700000600030009080002000001
+# 800000000003600000070090200050007000000045700000100030001000068008500917090000400
+# 103006080000100200006070004009008060030040001070200000300005000005000600980000050

@@ -65,7 +65,7 @@ export const HELP_TABS: HelpTab[] = [
   {
     label: 'Dragon Configuration',
     intro: 'The Dragon Configuration menu.  Every setting here has a **major impact** on what Dragons the solver shows, especially the **"Exhaustive Dragon Colouring"** setting. ' +
-    'In addition, **"Select Dragon Colouring techniques"**, **"Limit to 1 AIC per step"**, and **"Max techniques per Dragon step"** affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
+    'In addition, **"Select Dragon Colouring techniques"**, **"Enable Double Dynamic Dragons"**, **"Limit to 1 AIC per step"**, and **"Max techniques per Dragon step"** affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
     sections: [
       {
         title: 'Dragon Colouring',
@@ -100,6 +100,18 @@ export const HELP_TABS: HelpTab[] = [
         ],
       },
       {
+        title: 'Double Dragon Colouring',
+        items: [
+          {
+            name: 'Enable Double Dragon',
+            settingKey: 'doubleDragonEnabled',
+            description:
+              'Enables the solver to find Double Plain Dragons, to solve puzzles that a single Plain Dragon cannot. Refer to "Techniques overview" for more details.\n\n' +
+              'Follows all Dragon settings. ON also enables "Generate Double Dragon colouring puzzle" in the Generate Puzzle menu.',
+          },
+        ],
+      },
+      {
         title: 'Dynamic Dragon Colouring',
         items: [
           {
@@ -112,10 +124,17 @@ export const HELP_TABS: HelpTab[] = [
               'more extensions than Optimize Dragons alone. "Find by elims" follows this setting.',
           },
           {
+            name: 'Enable Double Dynamic Dragons',
+            settingKey: 'doubleDynamicDragonEnabled',
+            description:
+              'Enables the solver to find Double Dynamic Dragons.  A Double Dynamic Dragon can solve puzzles normal Dynamic Dragons cannot.  See "Techniques Overview" for an explanation.\n\n' +
+              'Follows all Dynamic Dragon settings. Has no effect while Dynamic Dragons are disabled.',
+          },
+          {
             name: 'Limit to 1 AIC per step',
             settingKey: 'aicLimitPerDragonStep',
             description:
-              'ON: a Dynamic Dragon step may use at most one AIC.  Suitable for the average human solver. \n\nOFF: no limit to amount of AICs it can use - a stronger Dragon, but much ' +
+              'ON: a Dynamic Dragon step may rely on at most one AIC.  Suitable for the average human solver.\n\nOFF: no limit to amount of AICs it can use - a stronger Dragon, but much ' +
               'harder for the normal human to find.',
           },
           {
@@ -304,7 +323,15 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Dynamic Dragon puzzles must not allow plain Dragon',
             settingKey: 'dynamicDragonPuzzleForbidsPlainDragon',
             description:
-              'ON: Dynamic Dragon is required to progress the puzzle. \n\n OFF: there is a Dynamic Dragon in the puzzle, but plain Dragon may also progress the puzzle.',
+              'ON: Dynamic Dragon (or Double plain Dragon) is required to progress the puzzle. \n\n OFF: there is a Dynamic Dragon in the puzzle, but plain Dragon may also progress the puzzle.',
+          },
+          {
+            name: 'Dynamic Dragon puzzles must not allow Double Dragons',
+            settingKey: 'dynamicDragonPuzzleForbidsDoubleDragon',
+            description:
+              'Can only be ON while "Dynamic Dragon puzzles must not allow plain Dragon" is ON.\n\n' +
+              'ON: a Dynamic Dragon is required to progress the puzzle.' +
+              '\n\nOFF: a Double Dragon may also progress the puzzle.',
           },
           {
             name: 'Dragon puzzle generation max timeout',

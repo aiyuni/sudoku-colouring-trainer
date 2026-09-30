@@ -4,7 +4,10 @@ import { SudokuBivalueOddagonFinder } from '../sudoku/SudokuBivalueOddagonFinder
 import { SudokuBugPlusOneFinder } from '../sudoku/SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from '../sudoku/SudokuColorFinder'
 import {
+  DEFAULT_RULE3_TECHNIQUES,
+  dragonColourLabel,
   SudokuDragonFinder,
+  type DragonColor,
   type DragonMove,
   type Rule3Technique,
 } from '../sudoku/SudokuDragonFinder'
@@ -106,16 +109,9 @@ function ref(row: number, col: number, digit: number): CandRef {
   return { row, col, digit }
 }
 
-const COLOUR_LONG: Record<TutorialColor, string> = {
-  blue: 'light blue',
-  yellow: 'yellow',
-  darkBlue: 'dark blue',
-  orange: 'orange',
-}
-
 /** Which of the two Medusa sides a colour belongs to (dark blue is light
  * blue's dragon colour, orange is yellow's). */
-function primaryOf(color: TutorialColor): 'blue' | 'yellow' {
+function primaryOf(color: DragonColor): 'blue' | 'yellow' {
   return color === 'blue' || color === 'darkBlue' ? 'blue' : 'yellow'
 }
 
@@ -849,11 +845,13 @@ function dragonCaption(move: DragonMove): { badge: string; caption: string } {
       return { badge: 'Extend', caption: shortenExtension(move.description) }
     case 'extension-rule3': {
       const techniques = joinPhrases((move.dynamicTechniques ?? []).map((t) => TECHNIQUE_PHRASE[t] ?? t))
-      const side = first ? COLOUR_LONG[primaryOf(first.color)] : ''
+      // A Double Dragon's second Dragon names its colours pink/purple/...
+      const second = !!move.secondDragon
+      const side = first ? dragonColourLabel(primaryOf(first.color), second) : ''
       return techniques && first
         ? {
             badge: 'Dynamic',
-            caption: `If ${side} is true, ${techniques} appears and forces ${first.digit} in ${cellName(first.row, first.col)}: ${COLOUR_LONG[first.color]}.`,
+            caption: `If ${side} is true, ${techniques} ${(move.dynamicTechniques ?? []).length > 1 ? 'appear and force' : 'appears and forces'} ${first.digit} in ${cellName(first.row, first.col)}: ${dragonColourLabel(first.color, second)}.`,
           }
         : { badge: 'Dynamic', caption: shortenExtension(move.description) }
     }
@@ -870,16 +868,29 @@ function dragonCaption(move: DragonMove): { badge: string; caption: string } {
     }
     case 'rule4': {
       const e = move.eliminated[0]
-      return { badge: 'Result', caption: `${cellName(e.row, e.col)} holds both colours, so the uncoloured candidates are eliminated..` }
+      return { badge: 'Result', caption: `${cellName(e.row, e.col)} holds both colours, so the uncoloured candidates are eliminated.` }
     }
     case 'rule5': {
       const e = move.eliminated[0]
+      const m = /^(r\dc\d) is not (\d) - its cell has a candidate coloured ([a-z ]+), and it sees an oppositely coloured \d \(([a-z ]+)\) at (r\dc\d)/.exec(
+        move.description,
+      )
+      if (m) {
+        return {
+          badge: 'Result',
+          caption: `${m[1]} has a ${m[3]} candidate and sees a ${m[4]} ${m[2]} in ${m[5]}. One of those two is true either way, so ${m[1]} can't be ${m[2]}.`,
+        }
+      }
       return { badge: 'Result', caption: `${cellName(e.row, e.col)} can't be ${e.digit}: it sees an opposite-colour ${e.digit}.` }
     }
     case 'mass-elimination':
       return { badge: 'Result', caption: shortenMassReason(move.description) }
     case 'solution':
       return { badge: 'Solved', caption: 'The colouring covers every empty cell: it is the solution.' }
+    case 'dragon-link':
+      // Double Dragon only - buildDoubleDragonLesson words its own link
+      // frames, and only falls back to this if the finder's wording changes.
+      return { badge: 'Link', caption: move.description }
   }
 }
 
@@ -922,12 +933,7 @@ export function buildDragonLesson(options: DragonOptions): TutorialLesson {
 function dragonFrame(moves: DragonMove[], index: number, lastIndex: number): TutorialFrame {
   const move = moves[index]
   const fold = foldDragonMoves(moves, lastIndex)
-  const coloured: ColouredCand[] = [
-    ...fold.blueCandidates.map((c) => ({ ...c, color: 'blue' as const })),
-    ...fold.yellowCandidates.map((c) => ({ ...c, color: 'yellow' as const })),
-    ...fold.darkBlueCandidates.map((c) => ({ ...c, color: 'darkBlue' as const })),
-    ...fold.orangeCandidates.map((c) => ({ ...c, color: 'orange' as const })),
-  ]
+  const coloured = colouredFromFold(fold)
   const { badge, caption: firstCaption } = dragonCaption(move)
   const isResult = move.eliminated.length > 0 || move.solved.length > 0
   const total = new Set(fold.eliminatedCandidates.map((c) => `${c.row},${c.col},${c.digit}`)).size
@@ -947,6 +953,191 @@ function dragonFrame(moves: DragonMove[], index: number, lastIndex: number): Tut
     greenCells: move.dynamicTechniqueCells ? [...move.dynamicTechniqueCells] : undefined,
     links: move.aicChains?.flatMap((aic) => aic.links.map((link) => ({ from: link.from, to: link.to, kind: 'strong' as const }))),
   }
+}
+
+/** Every coloured candidate of a folded Dragon log. A Double Dragon's second
+ * Dragon comes after the first, in its own colours, so a candidate both
+ * Dragons colour is split first-Dragon bottom-left, as on the board. */
+function colouredFromFold(fold: ReturnType<typeof foldDragonMoves>): ColouredCand[] {
+  return [
+    ...fold.blueCandidates.map((c) => ({ ...c, color: 'blue' as const })),
+    ...fold.yellowCandidates.map((c) => ({ ...c, color: 'yellow' as const })),
+    ...fold.darkBlueCandidates.map((c) => ({ ...c, color: 'darkBlue' as const })),
+    ...fold.orangeCandidates.map((c) => ({ ...c, color: 'orange' as const })),
+    ...fold.pinkCandidates.map((c) => ({ ...c, color: 'pink' as const })),
+    ...fold.limeGreenCandidates.map((c) => ({ ...c, color: 'limeGreen' as const })),
+    ...fold.purpleCandidates.map((c) => ({ ...c, color: 'purple' as const })),
+    ...fold.darkGreenCandidates.map((c) => ({ ...c, color: 'darkGreen' as const })),
+  ]
+}
+
+// ------------------------------------------------------------ double dragon
+
+interface DoubleDragonOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  /** Any candidate of the first Dragon's Medusa (light blue/yellow). */
+  firstSeed: CandRef
+  /** Any candidate of the second Dragon's Medusa (pink/lime green). */
+  secondSeed: CandRef
+  /** Double Dynamic Dragon Colouring: both Dragons may use Extension Rule 3,
+   * with the app's default Dynamic Dragon techniques unless `techniques`
+   * says otherwise. */
+  dynamic?: boolean
+  /** Which techniques the Dynamic Dragons may use (no AIC limit either way).
+   * A lesson teaches from the smallest set that works, so the helper
+   * techniques stay easy even where the stuck single Dragon needed them all. */
+  techniques?: ReadonlySet<Rule3Technique>
+}
+
+/** "a naked pair", "a naked pair and a locked candidate" - every helper
+ * technique `moves` lean on, once each, in order of first use. */
+function helperPhrase(moves: readonly DragonMove[]): string {
+  const techniques = [...new Set(moves.flatMap((m) => m.dynamicTechniques ?? []))]
+  return joinPhrases(techniques.map((t) => TECHNIQUE_PHRASE[t] ?? t))
+}
+
+/**
+ * Double (Dynamic) Dragon Colouring, for a reader who already knows single
+ * Dragons: the first Dragon's whole stuck colouring is one frame, and the
+ * steps go to the second Dragon - above all to the Dragon link, which gets
+ * two frames (the clash between the Dragons, then the colours absorbed). The
+ * pair is played with Optimize, so the second Dragon takes its shortest route.
+ *
+ * The positions were picked because every single Dragon on them (plain, or
+ * Dynamic for the Dynamic lesson) is stuck - checked when they were chosen,
+ * not here, as that is a search over every chain. What is checked here,
+ * cheaply, is that both of these Dragons are stuck on their own, so the link
+ * really is what makes the difference.
+ */
+export function buildDoubleDragonLesson(options: DoubleDragonOptions): TutorialLesson {
+  const { id, title, hint, state, firstSeed, secondSeed, dynamic = false, techniques } = options
+  const { board, candidates } = state
+  const chains = medusaFinder.findChains(board, candidates)
+  const chainOf = (seed: CandRef) => chains.find((c) => c.candidates.some((n) => candidateKey(n) === candidateKey(seed)))
+  const firstChain = chainOf(firstSeed)
+  const secondChain = chainOf(secondSeed)
+  if (!firstChain || !secondChain || firstChain === secondChain) {
+    throw new Error('The two seeds must be candidates of two different 3D Medusas in this example.')
+  }
+  const limits = dynamic ? { allowedRule3Techniques: techniques ?? new Set(DEFAULT_RULE3_TECHNIQUES), aicLimitPerStep: false } : null
+  const first = dragonFinder.stuckColouring(firstChain, board, candidates, limits)
+  if (!first || !dragonFinder.stuckColouring(secondChain, board, candidates, limits)) {
+    throw new Error('A single Dragon is not stuck on one of these Medusas, so this is no Double Dragon example.')
+  }
+  const result = dragonFinder.extendDouble(first, secondChain, board, candidates, {
+    optimize: true,
+    optimizeDynamic: dynamic,
+    dynamic: limits ?? undefined,
+  })
+  if (!result || (dynamic && !result.moves.some((m) => m.kind === 'extension-rule3'))) {
+    throw new Error('Double Dragon Colouring finds nothing for this pair of Medusas in this example.')
+  }
+  const moves = result.moves
+  const firstCount = first.moves.length
+  const coloured = (lastIndex: number) => colouredFromFold(foldDragonMoves(moves, lastIndex))
+
+  const extensions = firstCount - 1
+  // Second-Medusa candidates the first Dragon already coloured: drawn in
+  // both Dragons' colours from the start, which the caption owns up to.
+  const firstKeys = new Set(first.nodes.map(candidateKey))
+  const shared = moves[firstCount].colored.filter((c) => firstKeys.has(candidateKey(c)))
+  const sharedNote =
+    shared.length === 0
+      ? ''
+      : ` ${joinPhrases(shared.map((c) => `${c.digit}${cellName(c.row, c.col)}`))} ${shared.length === 1 ? 'is' : 'are'} in both Dragons, so ${shared.length === 1 ? 'it shows' : 'they show'} both colours.`
+  const helpers = helperPhrase(first.moves)
+  const kind = dynamic ? 'Dynamic Dragon' : 'Dragon'
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'First Dragon',
+      caption:
+        `Start as usual: colour a 3D Medusa and grow it into a ${kind}. ` +
+        `After ${extensions} extension${extensions === 1 ? '' : 's'}${helpers ? ` (with help from ${helpers})` : ''} it is stuck - ` +
+        `and so is every other single ${kind} on this board. But don't throw its colours away.`,
+      coloured: coloured(firstCount - 1),
+    },
+    {
+      badge: 'Second Dragon',
+      caption:
+        'Keep those colours, and colour another stuck Medusa pink and lime green. ' +
+        'Exactly one of pink and lime green is true - just as exactly one of light blue and yellow is.' +
+        sharedNote,
+      coloured: coloured(firstCount),
+      fresh: moves[firstCount].colored.map((c) => ref(c.row, c.col, c.digit)),
+    },
+  ]
+
+  const isEliminationRule = (move: DragonMove) => move.kind === 'rule3' || move.kind === 'rule4' || move.kind === 'rule5'
+  for (let index = firstCount + 1; index < moves.length; index++) {
+    const move = moves[index]
+    const linkFrames = move.kind === 'dragon-link' ? dragonLinkFrames(move, coloured(index - 1), coloured(index)) : null
+    if (linkFrames) {
+      frames.push(...linkFrames)
+      continue
+    }
+    // Same folding of a closing run of eliminations as buildDragonLesson.
+    let last = index
+    if (isEliminationRule(move)) {
+      while (last + 1 < moves.length && isEliminationRule(moves[last + 1])) last++
+    }
+    frames.push(dragonFrame(moves, index, last))
+    index = last
+  }
+
+  return { id, title, hint, state, frames }
+}
+
+/** The Dragon link as two frames - the clash between the two Dragons, then
+ * the first Dragon's colours the second one absorbs - or null if the
+ * finder's description no longer reads the way this expects (the caller
+ * then falls back to the finder's own text). */
+function dragonLinkFrames(move: DragonMove, before: ColouredCand[], after: ColouredCand[]): TutorialFrame[] | null {
+  const m = /^(\d)r(\d)c(\d) \(([a-z ]+)\) and (\d)r(\d)c(\d) \(([a-z ]+)\) can't both be true/.exec(move.description)
+  if (!m) return null
+  const own = ref(Number(m[2]) - 1, Number(m[3]) - 1, Number(m[1]))
+  const theirs = ref(Number(m[6]) - 1, Number(m[7]) - 1, Number(m[5]))
+  const [ownLabel, theirsLabel] = [m[4], m[8]]
+  // X: the second Dragon's side the link extends. S: the first Dragon's side
+  // it clashes with. S': the first Dragon's other side, which X implies.
+  const x = ownLabel === 'pink' || ownLabel === 'purple' ? 'pink' : 'lime green'
+  const xDragon = x === 'pink' ? 'purple' : 'dark green'
+  const s = theirsLabel === 'light blue' || theirsLabel === 'dark blue' ? 'light blue' : 'yellow'
+  const sPrime = s === 'light blue' ? 'yellow' : 'light blue'
+  const sPrimeBoth = sPrime === 'light blue' ? 'light blue/dark blue' : 'yellow/orange'
+  const ownName = `${own.digit}${cellName(own.row, own.col)}`
+  const theirsName = `${theirs.digit}${cellName(theirs.row, theirs.col)}`
+  const ownCell: TutorialCell = [own.row, own.col]
+  const theirsCell: TutorialCell = [theirs.row, theirs.col]
+  const why = sameCell(ownCell, theirsCell)
+    ? 'are different digits in the same cell'
+    : `are both ${own.digit}s in ${unitPhrase(sharedUnits(ownCell, theirsCell)[0])}`
+  const absorbed = move.colored.map((c) => `${c.digit}${cellName(c.row, c.col)}`)
+  const one = absorbed.length === 1
+  const link: TutorialLink = { from: own, to: theirs, kind: 'sees' }
+  return [
+    {
+      badge: 'Dragon link',
+      caption:
+        `The two Dragons meet: ${ownName} (${ownLabel}) and ${theirsName} (${theirsLabel}) ${why}, so they can't both be true. ` +
+        `If ${x} is true, ${ownName} is true and ${theirsName} is false - so ${s} is false, which makes ${sPrime} true.`,
+      coloured: before,
+      fresh: [own, theirs],
+      links: [link],
+    },
+    {
+      badge: 'Absorb',
+      caption:
+        `So whenever ${x} is true, every ${sPrimeBoth} candidate is true too - ${one ? 'here just' : 'here'} ${joinPhrases(absorbed)}. ` +
+        `Colour ${one ? 'it' : 'them'} ${xDragon}, ${x}'s dragon colour, keeping ${one ? 'its' : 'their'} first-Dragon colour as well: ` +
+        `${one ? 'it now shows' : 'they now show'} both Dragons' colours, and the second Dragon carries on with ${one ? 'it' : 'them'}.`,
+      coloured: after,
+      fresh: move.colored.map((c) => ref(c.row, c.col, c.digit)),
+      links: [link],
+    },
+  ]
 }
 
 // ------------------------------------------------------- abusing uniqueness

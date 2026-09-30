@@ -13,6 +13,7 @@ import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
 import {
   SudokuDragonFinder,
   DEFAULT_RULE3_TECHNIQUES,
+  dragonColourLabel,
   type DragonExtendOptions,
   type DragonMove,
   type DragonNode,
@@ -111,7 +112,7 @@ export interface TechniqueInstance {
  * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+1 -> BivalueOddagon
  * -> Color -> X-Wing -> Short Single-Digit AIC -> Finned X-Wing -> Short AIC
  * -> Swordfish -> Finned Swordfish -> Medusa -> Generic AIC -> ALS-xz -> Dragon
- * -> Dynamic Dragon).
+ * -> Double Dragon -> Dynamic Dragon -> Double Dynamic Dragon).
  * Techniques sharing a tier are equally "simple" as far as this goes - a
  * naked pair is no simpler than a naked quad here, since a solver who can
  * spot one can spot the other; what matters is the category, not which
@@ -140,7 +141,12 @@ export const RANK_GENERIC_AIC = 14
 // The one non-colouring technique ranked above Generic AIC.
 export const RANK_ALS_XZ = 15
 export const RANK_DRAGON = 16
-export const RANK_DYNAMIC_DRAGON = 17
+// Two plain Dragons linked together - no Dynamic Dragon techniques.
+export const RANK_DOUBLE_DRAGON = 17
+export const RANK_DYNAMIC_DRAGON = 18
+// Two Dragons linked, at least one of them Dynamic - only where single
+// Dynamic Dragon is stuck, so the hardest tier.
+export const RANK_DOUBLE_DYNAMIC_DRAGON = 19
 
 const FISH_RANKS: Record<FishTechnique, number> = {
   'x-wing': RANK_X_WING,
@@ -383,6 +389,116 @@ export function computeStuckDynamicDragonExtensions(
     results.push({ chainKey, moves: result.moves, hasBivalueCellLink: chain.hasBivalueCellLink })
   }
   return results
+}
+
+/** Double Dragon Colouring (SudokuDragonFinder.findDoubleDragons) on every
+ * pair of stuck chains. Pairs whose results make exactly the same
+ * eliminations and placements are listed once, keeping the shortest log. */
+export function computeDoubleDragonExtensions(
+  board: Board,
+  candidates: CandidateGrid,
+  minBaseCandidates = 0,
+  exhaustive = true,
+  optimize = false,
+) {
+  const chains = medusaFinder.findChains(board, candidates).filter(
+    (chain) =>
+      medusaFinder.findMassElimination(chain, board, candidates) === null &&
+      medusaFinder.findRule3Eliminations(chain, board, candidates).length === 0 &&
+      medusaFinder.findRule4Eliminations(chain, candidates).length === 0 &&
+      medusaFinder.findRule5Eliminations(chain, candidates).length === 0,
+  )
+  const chainKey = (chain: MedusaChain) =>
+    chain.candidates
+      .map((c) => `${c.row}.${c.col}.${c.digit}.${c.color[0]}`)
+      .sort()
+      .join('-')
+  const byEffect = new Map<string, { chainKey: string; moves: DragonMove[] }>()
+  for (const { first, second, moves } of dragonFinder.findDoubleDragons(chains, board, candidates, {
+    exhaustive,
+    optimize,
+    minBaseCandidates,
+  })) {
+    const effect = [
+      ...moves.flatMap((m) => m.eliminated.map((e) => `x${e.row}${e.col}${e.digit}`)),
+      ...moves.flatMap((m) => m.solved.map((e) => `s${e.row}${e.col}${e.digit}`)),
+    ]
+      .sort()
+      .join(',')
+    const existing = byEffect.get(effect)
+    if (!existing || moves.length < existing.moves.length) {
+      byEffect.set(effect, { chainKey: `${chainKey(first)}~${chainKey(second)}`, moves })
+    }
+  }
+  return Array.from(byEffect.values())
+}
+
+/** Double Dynamic Dragon Colouring: Double Dragon Colouring where the Dragons
+ * may use Extension Rule 3 (findDoubleDragons with Dynamic limits - so both
+ * chains are ones single Dynamic Dragon is stuck on). A result counts only
+ * when at least one of its Dragons really is Dynamic (some step of either is
+ * an Extension Rule 3 move); without one it would be a plain Double Dragon.
+ * A pair plain Double Dragon resolves is left to that technique while it is
+ * enabled, the way a chain plain Dragon resolves is never also listed as
+ * Dynamic. `minBaseCandidates` applies to the first Dragon's Medusa. Same
+ * effect-deduplication as computeDoubleDragonExtensions. */
+export function computeDoubleDynamicDragonExtensions(
+  board: Board,
+  candidates: CandidateGrid,
+  minBaseCandidates = 0,
+  allowedRule3Techniques: ReadonlySet<Rule3Technique> = new Set(DEFAULT_RULE3_TECHNIQUES),
+  aicLimitPerStep = true,
+  maxTechniquesPerStep = Infinity,
+  exhaustive = true,
+  optimize = false,
+  optimizeDynamic = false,
+  doublePlainEnabled = false,
+) {
+  const chains = medusaFinder.findChains(board, candidates).filter(
+    (chain) =>
+      medusaFinder.findMassElimination(chain, board, candidates) === null &&
+      medusaFinder.findRule3Eliminations(chain, board, candidates).length === 0 &&
+      medusaFinder.findRule4Eliminations(chain, candidates).length === 0 &&
+      medusaFinder.findRule5Eliminations(chain, candidates).length === 0,
+  )
+  const chainKey = (chain: MedusaChain) =>
+    chain.candidates
+      .map((c) => `${c.row}.${c.col}.${c.digit}.${c.color[0]}`)
+      .sort()
+      .join('-')
+  const plainPairs = new Set(
+    doublePlainEnabled
+      ? dragonFinder
+          .findDoubleDragons(chains, board, candidates, { minBaseCandidates })
+          .map(({ first, second }) => `${chainKey(first)}~${chainKey(second)}`)
+      : [],
+  )
+  const byEffect = new Map<string, { chainKey: string; moves: DragonMove[] }>()
+  for (const { first, second, moves } of dragonFinder.findDoubleDragons(chains, board, candidates, {
+    exhaustive,
+    // Optimize Dynamic Dragons implies the optimized search, as for a single
+    // Dynamic Dragon.
+    optimize: optimize || optimizeDynamic,
+    optimizeDynamic,
+    minBaseCandidates,
+    dynamic: { allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep },
+  })) {
+    const key = `${chainKey(first)}~${chainKey(second)}`
+    if (plainPairs.has(key) || !moves.some((move) => move.kind === 'extension-rule3')) {
+      continue
+    }
+    const effect = [
+      ...moves.flatMap((m) => m.eliminated.map((e) => `x${e.row}${e.col}${e.digit}`)),
+      ...moves.flatMap((m) => m.solved.map((e) => `s${e.row}${e.col}${e.digit}`)),
+    ]
+      .sort()
+      .join(',')
+    const existing = byEffect.get(effect)
+    if (!existing || moves.length < existing.moves.length) {
+      byEffect.set(effect, { chainKey: key, moves })
+    }
+  }
+  return Array.from(byEffect.values())
 }
 
 /** Every distinct candidate eliminated by a Short AIC chain of the given
@@ -640,6 +756,8 @@ export function buildTechniqueInstances(
   enabledFish: ReadonlySet<FishTechnique> = new Set(),
   alsXzEnabled = false,
   maxTechniquesPerDragonStep = Infinity,
+  doubleDragonEnabled = false,
+  doubleDynamicDragonEnabled = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -1055,6 +1173,21 @@ export function buildTechniqueInstances(
   for (const { chainKey, moves } of dragonExtensions) {
     instances.push(buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', chainKey, moves))
   }
+  // Double Dragon Colouring (off by default): two stuck plain Dragons linked
+  // - see computeDoubleDragonExtensions. Ranked between plain and Dynamic.
+  if (doubleDragonEnabled) {
+    const doubleDragonExtensions = computeDoubleDragonExtensions(
+      board,
+      candidates,
+      minBaseMedusaCandidates,
+      exhaustiveDragon,
+      optimizeDragons,
+    )
+    doubleDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
+    for (const { chainKey, moves } of doubleDragonExtensions) {
+      instances.push(buildDragonInstance(board, candidates, 'double-dragon', 'Double Dragon Colouring', chainKey, moves))
+    }
+  }
   // The "Disable Dynamic Dragons" setting: plain Dragon becomes the
   // strongest technique, here and so in the solve path built on this list.
   const dynamicDragonExtensions = !dynamicDragonEnabled ? [] : computeStuckDynamicDragonExtensions(
@@ -1072,6 +1205,28 @@ export function buildTechniqueInstances(
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
     instances.push(buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), chainKey, moves))
+  }
+  // Double Dynamic Dragon Colouring (off by default, and off with Dynamic
+  // Dragons disabled) - see computeDoubleDynamicDragonExtensions.
+  if (dynamicDragonEnabled && doubleDynamicDragonEnabled) {
+    const doubleDynamicExtensions = computeDoubleDynamicDragonExtensions(
+      board,
+      candidates,
+      minBaseMedusaCandidates,
+      allowedRule3Techniques,
+      aicLimitPerDragonStep,
+      maxTechniquesPerDragonStep,
+      exhaustiveDragon,
+      optimizeDragons,
+      optimizeDynamicDragons,
+      doubleDragonEnabled,
+    )
+    doubleDynamicExtensions.sort((a, b) => a.moves.length - b.moves.length)
+    for (const { chainKey, moves } of doubleDynamicExtensions) {
+      instances.push(
+        buildDragonInstance(board, candidates, 'double-dynamic-dragon', `Double ${dynamicDragonLabel(moves)}`, chainKey, moves),
+      )
+    }
   }
 
   return instances
@@ -1158,6 +1313,8 @@ export function buildDragonInstance(
   moves: DragonMove[],
 ): TechniqueInstance {
   const lastMove = moves[moves.length - 1]
+  // A Double Dragon's conclusion is usually about its second Dragon's colours.
+  const provenTrueLabel = lastMove.provenTrueColor ? dragonColourLabel(lastMove.provenTrueColor, lastMove.secondDragon) : ''
   // A mass elimination's solves/eliminates are both just consequences of
   // one fact - a side proved false, so the other side is proved true - so
   // that fact leads the summary. The tally still follows it, but as the
@@ -1169,7 +1326,7 @@ export function buildDragonInstance(
   const summaryText =
     lastMove.kind === 'mass-elimination' && lastMove.provenTrueColor
       ? (() => {
-          const fact = `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} is true`
+          const fact = `${provenTrueLabel} is true`
           const eliminatedCount = countEffectiveEliminations(
             board,
             candidates,
@@ -1180,7 +1337,7 @@ export function buildDragonInstance(
             : fact
         })()
       : lastMove.kind === 'solution' && lastMove.provenTrueColor
-        ? `${lastMove.provenTrueColor === 'blue' ? 'light blue' : 'yellow'} covers every empty cell, solving the puzzle`
+        ? `${provenTrueLabel} covers every empty cell, solving the puzzle`
         : (() => {
           const eliminated = moves.flatMap((m) => m.eliminated)
           const solvedCount = moves.reduce((n, m) => n + m.solved.length, 0)
@@ -1204,7 +1361,14 @@ export function buildDragonInstance(
     eliminatedCandidates: moves.flatMap((m) => m.eliminated),
     solvedCandidates: moves.flatMap((m) => m.solved),
     moves,
-    techniqueRank: idPrefix === 'dragon' ? RANK_DRAGON : RANK_DYNAMIC_DRAGON,
+    techniqueRank:
+      idPrefix === 'dragon'
+        ? RANK_DRAGON
+        : idPrefix === 'double-dragon'
+          ? RANK_DOUBLE_DRAGON
+          : idPrefix === 'double-dynamic-dragon'
+            ? RANK_DOUBLE_DYNAMIC_DRAGON
+            : RANK_DYNAMIC_DRAGON,
   }
 }
 
@@ -1462,6 +1626,8 @@ export function buildSolvePath(
   enabledFish: ReadonlySet<FishTechnique> = new Set(),
   alsXzEnabled = false,
   maxTechniquesPerDragonStep = Infinity,
+  doubleDragonEnabled = false,
+  doubleDynamicDragonEnabled = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1509,6 +1675,8 @@ export function buildSolvePath(
       enabledFish,
       alsXzEnabled,
       maxTechniquesPerDragonStep,
+      doubleDragonEnabled,
+      doubleDynamicDragonEnabled,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart

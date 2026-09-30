@@ -35,6 +35,14 @@ export interface AppSettings {
    * Dragon is the strongest technique. Named for what ON does, matching its
    * checkbox. */
   dynamicDragonDisabled: boolean
+  /** Double Dragon Colouring (two stuck plain Dragons linked), off by
+   * default. Also gates the "Double Dragon Colouring practice puzzle"
+   * generator. */
+  doubleDragonEnabled: boolean
+  /** Double Dynamic Dragon Colouring (two linked Dragons, at least one of
+   * them Dynamic), off by default; no effect while Dynamic Dragons are
+   * disabled. Also gates its practice-puzzle button. */
+  doubleDynamicDragonEnabled: boolean
   allowedRule3Techniques: readonly Rule3Technique[]
   exhaustiveDragonColouring: boolean
   optimizeDragons: boolean
@@ -48,6 +56,9 @@ export interface AppSettings {
   dragonGenerationDisregardsAic: boolean
   dragonGenerationDisregardsGenericAic: boolean
   dynamicDragonPuzzleForbidsPlainDragon: boolean
+  /** Only settable ON while dynamicDragonPuzzleForbidsPlainDragon is ON:
+   * Dynamic Dragon puzzles also reject positions a Double Dragon solves. */
+  dynamicDragonPuzzleForbidsDoubleDragon: boolean
   dragonGenerationTimeoutMs: number
   easySolveEnabled: boolean
   solvePathTimeoutMs: number
@@ -68,6 +79,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   finnedSwordfishEnabled: false,
   alsXzEnabled: false,
   dynamicDragonDisabled: false,
+  doubleDragonEnabled: false,
+  doubleDynamicDragonEnabled: false,
   allowedRule3Techniques: DEFAULT_RULE3_TECHNIQUES,
   exhaustiveDragonColouring: true,
   optimizeDragons: false,
@@ -79,6 +92,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dragonGenerationDisregardsAic: true,
   dragonGenerationDisregardsGenericAic: true,
   dynamicDragonPuzzleForbidsPlainDragon: false,
+  dynamicDragonPuzzleForbidsDoubleDragon: false,
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
   solvePathTimeoutMs: 12_000,

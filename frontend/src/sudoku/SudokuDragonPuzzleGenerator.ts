@@ -2,7 +2,7 @@ import { cloneBoard, cloneCandidates, computeGivenMask, createEmptyCandidates } 
 import { SudokuBivalueOddagonFinder } from './SudokuBivalueOddagonFinder'
 import { SudokuBugPlusOneFinder } from './SudokuBugPlusOneFinder'
 import { SudokuColorFinder } from './SudokuColorFinder'
-import { SudokuDragonFinder } from './SudokuDragonFinder'
+import { SudokuDragonFinder, type DragonMove } from './SudokuDragonFinder'
 import { SudokuFishFinder, type FishTechnique } from './SudokuFishFinder'
 import { SudokuHiddenPairFinder } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder } from './SudokuLockedCandidateFinder'
@@ -98,6 +98,8 @@ interface CheckpointTarget {
   technique: GeneratedPuzzleTechnique
   requireDynamic: boolean
   forbidPlainDragon: boolean
+  requireDoubleDragon: boolean
+  forbidDoubleDragon: boolean
   disregardKinds: DisregardedAicKinds
   enabledFish: ReadonlySet<FishTechnique>
   alsXzEnabled: boolean
@@ -140,6 +142,16 @@ export interface DragonPuzzleGenerateOptions {
    * a pre-generated stock (dynamicDragonPuzzleStock.ts) instead of
    * generating live. */
   forbidPlainDragon?: boolean
+  /** Only with the 'dragon' target (and instead of requireDynamic): plain
+   * Dragon Colouring fails on every chain, and Double Dragon Colouring (two
+   * stuck plain Dragons linked - SudokuDragonFinder.findDoubleDragons)
+   * progresses. Dynamic Dragon may progress too; it isn't checked. The rest
+   * of the solve may use Double and Dynamic Dragon rounds. */
+  requireDoubleDragon?: boolean
+  /** Only with requireDynamic + forbidPlainDragon: also reject a state where
+   * Double Dragon Colouring (two stuck plain Dragons linked) progresses, so
+   * Dynamic Dragon really is the only way forward. */
+  forbidDoubleDragon?: boolean
   /** Wall-clock budget for the whole search, across as many fresh solved
    * grids as it takes - defaults to DEFAULT_TIME_BUDGET_MS. A qualifying
    * checkpoint (especially a Dynamic-Dragon-only one) can be rare enough
@@ -293,6 +305,8 @@ export class SudokuDragonPuzzleGenerator {
       technique: options.target ?? 'dragon',
       requireDynamic: options.requireDynamic ?? false,
       forbidPlainDragon: options.forbidPlainDragon ?? false,
+      requireDoubleDragon: options.requireDoubleDragon ?? false,
+      forbidDoubleDragon: options.forbidDoubleDragon ?? false,
       disregardKinds: {
         singleDigit: options.disregardSingleDigitAic ?? true,
         general: options.disregardAic ?? true,
@@ -310,7 +324,7 @@ export class SudokuDragonPuzzleGenerator {
    * Dynamic Dragon - otherwise Medusa/Simple Colouring puzzles that later
    * need a Dragon would be thrown away for no reason. */
   private solveWithDynamic(target: CheckpointTarget): boolean {
-    return target.technique !== 'dragon' || target.requireDynamic
+    return target.technique !== 'dragon' || target.requireDynamic || target.requireDoubleDragon
   }
 
   private reduceUntilDragonNeeded(solved: Board, options: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
@@ -489,7 +503,16 @@ export class SudokuDragonPuzzleGenerator {
    * the app itself will show right after the puzzle loads. */
   private buildRobustCheckpoint(
     clueBoard: Board,
-    { technique, requireDynamic, forbidPlainDragon, disregardKinds, enabledFish, alsXzEnabled }: CheckpointTarget,
+    {
+      technique,
+      requireDynamic,
+      forbidPlainDragon,
+      requireDoubleDragon,
+      forbidDoubleDragon,
+      disregardKinds,
+      enabledFish,
+      alsXzEnabled,
+    }: CheckpointTarget,
   ): { board: Board; candidates: CandidateGrid } | null {
     const { board, candidates } = this.solveWithSinglesOnly(clueBoard)
 
@@ -549,7 +572,17 @@ export class SudokuDragonPuzzleGenerator {
       return null
     }
 
-    if (requireDynamic && forbidPlainDragon) {
+    if (requireDoubleDragon) {
+      // Plain Dragon fails on every chain (all are stuck by this point, and
+      // the cheap check rejects most states), and some pair of those stuck
+      // plain Dragons, linked, progresses.
+      if (chains.some((chain) => this.dragonFinder.extend(chain, board, candidates) !== null)) {
+        return null
+      }
+      if (this.dragonFinder.findDoubleDragons(chains, board, candidates, { limit: 1 }).length === 0) {
+        return null
+      }
+    } else if (requireDynamic && forbidPlainDragon) {
       // Dynamic Dragon must be the *only* way forward: plain Dragon
       // Colouring fails on every stuck chain (all chains are stuck by this
       // point), and the dynamic extension (Extension Rule 3) succeeds on at
@@ -559,6 +592,11 @@ export class SudokuDragonPuzzleGenerator {
       // dynamic one, since plain `extend` is far cheaper and rejects most
       // candidates on its own.
       if (chains.some((chain) => this.dragonFinder.extend(chain, board, candidates) !== null)) {
+        return null
+      }
+      // Double Dragon ranks below Dynamic: with forbidDoubleDragon, a state
+      // it progresses is rejected too.
+      if (forbidDoubleDragon && this.dragonFinder.findDoubleDragons(chains, board, candidates, { limit: 1 }).length > 0) {
         return null
       }
       const someChainNeedsDynamic = chains.some(
@@ -640,7 +678,7 @@ export class SudokuDragonPuzzleGenerator {
     checkpointBoard: Board,
     checkpointCandidates: CandidateGrid,
     useDynamic: boolean,
-    easierTechniques: Pick<CheckpointTarget, 'enabledFish' | 'alsXzEnabled'>,
+    easierTechniques: Pick<CheckpointTarget, 'enabledFish' | 'alsXzEnabled' | 'requireDoubleDragon'>,
   ): boolean {
     const board = cloneBoard(checkpointBoard)
     const candidates = cloneCandidates(checkpointCandidates)
@@ -649,7 +687,7 @@ export class SudokuDragonPuzzleGenerator {
       if (this.isFullySolved(board)) {
         return true
       }
-      if (!this.applyOneDragonRound(board, candidates, useDynamic)) {
+      if (!this.applyOneDragonRound(board, candidates, useDynamic, easierTechniques.requireDoubleDragon)) {
         return false
       }
     }
@@ -924,9 +962,20 @@ export class SudokuDragonPuzzleGenerator {
    * something actionable, all applied at once - mirrors the app's own
    * Dragon Colouring auto-solve button so "needs Dragon Colouring" means
    * the same thing here as it does there. */
-  private applyOneDragonRound(board: Board, candidates: CandidateGrid, useDynamic: boolean): boolean {
+  private applyOneDragonRound(board: Board, candidates: CandidateGrid, useDynamic: boolean, useDouble = false): boolean {
     const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
     const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    const stuckChains: MedusaChain[] = []
+    const record = (moves: readonly DragonMove[]) => {
+      for (const move of moves) {
+        for (const { row, col, digit } of move.solved) {
+          solvedByCell.set(`${row},${col}`, { row, col, digit })
+        }
+        for (const { row, col, digit } of move.eliminated) {
+          eliminatedByCell.set(`${row},${col},${digit}`, { row, col, digit })
+        }
+      }
+    }
 
     for (const chain of this.medusaFinder.findChains(board, candidates)) {
       const stuck =
@@ -937,19 +986,19 @@ export class SudokuDragonPuzzleGenerator {
       if (!stuck) {
         continue
       }
+      stuckChains.push(chain)
       const result =
         this.dragonFinder.extend(chain, board, candidates) ??
         (useDynamic ? this.dragonFinder.extend(chain, board, candidates, { dynamic: true }) : null)
-      if (!result) {
-        continue
+      if (result) {
+        record(result.moves)
       }
-      for (const move of result.moves) {
-        for (const { row, col, digit } of move.solved) {
-          solvedByCell.set(`${row},${col}`, { row, col, digit })
-        }
-        for (const { row, col, digit } of move.eliminated) {
-          eliminatedByCell.set(`${row},${col},${digit}`, { row, col, digit })
-        }
+    }
+    // Double Dragon (a Double Dragon puzzle only) when no single chain gave
+    // anything - one pair is enough to carry on.
+    if (useDouble && solvedByCell.size === 0 && eliminatedByCell.size === 0) {
+      for (const { moves } of this.dragonFinder.findDoubleDragons(stuckChains, board, candidates, { limit: 1 })) {
+        record(moves)
       }
     }
 
