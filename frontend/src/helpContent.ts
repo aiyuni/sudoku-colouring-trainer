@@ -66,7 +66,7 @@ export const HELP_TABS: HelpTab[] = [
   {
     label: 'Dragon Configuration',
     intro: 'The Dragon Configuration menu.  Every setting here has a **major impact** on what Dragons the solver shows, especially the **"Exhaustive Dragon Colouring"** setting. ' +
-    'In addition, **"Select Dragon Colouring techniques"**, **"Enable Double Dynamic Dragons"**, **"Limit to 1 AIC per step"**, and **"Max techniques per Dragon step"** affect the solver strength.  Advanced players may want to tinker with these settings to analyze Dragons.',
+    'In addition, **"Select Dragon Colouring techniques"**, **"Enable Double Dynamic Dragons"**, **"Limit to 1 AIC per step"**, and **"Max techniques per Dragon step"** affect the solver strength.  **Advanced players** may want to tinker with these settings to analyze Dragons. \n\n **Beginners should use default settings**.',
     sections: [
       {
         title: 'Dragon Colouring',
@@ -197,7 +197,8 @@ export const HELP_TABS: HelpTab[] = [
           {
             name: 'Enable Short Single-Digit AIC',
             settingKey: 'shortSingleDigitAicEnabled',
-            description: 'Single-digit AICs of length up to 3. Leave OFF for a pure Colouring experience.',
+            description:
+              'Single-digit AICs of length up to 3, including Empty Rectangles. Chains that are a Skyscraper, Two-String Kite, Crane or Empty Rectangle are shown by that name. Leave OFF for a pure Colouring experience.',
           },
           {
             name: 'Enable Short AIC',

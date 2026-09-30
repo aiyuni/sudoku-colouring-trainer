@@ -1,0 +1,31 @@
+{
+ "corpus": "random",
+ "count": 1000,
+ "offset": 0,
+ "solved": 1000,
+ "totalStates": 60340,
+ "types": {
+  "1": {
+   "states": 326,
+   "puzzles": 44,
+   "basicsStuck": 15,
+   "easiest": 6,
+   "elims": 329,
+   "unsound": 0
+  },
+  "2": {
+   "states": 19,
+   "puzzles": 4,
+   "basicsStuck": 1,
+   "easiest": 1,
+   "elims": 35,
+   "unsound": 0
+  }
+ },
+ "dynamic": {
+  "runs": 399,
+  "chainsWithAr": 21,
+  "unsound": 0
+ },
+ "lessons": []
+}

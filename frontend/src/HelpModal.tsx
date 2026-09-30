@@ -8,6 +8,10 @@ interface HelpModalProps {
   /** Opens the How It Works page - what a [text](how-it-works) link in the
    * intro (see helpContent.ts) does. */
   onOpenTutorial: () => void
+  /** Open on this tab (a `HELP_TABS` label), scrolled to its start - what
+   * the ? beside a settings menu's section heading does. Omitted: the first
+   * tab, scrolled to the top (quickstart box). */
+  initialTab?: string
 }
 
 /** Renders `text`, turning each [label](how-it-works) into a link button and
@@ -37,12 +41,15 @@ function renderWithLinks(text: string, onOpenTutorial: () => void): ReactNode[] 
  * menu. All of its wording lives in helpContent.ts; this only lays it out.
  * Closes on the X, the Close button, Escape, or a click on the dimmed
  * backdrop. */
-export default function HelpModal({ onClose, onOpenTutorial }: HelpModalProps) {
+export default function HelpModal({ onClose, onOpenTutorial, initialTab }: HelpModalProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const tabsRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
-  const [tabIndex, setTabIndex] = useState(0)
+  const [tabIndex, setTabIndex] = useState(() => Math.max(0, HELP_TABS.findIndex((t) => t.label === initialTab)))
+  // Opened on a specific tab: skip past the quickstart box to that tab's
+  // start, once, on the first run of the tab effect below.
+  const jumpToTabRef = useRef(initialTab !== undefined)
   const tab = HELP_TABS[tabIndex]
   useAnalyticsArea(`Help › ${tab.label}`, AREA_LAYER.dialog)
   // The setup effect below runs once, on open. Reading onClose through a ref
@@ -89,7 +96,8 @@ export default function HelpModal({ onClose, onOpenTutorial }: HelpModalProps) {
       return
     }
     const panelStart = panel.offsetTop - tabs.offsetHeight
-    if (scroller.scrollTop > panelStart) {
+    if (jumpToTabRef.current || scroller.scrollTop > panelStart) {
+      jumpToTabRef.current = false
       scroller.scrollTop = panelStart
     }
     // On a phone the tab bar scrolls sideways - keep the chosen tab in view.

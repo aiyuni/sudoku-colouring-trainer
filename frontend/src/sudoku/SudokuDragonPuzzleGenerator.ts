@@ -1,6 +1,7 @@
 import { cloneBoard, cloneCandidates, computeGivenMask, createEmptyCandidates } from './boardUtils'
+import { SudokuAvoidableRectangleFinder, type GivenMask } from './SudokuAvoidableRectangleFinder'
 import { SudokuBivalueOddagonFinder } from './SudokuBivalueOddagonFinder'
-import { SudokuBugPlusOneFinder } from './SudokuBugPlusOneFinder'
+import { SudokuBugPlusNFinder } from './SudokuBugPlusNFinder'
 import { SudokuColorFinder } from './SudokuColorFinder'
 import { SudokuDragonFinder, type DragonMove } from './SudokuDragonFinder'
 import { SudokuFishFinder, type FishTechnique } from './SudokuFishFinder'
@@ -224,8 +225,9 @@ export class SudokuDragonPuzzleGenerator {
   private readonly hiddenPairFinder = new SudokuHiddenPairFinder()
   private readonly fishFinder = new SudokuFishFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
-  private readonly bugPlusOneFinder = new SudokuBugPlusOneFinder()
+  private readonly bugPlusNFinder = new SudokuBugPlusNFinder()
   private readonly bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
+  private readonly avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
   private readonly colorFinder = new SudokuColorFinder()
   private readonly shortAicFinder = new SudokuShortAicFinder()
   private readonly genericAicFinder = new SudokuGenericAicFinder()
@@ -537,9 +539,12 @@ export class SudokuDragonPuzzleGenerator {
     if (this.uniqueRectangleFinder.find(board, candidates).length > 0) {
       return null
     }
-    if (this.bugPlusOneFinder.find(board, candidates)) {
+    if (this.bugPlusNFinder.find(board, candidates)) {
       return null
     }
+    // No Avoidable Rectangle check: the app loads this state with every
+    // filled cell a given (computeGivenMask(checkpoint.board)), and the
+    // technique needs solved cells that aren't. It joins the grind below.
     if (this.bivalueOddagonFinder.find(board, candidates).length > 0) {
       return null
     }
@@ -682,8 +687,10 @@ export class SudokuDragonPuzzleGenerator {
   ): boolean {
     const board = cloneBoard(checkpointBoard)
     const candidates = cloneCandidates(checkpointCandidates)
+    // What the app will treat as givens - see buildRobustCheckpoint.
+    const givens = computeGivenMask(checkpointBoard)
     for (;;) {
-      this.grindEasyTechniques(board, candidates, easierTechniques)
+      this.grindEasyTechniques(board, candidates, easierTechniques, givens)
       if (this.isFullySolved(board)) {
         return true
       }
@@ -697,6 +704,7 @@ export class SudokuDragonPuzzleGenerator {
     board: Board,
     candidates: CandidateGrid,
     { enabledFish, alsXzEnabled }: Pick<CheckpointTarget, 'enabledFish' | 'alsXzEnabled'>,
+    givens: GivenMask,
   ) {
     for (;;) {
       if (this.applySingles(board, candidates)) continue
@@ -706,7 +714,8 @@ export class SudokuDragonPuzzleGenerator {
       if (this.applyNakedQuads(board, candidates)) continue
       if (this.applyHiddenPairs(board, candidates)) continue
       if (this.applyUniqueRectangleType1(board, candidates)) continue
-      if (this.applyBugPlusOne(board, candidates)) continue
+      if (this.applyBugPlusN(board, candidates)) continue
+      if (this.applyAvoidableRectangle(board, candidates, givens)) continue
       if (this.applyBivalueOddagon(board, candidates)) continue
       if (this.applySimpleColoring(board, candidates)) continue
       if (this.applyFish(board, candidates, enabledFish)) continue
@@ -842,16 +851,36 @@ export class SudokuDragonPuzzleGenerator {
     return changed
   }
 
-  private applyBugPlusOne(board: Board, candidates: CandidateGrid): boolean {
-    const bugPlusOne = this.bugPlusOneFinder.find(board, candidates)
-    if (!bugPlusOne) {
+  private applyBugPlusN(board: Board, candidates: CandidateGrid): boolean {
+    // BUG+N: a BUG+1 places its cell, a BUG+2/BUG+3 eliminates.
+    const bug = this.bugPlusNFinder.find(board, candidates)
+    if (!bug) {
       return false
     }
-    const [row, col] = bugPlusOne.cell
-    board[row][col] = bugPlusOne.solvedDigit
-    candidates[row][col] = Array(9).fill(false)
-    SudokuRules.eliminatePeerCandidates(candidates, board, row, col, bugPlusOne.solvedDigit)
+    if (bug.solved) {
+      const { row, col, digit } = bug.solved
+      board[row][col] = digit
+      candidates[row][col] = Array(9).fill(false)
+      SudokuRules.eliminatePeerCandidates(candidates, board, row, col, digit)
+      return true
+    }
+    for (const { row, col, digit } of bug.eliminations) {
+      candidates[row][col][digit - 1] = false
+    }
     return true
+  }
+
+  private applyAvoidableRectangle(board: Board, candidates: CandidateGrid, givens: GivenMask): boolean {
+    let changed = false
+    for (const ar of this.avoidableRectangleFinder.find(board, candidates, givens)) {
+      for (const { row, col, digit } of ar.eliminations) {
+        if (board[row][col] === 0 && candidates[row][col][digit - 1]) {
+          candidates[row][col][digit - 1] = false
+          changed = true
+        }
+      }
+    }
+    return changed
   }
 
   private applyBivalueOddagon(board: Board, candidates: CandidateGrid): boolean {

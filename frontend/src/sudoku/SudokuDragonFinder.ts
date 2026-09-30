@@ -1,6 +1,7 @@
 import { cloneBoard, cloneCandidates, markedCandidateDigits } from './boardUtils'
+import { SudokuAvoidableRectangleFinder, type AvoidableRectangleInstance, type GivenMask } from './SudokuAvoidableRectangleFinder'
 import { SudokuBivalueOddagonFinder, type BivalueOddagonInstance } from './SudokuBivalueOddagonFinder'
-import { SudokuBugPlusOneFinder, type BugPlusOneInstance } from './SudokuBugPlusOneFinder'
+import { bugPlusNCellsText, bugPlusNExtrasText, bugPlusNName, SudokuBugPlusNFinder, type BugPlusNInstance } from './SudokuBugPlusNFinder'
 import { ALL_FISH_TECHNIQUES, FISH_TECHNIQUE_NAMES, SudokuFishFinder, type FishInstance, type FishTechnique } from './SudokuFishFinder'
 import { SudokuHiddenPairFinder, type HiddenPairInstance } from './SudokuHiddenPairFinder'
 import { SudokuLockedCandidateFinder, type LockedCandidateInstance } from './SudokuLockedCandidateFinder'
@@ -17,11 +18,16 @@ import { BOARD_SIZE, BOX_SIZE, SudokuRules } from './SudokuRules'
 import { SudokuGenericAicFinder } from './SudokuGenericAicFinder'
 import { SudokuAlsXzFinder, type AlsXzInstance } from './SudokuAlsXzFinder'
 import {
+  aicChainText,
+  aicChainView,
+  aicNodeCells,
   buildLinkGraphs,
   classifyShortAic,
   SudokuShortAicFinder,
+  type AicLinkRef,
   type LinkGraphs,
   type ShortAicInstance,
+  type SingleDigitAicPattern,
 } from './SudokuShortAicFinder'
 import { sudokuUnits } from './SudokuUnits'
 import { SudokuUniqueRectangleFinder, type UniqueRectangleInstance } from './SudokuUniqueRectangleFinder'
@@ -71,6 +77,11 @@ export interface DragonExtendOptions {
    * pair' is always allowed regardless of what's passed here, since the
    * settings UI never lets it be excluded. */
   allowedRule3Techniques?: ReadonlySet<Rule3Technique>
+  /** Which cells are the puzzle's givens. Only 'avoidable rectangle' needs
+   * it (a rectangle of solved cells is only deadly with no given in it), and
+   * it is skipped without one. The side's assumed candidates count as solved
+   * cells, never givens. */
+  givens?: GivenMask | null
   /** No Extension Rule 3 move may rely on more than one AIC (any kind) -
    * defaults to true. An AIC that turns out to be a dead end doesn't count:
    * each AIC is tried in its own branch (see extensionRule3Moves). False
@@ -174,7 +185,7 @@ export interface DragonMove {
    * reveal. */
   aicChains?: Array<{
     candidates: DragonCandidateRef[]
-    links: Array<{ from: DragonCandidateRef; to: DragonCandidateRef; kind: 'strong' | 'weak' }>
+    links: AicLinkRef[]
     hypotheticalEliminations: DragonCandidateRef[]
   }>
   /** extension-rule3 only (always present there): the step's reasoning,
@@ -259,6 +270,7 @@ export interface DynamicDragonLimits {
   allowedRule3Techniques?: ReadonlySet<Rule3Technique>
   aicLimitPerStep?: boolean
   maxTechniquesPerStep?: number
+  givens?: GivenMask | null
 }
 
 /** Double Dragon Colouring: what the second Dragon is linked to - the first
@@ -300,8 +312,14 @@ export interface DragonRule3Substep {
    * for the purple/curved-line rendering the standalone technique gets. */
   aic?: {
     candidates: DragonCandidateRef[]
-    links: Array<{ from: DragonCandidateRef; to: DragonCandidateRef; kind: 'strong' | 'weak' }>
+    links: AicLinkRef[]
+    /** A Short Single-Digit AIC that is a named pattern (Skyscraper, Empty
+     * Rectangle, ...) - see dynamicDragonLabel. */
+    pattern?: SingleDigitAicPattern
   }
+  /** 'BUG+N' only: the name the UI gives it - "BUG+1", "BUG+2" or "BUG+3"
+   * (see dynamicDragonLabel). */
+  displayName?: string
 }
 
 export interface DragonResult {
@@ -390,7 +408,8 @@ export type Rule3Technique =
   | FishTechnique
   | 'UR'
   | 'bivalue oddagon'
-  | 'BUG+1'
+  | 'BUG+N'
+  | 'avoidable rectangle'
   | 'short single-digit aic'
   | 'short aic'
   | 'generic aic'
@@ -413,7 +432,8 @@ export const ALL_RULE3_TECHNIQUES: readonly Rule3Technique[] = [
   'hidden pair',
   'UR',
   'bivalue oddagon',
-  'BUG+1',
+  'BUG+N',
+  'avoidable rectangle',
   'x-wing',
   'short single-digit aic',
   'finned x-wing',
@@ -439,11 +459,12 @@ const FISH_AND_AIC_RULE3_ORDER: readonly (FishTechnique | AicTechnique | 'als-xz
   'als-xz',
 ]
 
-/** ALL_RULE3_TECHNIQUES minus every AIC kind, every fish and ALS-xz - the default
+/** ALL_RULE3_TECHNIQUES minus every AIC kind, every fish, ALS-xz and Avoidable
+ * Rectangle (opt-in by request, though always on as a standalone technique) - the default
  * allowed set for both extend()'s own fallback and the app's initial
  * settings state, since the AIC kinds, fish and ALS-xz are all opt-in for
  * Dynamic Dragon Colouring (a fish or ALS-xz only even exists as a technique
- * once it's enabled in Settings), while Bivalue Oddagon and BUG+1 (like every other
+ * once it's enabled in Settings), while Bivalue Oddagon and BUG+N (BUG+1/2/3; like every other
  * technique here) default to on. */
 export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TECHNIQUES.filter(
   (t) =>
@@ -451,6 +472,7 @@ export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TEC
     t !== 'short single-digit aic' &&
     t !== 'generic aic' &&
     t !== 'als-xz' &&
+    t !== 'avoidable rectangle' &&
     !(ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(t),
 )
 
@@ -478,6 +500,8 @@ interface Rule3ChainStep {
    * drawn with the same purple/curved-line chain visualization the
    * standalone technique gets. */
   aic?: ShortAicInstance
+  /** 'BUG+N' only: "BUG+1", "BUG+2" or "BUG+3" - see DragonRule3Substep. */
+  displayName?: string
 }
 
 /** How Extension Rule 3's final technique pins down the cell it colours -
@@ -723,6 +747,17 @@ const FINDER_MEMO_MAX_ENTRIES = 10000
 /** The whole grid as a compact string: per cell, its digit (or 0) and its
  * candidate marks as a 9-bit mask - two characters, so equal keys mean
  * exactly equal grids. */
+/** A givens mask as a memo key part (81 chars). */
+function givensKey(givens: GivenMask): string {
+  let key = ''
+  for (const row of givens) {
+    for (const given of row) {
+      key += given ? '1' : '0'
+    }
+  }
+  return key
+}
+
 function gridKey(board: Board, candidates: CandidateGrid): string {
   let key = ''
   for (let row = 0; row < BOARD_SIZE; row++) {
@@ -849,7 +884,8 @@ export class SudokuDragonFinder {
   private readonly genericAicFinder = new SudokuGenericAicFinder()
   private readonly alsXzFinder = new SudokuAlsXzFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
-  private readonly bugPlusOneFinder = new SudokuBugPlusOneFinder()
+  private readonly bugPlusNFinder = new SudokuBugPlusNFinder()
+  private readonly avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
   private readonly bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
 
   extend(
@@ -1115,7 +1151,7 @@ export class SudokuDragonFinder {
         pending.set(key, u)
       } else if (sideOf(inMedusa.color) !== sideOf(u.color)) {
         problems.push(
-          `${describe(u)} is painted ${colorLabel(u.color)}, but the Medusa colours it ${colorLabel(inMedusa.color)} (the other side).`,
+          `${describe(u)} is coloured ${colorLabel(u.color)}, but the Medusa colours it ${colorLabel(inMedusa.color)} (the other side).`,
         )
       }
     }
@@ -1131,7 +1167,7 @@ export class SudokuDragonFinder {
         pending.delete(key)
         if (sideOf(reached.color) !== sideOf(u.color)) {
           problems.push(
-            `${describe(u)} is painted ${colorLabel(u.color)}, but Dragon Colouring colours it ${colorLabel(reached.color)} (the other side).`,
+            `${describe(u)} is coloured ${colorLabel(u.color)}, but Dragon Colouring colours it ${colorLabel(reached.color)} (the other side).`,
           )
         }
       }
@@ -1213,6 +1249,7 @@ export class SudokuDragonFinder {
                 rule3Techniques,
                 options.aicLimitPerStep ?? true,
                 options.maxTechniquesPerStep ?? Infinity,
+                options.givens ?? null,
                 limit,
               ),
             )
@@ -1236,10 +1273,10 @@ export class SudokuDragonFinder {
       for (const u of pending.values()) {
         problems.push(
           isPrimary(u.color)
-            ? `${describe(u)} is painted ${colorLabel(u.color)}, but it isn't part of the Medusa, and Dragon Colouring doesn't reach it from the colours before it.`
+            ? `${describe(u)} is coloured ${colorLabel(u.color)}, but it isn't part of the Medusa, and Dragon Colouring doesn't reach it from the colours before it.`
             : options.dynamic
-              ? `${describe(u)} is painted ${colorLabel(u.color)}, but Dynamic Dragon Colouring can't reach it from the colours before it: no Extension Rule 1, Rule 2, hidden single or Extension Rule 3 (with the Dynamic Dragon techniques enabled) for the ${colorLabel(primaryForSide(sideOf(u.color)))} side colours it.`
-              : `${describe(u)} is painted ${colorLabel(u.color)}, but plain Dragon Colouring can't reach it from the colours before it: no Extension Rule 1, Rule 2 or hidden single for the ${colorLabel(primaryForSide(sideOf(u.color)))} side colours it.`,
+              ? `${describe(u)} is coloured ${colorLabel(u.color)}, but Dynamic Dragon Colouring can't reach it from the colours before it: no Extension Rule 1, Rule 2, hidden single or Extension Rule 3 (with the Dynamic Dragon techniques enabled) for the ${colorLabel(primaryForSide(sideOf(u.color)))} side colours it.`
+              : `${describe(u)} is coloured ${colorLabel(u.color)}, but plain Dragon Colouring can't reach it from the colours before it: no Extension Rule 1, Rule 2 or hidden single for the ${colorLabel(primaryForSide(sideOf(u.color)))} side colours it.`,
         )
       }
     }
@@ -1257,7 +1294,7 @@ export class SudokuDragonFinder {
       }
       for (const u of unpromoted()) {
         problems.push(
-          `${describe(u)} is painted ${colorLabel(u.color)}, but Dragon Colouring only reaches it as ${colorLabel(secondaryForSide(sideOf(u.color)))} - nothing promotes it to ${colorLabel(u.color)}.`,
+          `${describe(u)} is coloured ${colorLabel(u.color)}, but Dragon Colouring only reaches it as ${colorLabel(secondaryForSide(sideOf(u.color)))} - nothing promotes it to ${colorLabel(u.color)}.`,
         )
       }
     }
@@ -1319,6 +1356,7 @@ export class SudokuDragonFinder {
     allowedRule3Techniques.add('hidden single')
     const aicLimitPerStep = options.aicLimitPerStep ?? true
     const maxTechniquesPerStep = options.maxTechniquesPerStep ?? Infinity
+    const givens = options.givens ?? null
 
     if (options.optimize) {
       return this.extendOptimized(
@@ -1331,6 +1369,7 @@ export class SudokuDragonFinder {
         allowedRule3Techniques,
         aicLimitPerStep,
         maxTechniquesPerStep,
+        givens,
         options.optimizeDynamic ?? false,
         linked,
       )
@@ -1382,6 +1421,7 @@ export class SudokuDragonFinder {
               allowedRule3Techniques,
               aicLimitPerStep,
               maxTechniquesPerStep,
+              givens,
             )
           : null)
       sideNothing[side] = found ? null : { sideNodes, version: candidatesVersion }
@@ -1587,6 +1627,7 @@ export class SudokuDragonFinder {
     allowedRule3Techniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
     maxTechniquesPerStep: number,
+    givens: GivenMask | null,
     optimizeDynamic: boolean,
     linked: LinkedDragonState | null,
   ): DragonResult | null {
@@ -1625,6 +1666,7 @@ export class SudokuDragonFinder {
             allowedRule3Techniques,
             aicLimitPerStep,
             maxTechniquesPerStep,
+            givens,
           )
         : null)
 
@@ -1824,13 +1866,13 @@ export class SudokuDragonFinder {
       if (everyRule3) {
         if (cached.rule3All === undefined && everyRule3SimulationsLeft > 0) {
           everyRule3SimulationsLeft--
-          cached.rule3All = this.extensionRule3Moves(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep, Infinity)
+          cached.rule3All = this.extensionRule3Moves(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep, givens, Infinity)
         }
         fresh = cached.rule3All
       } else {
         if (cached.rule3 === undefined && fallbackRule3SimulationsLeft > 0) {
           fallbackRule3SimulationsLeft--
-          cached.rule3 = this.findExtensionRule3Move(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep)
+          cached.rule3 = this.findExtensionRule3Move(own, board, workingCandidates, primary, allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep, givens)
         }
         fresh = cached.rule3 === undefined ? undefined : cached.rule3 ? [cached.rule3] : []
       }
@@ -2273,8 +2315,9 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     allowedTechniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
     maxTechniquesPerStep: number,
+    givens: GivenMask | null,
   ): DragonMove | null {
-    return this.extensionRule3Moves(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, maxTechniquesPerStep, 1)[0] ?? null
+    return this.extensionRule3Moves(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, maxTechniquesPerStep, givens, 1)[0] ?? null
   }
 
   /** Every Extension Rule 3 move for this side, up to `limit`. With
@@ -2296,6 +2339,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     allowedTechniques: ReadonlySet<Rule3Technique>,
     aicLimitPerStep: boolean,
     maxTechniquesPerStep: number,
+    givens: GivenMask | null,
     limit: number,
   ): DragonMove[] {
     const moves: DragonMove[] = []
@@ -2651,31 +2695,88 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         continue
       }
 
-      if (allowedTechniques.has('BUG+1')) {
-        // Never a mid-chain antecedent - a BUG+1 is either the whole
-        // grid's one escape-hatch cell (and directly forces its own
-        // solution) or it doesn't apply at all, unlike every other
-        // technique here which can also just narrow things down.
-        const bugPlusOne = this.memoFind('bug', grid, () => this.bugPlusOneFinder.find(hypBoard, hypCandidates))
-        if (bugPlusOne) {
+      if (allowedTechniques.has('BUG+N')) {
+        // One finder, one checkbox for BUG+1/2/3. A BUG+1 is always a direct
+        // solve (the grid's one escape-hatch cell), never a mid-chain
+        // antecedent; a BUG+2/BUG+3 only eliminates, so it chains like any
+        // other elimination technique.
+        const bug = this.memoFind('bug', grid, () => this.bugPlusNFinder.find(hypBoard, hypCandidates))
+        if (bug?.solved) {
           const move = this.buildRule3CombinedMove(
             primary,
             steps,
             {
-              technique: 'BUG+1',
-              basisCells: [bugPlusOne.cell],
+              technique: 'BUG+N',
+              basisCells: [bug.cells[0].cell],
               affectedCells: [],
               eliminatedCandidates: [],
-              clause: this.bugPlusOneClause(bugPlusOne),
-              summaryName: 'a BUG+1',
+              clause: this.bugPlusNClause(bug),
+              summaryName: `a ${bugPlusNName(bug)}`,
+              displayName: bugPlusNName(bug),
             },
-            { row: bugPlusOne.cell[0], col: bugPlusOne.cell[1], digit: bugPlusOne.solvedDigit, color: secondary },
+            { ...bug.solved, color: secondary },
             { kind: 'direct' },
           )
           if (emit(move)) {
             return true
           }
+        } else if (bug) {
+          for (const { row, col, digit } of bug.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
+          }
+          const chainStep: Rule3ChainStep = {
+            technique: 'BUG+N',
+            basisCells: bug.cells.map(({ cell }) => cell),
+            affectedCells: uniqueCells([...bug.eliminations]),
+            eliminatedCandidates: bug.eliminations,
+            clause: this.bugPlusNClause(bug),
+            summaryName: `a ${bugPlusNName(bug)}`,
+            displayName: bugPlusNName(bug),
+          }
+          if (
+            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+            )
+          ) {
+            return true
+          }
+          steps.push(chainStep)
+          appliedSomething = true
         }
+      }
+      if (appliedSomething) {
+        continue
+      }
+
+      if (allowedTechniques.has('avoidable rectangle') && givens) {
+        // The givens are part of the key: the memo outlives this puzzle, and
+        // the same grid with another givens mask is another answer.
+        for (const ar of this.memoFind(`ar|${givensKey(givens)}`, grid, () => this.avoidableRectangleFinder.find(hypBoard, hypCandidates, givens))) {
+          for (const { row, col, digit } of ar.eliminations) {
+            hypCandidates[row][col][digit - 1] = false
+          }
+          const chainStep: Rule3ChainStep = {
+            technique: 'avoidable rectangle',
+            basisCells: ar.cells,
+            affectedCells: uniqueCells(ar.eliminations),
+            eliminatedCandidates: ar.eliminations,
+            clause: this.avoidableRectangleClause(ar),
+            summaryName: `an Avoidable Rectangle (Type ${ar.type})`,
+          }
+          if (
+            this.emitForcedCells(hypBoard, hypCandidates, known, (forced) =>
+              emit(this.buildRule3CombinedMove(primary, steps, chainStep, { ...forced, color: secondary }, { kind: 'single candidate' })),
+            )
+          ) {
+            return true
+          }
+          steps.push(chainStep)
+          appliedSomething = true
+          break
+        }
+      }
+      if (appliedSomething) {
+        continue
       }
 
       if (allowedTechniques.has('bivalue oddagon')) {
@@ -2767,11 +2868,11 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           ).filter((candidate) => candidate.eliminations.length > 0)
           const toStep = (aic: ShortAicInstance): Rule3ChainStep => ({
             technique,
-            basisCells: aic.nodes.map((n) => [n.row, n.col] as const),
+            basisCells: aic.nodes.flatMap((n) => aicNodeCells(n)),
             affectedCells: uniqueCells(aic.eliminations),
             eliminatedCandidates: aic.eliminations,
             clause: this.aicClause(aic, technique),
-            summaryName: `a ${this.aicLabel(technique)} (Type ${aic.eliminationType})`,
+            summaryName: this.aicSummaryName(aic, technique),
             aic,
           })
           if (aicMode === 'branch') {
@@ -2940,19 +3041,12 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       (s): s is Rule3ChainStep & { technique: Exclude<Rule3Technique, 'hidden single'> } =>
         s.technique !== 'hidden single',
     )
-    const toAicChain = (aic: ShortAicInstance) => ({
-      candidates: aic.nodes.map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
-      links: aic.links.map((link) => ({
-        from: { row: link.from.row, col: link.from.col, digit: link.from.digit },
-        to: { row: link.to.row, col: link.to.col, digit: link.to.digit },
-        kind: link.kind,
-      })),
-    })
+    const toAicChain = (aic: ShortAicInstance) => ({ ...aicChainView(aic), ...(aic.pattern ? { pattern: aic.pattern } : {}) })
     const aicInstances = techniqueSteps.map((s) => s.aic).filter((aic): aic is ShortAicInstance => !!aic)
     const aicChains =
       aicInstances.length > 0
         ? aicInstances.map((aic) => ({
-            ...toAicChain(aic),
+            ...aicChainView(aic),
             hypotheticalEliminations: aic.eliminations.map((e) => ({ row: e.row, col: e.col, digit: e.digit })),
           }))
         : undefined
@@ -2964,6 +3058,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         basisCells: s.basisCells,
         eliminatedCandidates: s.eliminatedCandidates,
         aic: s.aic ? toAicChain(s.aic) : undefined,
+        ...(s.displayName ? { displayName: s.displayName } : {}),
       })),
       {
         technique: 'dragon colour extension',
@@ -3141,9 +3236,19 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     return `${ur.reasonText}, which eliminates ${eliminationsLabel}`
   }
 
-  private bugPlusOneClause(bug: BugPlusOneInstance): string {
-    const [row, col] = bug.cell
-    return `a BUG+1 at ${cellRef(row, col)} (candidates {${bug.candidates.join(',')}}), where ${bug.solvedDigit} appears three times in its ${bug.unitKind}`
+  private bugPlusNClause(bug: BugPlusNInstance): string {
+    if (bug.solved) {
+      const [{ cell: [row, col], candidates, unitKind }] = bug.cells
+      return `a BUG+1 at ${cellRef(row, col)} (candidates {${candidates.join(',')}}), where ${bug.solved.digit} appears three times in its ${unitKind}`
+    }
+    return `a ${bugPlusNName(bug)} at ${bugPlusNCellsText(bug)}, whose extra digits are ${bugPlusNExtrasText(bug)} - one of them is true, which eliminates ${this.formatCandidateGroups([...bug.eliminations])}`
+  }
+
+  private avoidableRectangleClause(ar: AvoidableRectangleInstance): string {
+    return (
+      `an Avoidable Rectangle (Type ${ar.type}) of {${ar.digits.join(',')}} at ${ar.cells.map(([r, c]) => cellRef(r, c)).join(', ')}, ` +
+      `${ar.reasonText}, which eliminates ${this.formatCandidateGroups(ar.eliminations)}`
+    )
   }
 
   private bivalueOddagonClauseIntro(oddagon: BivalueOddagonInstance): string {
@@ -3162,15 +3267,6 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     return `${this.bivalueOddagonClauseIntro(oddagon)}, which eliminates ${eliminationsLabel}`
   }
 
-  private formatAicChainText(aic: ShortAicInstance): string {
-    return aic.nodes
-      .map((n, i) => {
-        const connector = i === 0 ? '' : i % 2 === 1 ? ' = ' : ' - '
-        return `${connector}${n.digit}${cellRef(n.row, n.col)}`
-      })
-      .join('')
-  }
-
   private aicLabel(technique: AicTechnique): string {
     return technique === 'short single-digit aic'
       ? 'short single-digit AIC'
@@ -3179,9 +3275,18 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         : 'short AIC'
   }
 
+  /** "a short AIC (Type 2)", or for a named single-digit pattern just its
+   * name ("a Skyscraper", "an Empty Rectangle") - those are always Type 1. */
+  private aicSummaryName(aic: ShortAicInstance, technique: AicTechnique): string {
+    if (aic.pattern) {
+      return `${aic.pattern === 'Empty Rectangle' ? 'an' : 'a'} ${aic.pattern}`
+    }
+    return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType})`
+  }
+
   private aicClause(aic: ShortAicInstance, technique: AicTechnique): string {
     const eliminationsLabel = this.formatCandidateGroups(aic.eliminations)
-    return `a ${this.aicLabel(technique)} (Type ${aic.eliminationType}) of ${this.formatAicChainText(aic)}, which eliminates ${eliminationsLabel}`
+    return `${this.aicSummaryName(aic, technique)} of ${aicChainText(aic.nodes)}, which eliminates ${eliminationsLabel}`
   }
 
   /** The plain (always-on) hidden-single extension's whole explanation -

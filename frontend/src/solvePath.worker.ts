@@ -35,6 +35,8 @@ export interface SolvePathOptions {
 export interface SolvePathWorkerRequest {
   board: Board
   candidates: CandidateGrid
+  /** Which cells are givens - grid data, not a setting (Avoidable Rectangle). */
+  givens: boolean[][]
   options: SolvePathOptions
 }
 
@@ -45,7 +47,7 @@ export type SolvePathWorkerResponse = { result: SolvePathResult } | { error: str
  * how a search is cancelled - buildSolvePath never yields, so a "stop"
  * message couldn't be received anyway. */
 self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
-  const { board, candidates, options } = event.data
+  const { board, candidates, givens, options } = event.data
   let response: SolvePathWorkerResponse
   try {
     response = {
@@ -68,6 +70,7 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.maxTechniquesPerDragonStep,
         options.doubleDragonEnabled,
         options.doubleDynamicDragonEnabled,
+        givens,
       ),
     }
   } catch (error) {

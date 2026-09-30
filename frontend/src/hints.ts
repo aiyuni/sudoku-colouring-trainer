@@ -5,6 +5,7 @@ import { autocompleteMedusa, type MedusaSeed } from './sudoku/SudokuMedusaAutoco
 import { formatCandidate } from './sudoku/SudokuDragonTargetFinder'
 import { sudokuUnits, type Cell } from './sudoku/SudokuUnits'
 import type { Board, CandidateGrid } from './sudoku/types'
+import { tutorialTargetFor, type TutorialTarget } from './tutorial/tutorialLinks'
 
 /** One hint the popup reveals ("Next hint" shows the next one). `lines` are
  * listed under `text` (an invalid colouring's problems, say). */
@@ -14,6 +15,9 @@ export interface HintStep {
   /** This step already states the whole conclusion (in the user's own
    * colours), so no separate answer step follows it. */
   final?: boolean
+  /** A "Learn this technique" link to the How It Works section teaching it
+   * (the first hint only, and only when the page teaches the technique). */
+  learn?: TutorialTarget
 }
 
 /** Everything the Hint popup can reveal about the easiest technique on the
@@ -96,8 +100,9 @@ export function techniqueHintLabel(instance: TechniqueInstance): string {
   if (id.startsWith('simple-color-')) return 'Simple Colouring'
   if (id.startsWith('ur-')) return 'Unique Rectangle'
   if (id.startsWith('bivalue-oddagon-')) return 'Bivalue Oddagon'
+  if (id.startsWith('avoidable-rectangle-')) return 'Avoidable Rectangle'
   if (id.startsWith('short-aic-')) return 'Short AIC'
-  if (id.startsWith('generic-aic-')) return 'AIC (a long chain)'
+  if (id.startsWith('generic-aic-')) return 'generic AIC'
   return instance.name
 }
 
@@ -113,12 +118,30 @@ function techniqueBlurb(instance: TechniqueInstance): string {
   if (id.startsWith('naked-')) return 'Some cells of one row, column or box hold only as many digits as there are cells.'
   if (id.startsWith('hidden-pair')) return 'Two digits can only go in the same two cells of a row, column or box.'
   if (id.startsWith('ur-')) return 'Four cells in a rectangle over two boxes would give the puzzle two solutions.'
-  if (id.startsWith('bug-plus-one'))
+  // BUG+N: "bug-plus-n-<N>-..." - one technique, worded by its N.
+  if (id.startsWith('bug-plus-n-1-'))
     return 'Every unsolved cell has two candidates except one - the puzzle would have two solutions without it.'
+  if (id.startsWith('bug-plus-n-'))
+    return `Every unsolved cell has two candidates except ${id.startsWith('bug-plus-n-2-') ? 'two' : 'three'} - one of their extra digits must be true, or the puzzle would have two solutions.`
   if (id.startsWith('bivalue-oddagon-')) return 'An odd loop of cells sharing the same two candidates can\'t be all those two digits.'
-  if (id.startsWith('simple-color-')) return 'Colour the conjugate pairs of one digit in two alternating colours.'
+  if (id.startsWith('avoidable-rectangle-'))
+    return 'Four cells in a rectangle over two boxes, some already solved (not givens), must not end up as two digits that could swap.'
+  if (id.startsWith('simple-color-')) return 'Look for a digit where its candidates can only be in X or Y cell.  Start colouring the candidates in two alternating colours.'
   if (id.startsWith('fish-')) return 'A digit confined to the same columns in several rows (or the same rows in several columns).'
-  if (id.startsWith('short-single-digit-aic')) return 'A short chain of strong and weak links on a single digit.'
+  if (id.startsWith('short-single-digit-aic')) {
+    switch (instance.aicPattern) {
+      case 'Skyscraper':
+        return 'Two parallel rows (or columns) each hold a digit only twice, and one end of each lines up.'
+      case 'Two-String Kite':
+        return 'A row and a column each hold a digit only twice, and one end of each shares a box.'
+      case 'Crane':
+        return 'A row or column and a box each hold a digit only twice, and one end of each lines up.'
+      case 'Empty Rectangle':
+        return "A box's candidates for a digit all lie in one row and one column of it, and a row or column holding that digit only twice crosses one of them."
+      default:
+        return 'A short chain of strong and weak links on a single digit.'
+    }
+  }
   if (id.startsWith('short-aic-') || id.startsWith('generic-aic-'))
     return 'A chain of alternating strong and weak links whose two ends can\'t both be false.'
   if (id.startsWith('als-xz-')) return 'Two almost locked sets linked by a restricted common digit.'
@@ -126,7 +149,7 @@ function techniqueBlurb(instance: TechniqueInstance): string {
   if (id.startsWith('double-dynamic-dragon-') || id.startsWith('double-dragon-'))
     return 'Two stuck Dragons, linked to each other.'
   if (id.startsWith('dynamic-dragon-'))
-    return 'A stuck 3D Medusa extended with dragon colours, using other techniques under each colour\'s assumption.'
+    return 'Dynamic Dragon Colouring always starts from a stuck 3D Medusa.'
   if (id.startsWith('dragon-')) return 'A stuck 3D Medusa extended with dragon colours.'
   return ''
 }
@@ -225,11 +248,40 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
     ]
   }
 
-  if (id.startsWith('bug-plus-one')) {
+  if (id.startsWith('bug-plus-n-1-')) {
     const { row, col } = instance.solvedCandidates[0]
     return [
       { text: 'Find the one unsolved cell that has three candidates.' },
       { text: `It's ${cellRef(row, col)}. Which of its candidates appears three times in its row, column or box?` },
+    ]
+  }
+
+  if (id.startsWith('bug-plus-n-')) {
+    const count = id.startsWith('bug-plus-n-2-') ? 'two' : 'three'
+    const extras = listAnd(instance.usedCandidates.map((c) => `${c.digit} in ${cellRef(c.row, c.col)}`))
+    return [
+      { text: `Find the ${count} unsolved cells that have three candidates. For each, which candidate appears three times in its row, column or box? That's its extra digit.` },
+      {
+        text: `They're ${cellsText(instance.usedCells)}, with extra digits ${extras}. One of those must be true - so which cells see all of them?`,
+      },
+    ]
+  }
+
+  if (id.startsWith('avoidable-rectangle-')) {
+    const [first] = instance.eliminatedCandidates
+    if (id.startsWith('avoidable-rectangle-1-')) {
+      return [
+        { text: 'Look for a rectangle over two boxes with three solved corners (not givens), the same digit on two opposite corners.' },
+        {
+          text: `The rectangle is ${cellsText(usedCells)}. If ${cellRef(first.row, first.col)} were ${first.digit}, its two digits could swap round all four cells - a second solution.`,
+        },
+      ]
+    }
+    return [
+      { text: 'Look for a rectangle over two boxes with two side-by-side solved corners (not givens), and two unsolved corners with two candidates each.' },
+      {
+        text: `The rectangle is ${cellsText(usedCells)}. Unless one of the unsolved corners is ${first.digit}, the rectangle would hold two digits that could swap - a second solution.`,
+      },
     ]
   }
 
@@ -239,7 +291,7 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
     )
     const pair = usedDigits.filter((d) => byCell.every((digits) => digits.has(d)))
     return [
-      { text: `Look for a loop of an odd number of cells, each linked to the next, all holding the candidates ${listAnd(pair)}.` },
+      { text: `Look for a loop of an odd number of cells, each linked to the next, and all holding the candidates ${listAnd(pair)}.` },
       { text: `The loop is ${cellsText(usedCells)}. The cells with an extra candidate are what stop it being a deadly pattern.` },
     ]
   }
@@ -248,7 +300,7 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
     const digit = instance.blueCandidates?.[0]?.digit ?? instance.yellowCandidates?.[0]?.digit
     const start = instance.blueCandidates?.[0]
     return [
-      { text: `Colour the conjugate pairs of digit ${digit}.` },
+      { text: `Look at digit ${digit}.` },
       ...(start ? [{ text: `Start the colouring from ${formatCandidate(start)}.` }] : []),
     ]
   }
@@ -259,16 +311,22 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
   }
 
   if (id.includes('aic-')) {
-    const nodes = instance.aicCandidates ?? []
-    const digits = uniqueSorted(nodes.map((n) => n.digit))
-    const first = nodes[0]
-    const last = nodes[nodes.length - 1]
+    const links = instance.aicLinks ?? []
+    const digits = uniqueSorted((instance.aicCandidates ?? []).map((n) => n.digit))
+    if (instance.aicPattern && instance.aicPatternText) {
+      return [{ text: `Look at digit ${digits[0]}.` }, { text: `${instance.aicPatternText}.` }]
+    }
+    // A grouped end (Empty Rectangle) is "one of these cells".
+    const endText = (ref: TechniqueCandidateRef, cells?: ReadonlyArray<readonly [number, number]>) =>
+      cells ? `${ref.digit} in one of ${cellsText(cells)}` : formatCandidate(ref)
+    const first = links[0]
+    const last = links[links.length - 1]
     return [
       {
-        text: `The chain has ${nodes.length - 1} links and uses the ${digits.length === 1 ? 'digit' : 'digits'} ${listAnd(digits)}. It eliminates ${eliminatedText}.`,
+        text: `The chain has ${links.length} links and uses the ${digits.length === 1 ? 'digit' : 'digits'} ${listAnd(digits)}. It eliminates ${eliminatedText}.`,
       },
       ...(first && last
-        ? [{ text: `The chain starts at ${formatCandidate(first)} and ends at ${formatCandidate(last)} - one of those two must be true.` }]
+        ? [{ text: `The chain starts at ${endText(first.from, first.fromCells)} and ends at ${endText(last.to, last.toCells)}.  This means one of those two must be true.` }]
         : []),
     ]
   }
@@ -277,7 +335,7 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
     const rcc = instance.blueCandidates?.[0]?.digit
     const z = uniqueSorted((instance.yellowCandidates ?? []).map((c) => c.digit))
     return [
-      { text: `The two sets are linked by ${rcc}, and ${listAnd(z)} ${z.length === 1 ? 'is the digit' : 'are the digits'} that get${z.length === 1 ? 's' : ''} eliminated.` },
+      { text: `The two sets are linked by RCC (X) digit ${rcc}, and ${listAnd(z)} ${z.length === 1 ? 'is the digit (Z) ' : 'are the digits'} that get${z.length === 1 ? 's' : ''} eliminated.` },
       { text: `It eliminates ${eliminatedText}.` },
     ]
   }
@@ -287,7 +345,7 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
   if (instance.moves && instance.moves.length > 0) {
     const medusa = instance.moves[0].colored
     if (medusa.length > 0) {
-      return [{ text: `Start with the 3D Medusa that includes ${formatCandidate(medusaStartCandidate(medusa))}, and colour it until it gets stuck.` }]
+      return [{ text: `Start with a 3D Medusa that includes ${formatCandidate(medusaStartCandidate(medusa))}, and colour it until it gets stuck.` }]
     }
   }
   return []
@@ -305,8 +363,12 @@ export function buildTechniqueHint(
 ): TechniqueHint {
   const label = techniqueHintLabel(instance)
   const blurb = techniqueBlurb(instance)
+  // "a Skyscraper", "an X-Wing" - but a Colouring technique is named as a
+  // method, not a thing: "is Simple Colouring", "is Dynamic Dragon Colouring".
+  const article = /Colouring$/.test(label) ? '' : /^([AEIO]|X-)/.test(label) ? 'an ' : 'a '
   const intro: HintStep = {
-    text: `The easiest technique available is ${/^([AEIO]|X-)/.test(label) ? 'an' : 'a'} ${label}.${blurb ? ` ${blurb}` : ''}`,
+    text: `The easiest technique available is ${article}${label}.${blurb ? ` ${blurb}` : ''}`,
+    learn: tutorialTargetFor(instance.id) ?? undefined,
   }
   const answer: HintStep = {
     // Some notations already start with the name ("Locked Candidate (Pointing) - ...").
@@ -357,7 +419,7 @@ function startSteps(context: MedusaHintContext, prefix = ''): HintStep[] {
   const start = medusaStartCandidate(context.targetChain, context.focusCells)
   return [
     {
-      text: `${prefix}Start a 3D Medusa from ${formatCandidate(start)}: paint it ${context.colorNames.blue} (Candidate Colours pad), then keep colouring every candidate strongly linked to a coloured one in the opposite colour, ${context.colorNames.yellow}.`,
+      text: `${prefix}Start a 3D Medusa from ${formatCandidate(start)}: colour it ${context.colorNames.blue}, then look for candidates that have a strong link relationship with it, and colour them in a different colour (we will use ${context.colorNames.yellow}), alternatively.`,
     },
   ]
 }
@@ -427,7 +489,7 @@ export function checkMedusaPaint(
     kind: 'steps',
     steps: [
       {
-        text: `Your colouring is right so far (${outcome.added.length} more candidate${outcome.added.length === 1 ? '' : 's'} to colour). Next, look at ${formatCandidate(next.target)}.`,
+        text: `Your colouring is right so far (${outcome.added.length} more candidate${outcome.added.length === 1 ? '' : 's'} to colour). Next, see if you can spot what colour would ${formatCandidate(next.target)} be.`,
       },
       {
         text: `${strongLinkReason(board, candidates, next.target, next.from)}, so ${formatCandidate(next.target)} takes the opposite colour to ${formatCandidate(next.from)} (${fromColour}): colour it ${targetColour}.`,
@@ -465,7 +527,7 @@ export function dragonMoveSteps(move: DragonMove, rename: (text: string) => stri
         ? 'Look for a contradiction between your colours.'
         : `Look at ${cellsText(uniqueCells(refs).slice(0, 4))}.`
     return [
-      { text: `Your colouring is far enough along to make a deduction. ${where}` },
+      { text: `Your current colouring is enough to make a deduction. ${where}` },
       { text: rename(move.description) },
     ]
   }

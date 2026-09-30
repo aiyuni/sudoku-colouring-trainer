@@ -9,10 +9,11 @@ import {
   type ColourTabId,
   type LessonGroup,
 } from './tutorialExamples'
+import type { TutorialTabId } from './tutorialLinks'
 import { TUTORIAL_COLOUR_HEX, type TutorialColor, type TutorialLesson } from './tutorialTypes'
 import './tutorial.css'
 
-type TabId = 'basics' | ColourTabId | 'double' | 'uniqueness'
+type TabId = TutorialTabId
 
 /** The tab bar and the one line under it. Edit the wording here. */
 const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
@@ -229,16 +230,20 @@ function GroupTabs({
   groups,
   label,
   tab,
+  initialGroup,
   render,
 }: {
   groups: LessonGroup[]
   label: string
+  /** The sub-tab (a `LessonGroup.title`) to open on - a hint's "Learn this
+   * technique" link. The first sub-tab if omitted or not shown. */
+  initialGroup?: string
   /** The page tab this sits on, for usage analytics. */
   tab: TabId
   render: (group: LessonGroup) => ReactNode
 }) {
   const shown = groups.filter((group) => group.lessons.length > 0)
-  const [index, setIndex] = useState(0)
+  const [index, setIndex] = useState(() => Math.max(0, shown.findIndex((g) => g.title === initialGroup)))
   const group = shown[Math.min(index, shown.length - 1)]
   // Which technique of this tab is being read (the tab itself is tracked by
   // TutorialPage, one layer down).
@@ -271,13 +276,14 @@ function GroupTabs({
 }
 
 /** Basics: every step of the technique's example(s) on screen at once, side by side. */
-function BasicsView() {
+function BasicsView({ initialGroup }: { initialGroup?: string }) {
   const groups = useMemo(() => buildBasicsGroups(), [])
   return (
     <GroupTabs
       groups={groups}
       label="Basic techniques"
       tab="basics"
+      initialGroup={initialGroup}
       render={(group) => (
         <section className="tutorial-card">
           {group.lessons.map((lesson) => (
@@ -307,26 +313,28 @@ function BasicsView() {
 }
 
 /** Double Dragons: a sub-tab each for plain and Dynamic, played step by step. */
-function DoubleDragonView() {
+function DoubleDragonView({ initialGroup }: { initialGroup?: string }) {
   const groups = useMemo(() => buildDoubleDragonGroups(), [])
   return (
     <GroupTabs
       groups={groups}
       label="Double Dragon techniques"
       tab="double"
+      initialGroup={initialGroup}
       render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
     />
   )
 }
 
 /** Abusing Uniqueness: a sub-tab per technique, each played step by step. */
-function UniquenessView() {
+function UniquenessView({ initialGroup }: { initialGroup?: string }) {
   const groups = useMemo(() => buildUniquenessGroups(), [])
   return (
     <GroupTabs
       groups={groups}
       label="Uniqueness techniques"
       tab="uniqueness"
+      initialGroup={initialGroup}
       render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
     />
   )
@@ -371,6 +379,8 @@ function LessonSwitcher({ lessons }: { lessons: TutorialLesson[] }) {
 interface TutorialPageProps {
   onClose: () => void
   initialTab?: TabId
+  /** The sub-tab to open `initialTab` on (see GroupTabs). */
+  initialGroup?: string
 }
 
 /**
@@ -379,7 +389,7 @@ interface TutorialPageProps {
  * tab per technique. Everything on it is generated from real positions by the
  * app's own solver code - see tutorialExamples.ts to change what it teaches.
  */
-export default function TutorialPage({ onClose, initialTab = 'basics' }: TutorialPageProps) {
+export default function TutorialPage({ onClose, initialTab = 'basics', initialGroup }: TutorialPageProps) {
   const [tab, setTab] = useState<TabId>(initialTab)
   const contentRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
@@ -407,6 +417,8 @@ export default function TutorialPage({ onClose, initialTab = 'basics' }: Tutoria
   }, [tab])
 
   const current = TABS.find((t) => t.id === tab)!
+  // The linked sub-tab applies to the tab the page opened on only.
+  const groupFor = (id: TabId) => (id === initialTab ? initialGroup : undefined)
   useAnalyticsArea(`How It Works › ${current.label}`, AREA_LAYER.tutorial)
 
   return (
@@ -439,11 +451,11 @@ export default function TutorialPage({ onClose, initialTab = 'basics' }: Tutoria
       <div className="tutorial-content" role="tabpanel" id="tutorial-panel" aria-labelledby={`tutorial-tab-${tab}`}>
         <p className="tutorial-tagline">{current.tagline}</p>
         {tab === 'basics' ? (
-          <BasicsView />
+          <BasicsView initialGroup={groupFor('basics')} />
         ) : tab === 'uniqueness' ? (
-          <UniquenessView />
+          <UniquenessView initialGroup={groupFor('uniqueness')} />
         ) : tab === 'double' ? (
-          <DoubleDragonView />
+          <DoubleDragonView initialGroup={groupFor('double')} />
         ) : (
           <ColourView key={tab} tab={tab} />
         )}

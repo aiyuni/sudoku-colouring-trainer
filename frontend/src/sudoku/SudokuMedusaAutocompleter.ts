@@ -84,14 +84,14 @@ export function autocompleteMedusa(
   const linked: MedusaSeed[] = []
   for (const seed of seeds) {
     if (board[seed.row][seed.col] !== 0 || !candidates[seed.row][seed.col][seed.digit - 1]) {
-      problems.push(`${describe(seed)} is painted ${colorNames[seed.color]}, but it isn't a candidate any more.`)
+      problems.push(`${describe(seed)} is coloured ${colorNames[seed.color]}, but it isn't a candidate any more.`)
     } else if (!adjacency.has(nodeKey(seed.row, seed.col, seed.digit))) {
       if (allowOutside) {
         outside.push(seed)
         continue
       }
       problems.push(
-        `${describe(seed)} is painted ${colorNames[seed.color]}, but it has no strong link (its cell has more than two candidates, and ${seed.digit} appears more than twice in each of its row, column and box), so it can't be part of a Medusa.`,
+        `${describe(seed)} is coloured ${colorNames[seed.color]}, but it has no strong link (its cell has more than two candidates, and ${seed.digit} appears more than twice in each of its row, column and box), so it can't be part of a Medusa.`,
       )
     } else {
       linked.push(seed)
@@ -158,7 +158,7 @@ export function autocompleteMedusa(
   if (mainId === -1) {
     if (outside.length > 0) {
       problems.push(
-        `None of the candidates painted ${colorNames.blue} or ${colorNames.yellow} has a strong link, so there's no Medusa to start from.`,
+        `None of the candidates coloured ${colorNames.blue} or ${colorNames.yellow} has a strong link, so there's no Medusa to start from.`,
       )
     }
     return { kind: 'invalid', problems: problems.slice(0, MAX_PROBLEMS) }
@@ -203,7 +203,7 @@ export function autocompleteMedusa(
     const path = strongLinkPath(parentOf, nodeKey(reference.row, reference.col, reference.digit), nodeKey(seed.row, seed.col, seed.digit))
     const pathText = path ? ` (strong links: ${path.map((key) => describe(nodeByKey.get(key)!)).join(' = ')})` : ''
     problems.push(
-      `${describe(seed)} is painted ${colorNames[seed.color]}, but following the strong links from ${describe(reference)} (${colorNames[reference.color]}) it must be ${colorNames[opposite(seed.color)]}${pathText}.`,
+      `${describe(seed)} is coloured ${colorNames[seed.color]}, but following the strong links from ${describe(reference)} (${colorNames[reference.color]}) it must be ${colorNames[opposite(seed.color)]}${pathText}.`,
     )
   }
 

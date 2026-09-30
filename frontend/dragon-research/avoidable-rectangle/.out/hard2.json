@@ -1,0 +1,31 @@
+{
+ "corpus": "hard",
+ "count": 1604,
+ "offset": 1600,
+ "solved": 1509,
+ "totalStates": 116423,
+ "types": {
+  "1": {
+   "states": 1958,
+   "puzzles": 228,
+   "basicsStuck": 64,
+   "easiest": 37,
+   "elims": 2012,
+   "unsound": 0
+  },
+  "2": {
+   "states": 83,
+   "puzzles": 18,
+   "basicsStuck": 5,
+   "easiest": 4,
+   "elims": 130,
+   "unsound": 0
+  }
+ },
+ "dynamic": {
+  "runs": 400,
+  "chainsWithAr": 44,
+  "unsound": 0
+ },
+ "lessons": []
+}

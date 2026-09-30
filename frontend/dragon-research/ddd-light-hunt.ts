@@ -40,7 +40,7 @@ const GRADES: Array<{ name: string; light: boolean; set: Set<Rule3Technique> }> 
   { name: 'subsets', light: true, set: T(...SUBSETS) },
   { name: '+x-wing', light: true, set: T(...SUBSETS, 'x-wing') },
   { name: '+single-digit aic', light: true, set: T(...SUBSETS, 'x-wing', 'short single-digit aic') },
-  { name: '+uniqueness', light: false, set: T(...SUBSETS, 'x-wing', 'short single-digit aic', 'UR', 'BUG+1', 'bivalue oddagon') },
+  { name: '+uniqueness', light: false, set: T(...SUBSETS, 'x-wing', 'short single-digit aic', 'UR', 'BUG+N', 'bivalue oddagon') },
   { name: 'all', light: false, set: new Set(ALL_RULE3_TECHNIQUES) },
 ]
 

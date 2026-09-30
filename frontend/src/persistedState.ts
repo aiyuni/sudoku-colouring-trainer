@@ -65,7 +65,8 @@ function readSetting<K extends keyof AppSettings>(key: K, value: unknown): AppSe
       break
     case 'allowedRule3Techniques':
       result = Array.isArray(value)
-        ? ALL_RULE3_TECHNIQUES.filter((technique) => value.includes(technique))
+        ? // 'BUG+1' is the old name of 'BUG+N' (BUG+1/2/3, one technique).
+          ALL_RULE3_TECHNIQUES.filter((technique) => value.includes(technique) || (technique === 'BUG+N' && value.includes('BUG+1')))
         : undefined
       break
     case 'maxTechniquesPerDragonStep': {

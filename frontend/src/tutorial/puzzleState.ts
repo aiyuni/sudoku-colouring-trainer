@@ -13,8 +13,12 @@ const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
  *
  * Pencil marks are app state, not something derivable from the board - the
  * finders trust them as given - so this is what makes a mid-solve position
- * reproducible from a short string. */
-export function decodePuzzleState(boardString: string, removed = ''): PuzzleState {
+ * reproducible from a short string.
+ *
+ * Every filled cell counts as a given unless `cluesString` (the original
+ * puzzle, 81 digits) is passed: then only its digits are givens and the rest
+ * of the board's are solved cells - which Avoidable Rectangles need. */
+export function decodePuzzleState(boardString: string, removed = '', cluesString?: string): PuzzleState {
   if (!/^[0-9]{81}$/.test(boardString)) {
     throw new Error('A tutorial board must be exactly 81 digits (0 for an empty cell).')
   }
@@ -36,7 +40,21 @@ export function decodePuzzleState(boardString: string, removed = ''): PuzzleStat
     }
     candidates[Number(match[1]) - 1][Number(match[2]) - 1][Number(match[3]) - 1] = false
   }
-  const givens = board.map((row) => row.map((value) => value !== 0))
+  if (cluesString !== undefined && !/^[0-9]{81}$/.test(cluesString)) {
+    throw new Error('A tutorial clue string must be exactly 81 digits (0 for a non-given).')
+  }
+  const givens = board.map((row, r) =>
+    row.map((value, c) => {
+      if (cluesString === undefined) {
+        return value !== 0
+      }
+      const clue = Number(cluesString[r * BOARD_SIZE + c])
+      if (clue !== 0 && clue !== value) {
+        throw new Error(`Clue ${clue} at r${r + 1}c${c + 1} isn't on the board.`)
+      }
+      return clue !== 0
+    }),
+  )
   return { board, givens, candidates }
 }
 

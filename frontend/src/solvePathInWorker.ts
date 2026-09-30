@@ -4,7 +4,7 @@ import type { Board, CandidateGrid } from './sudoku/types'
 
 export type { SolvePathOptions } from './solvePath.worker'
 
-function runOnMainThread(board: Board, candidates: CandidateGrid, options: SolvePathOptions): SolvePathResult {
+function runOnMainThread(board: Board, candidates: CandidateGrid, givens: boolean[][], options: SolvePathOptions): SolvePathResult {
   return buildSolvePath(
     board,
     candidates,
@@ -24,6 +24,7 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, options: Solve
     options.maxTechniquesPerDragonStep,
     options.doubleDragonEnabled,
     options.doubleDynamicDragonEnabled,
+    givens,
   )
 }
 
@@ -43,6 +44,7 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, options: Solve
 export function solvePathInWorker(
   board: Board,
   candidates: CandidateGrid,
+  givens: boolean[][],
   options: SolvePathOptions,
   signal?: AbortSignal,
 ): Promise<SolvePathResult> {
@@ -61,7 +63,7 @@ export function solvePathInWorker(
       worker = new Worker(new URL('./solvePath.worker.ts', import.meta.url), { type: 'module' })
     } catch {
       try {
-        resolve(runOnMainThread(board, candidates, options))
+        resolve(runOnMainThread(board, candidates, givens, options))
       } catch (error) {
         reject(error)
       }
@@ -92,7 +94,7 @@ export function solvePathInWorker(
       reject(new Error(event.message || 'Solve path worker failed'))
     }
 
-    const request: SolvePathWorkerRequest = { board, candidates, options }
+    const request: SolvePathWorkerRequest = { board, candidates, givens, options }
     worker.postMessage(request)
   })
 }

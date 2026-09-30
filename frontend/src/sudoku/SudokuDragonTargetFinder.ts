@@ -6,6 +6,7 @@ import {
   type DragonMove,
   type Rule3Technique,
 } from './SudokuDragonFinder'
+import type { GivenMask } from './SudokuAvoidableRectangleFinder'
 import { SudokuMedusaFinder, type MedusaChain } from './SudokuMedusaFinder'
 import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import type { Board, CandidateGrid } from './types'
@@ -143,6 +144,8 @@ export interface DragonTargetOptions {
   allowedRule3Techniques?: ReadonlySet<Rule3Technique>
   aicLimitPerStep?: boolean
   maxTechniquesPerStep?: number
+  /** The puzzle's givens, for Extension Rule 3's Avoidable Rectangle. */
+  givens?: GivenMask | null
   /** The Optimize Dynamic Dragons setting: unlike plain Optimize (always on
    * here), this one follows the user's setting - it's far costlier. */
   optimizeDynamic?: boolean
@@ -265,6 +268,7 @@ export class SudokuDragonTargetFinder {
         allowedRule3Techniques: options.allowedRule3Techniques,
         aicLimitPerStep: options.aicLimitPerStep,
         maxTechniquesPerStep: options.maxTechniquesPerStep,
+        givens: options.givens,
       })
       if (dynamic && dynamic.moves.some((move) => move.kind === 'extension-rule3')) {
         consider('dynamic', chainKey, dynamic.moves)
@@ -295,6 +299,7 @@ export class SudokuDragonTargetFinder {
           allowedRule3Techniques: options.allowedRule3Techniques,
           aicLimitPerStep: options.aicLimitPerStep,
           maxTechniquesPerStep: options.maxTechniquesPerStep,
+          givens: options.givens,
         },
       })) {
         if (!plainPairs.has(pairKey(first, second)) && moves.some((move) => move.kind === 'extension-rule3')) {

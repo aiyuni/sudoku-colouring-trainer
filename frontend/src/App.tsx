@@ -54,6 +54,7 @@ import {
 import type { DragonPuzzleGenerateOptions, GeneratedDragonPuzzle } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
+import { bugPlusNEliminationsText, bugPlusNName } from './sudoku/SudokuBugPlusNFinder'
 import { SudokuRules } from './sudoku/SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
 import { type SingleAssignment } from './sudoku/SudokuSingleFinder'
@@ -83,6 +84,7 @@ import {
   type TechniqueHint,
 } from './hints'
 import TutorialPage from './tutorial/TutorialPage'
+import { tutorialTargetFor, type TutorialTarget } from './tutorial/tutorialLinks'
 import { useCompactLayout } from './useCompactLayout'
 import { BusyIndicator } from './BusyIndicator'
 import ConfirmDialog from './ConfirmDialog'
@@ -107,7 +109,8 @@ import {
   nakedSubsetFinder,
   hiddenPairFinder,
   uniqueRectangleFinder,
-  bugPlusOneFinder,
+  bugPlusNFinder,
+  avoidableRectangleFinder,
   bivalueOddagonFinder,
   colorFinder,
   medusaFinder,
@@ -557,7 +560,7 @@ function freshAutofillCandidates(board: Board): CandidateGrid {
  * running, or when there's no request). A newer request aborts (terminates)
  * the search still running for the old one, so at most one runs at a time. */
 function useWorkerSolvePath(
-  request: { board: Board; candidates: CandidateGrid; options: SolvePathOptions } | null,
+  request: { board: Board; candidates: CandidateGrid; givens: boolean[][]; options: SolvePathOptions } | null,
 ): SolvePathResult | null {
   const [search, setSearch] = useState<{ request: NonNullable<typeof request>; result: SolvePathResult } | null>(null)
   useEffect(() => {
@@ -565,7 +568,7 @@ function useWorkerSolvePath(
       return
     }
     const controller = new AbortController()
-    solvePathInWorker(request.board, request.candidates, request.options, controller.signal).then(
+    solvePathInWorker(request.board, request.candidates, request.givens, request.options, controller.signal).then(
       (result) => setSearch({ request, result }),
       (error: unknown) => {
         if (controller.signal.aborted) {
@@ -1104,6 +1107,37 @@ function AutocompletePanel({
   )
 }
 
+/** The ? at the right of a Techniques / Solve Path row's name line: opens
+ * the How It Works tab (and sub-tab) teaching that row's technique. Nothing
+ * for a technique the page doesn't teach - tutorialTargetFor decides, the
+ * same lookup as the Hint popup's "Learn this technique" link, so a new
+ * lesson mapped there gets its ? here automatically. A sibling of the row's
+ * own button (a button can't nest in a button), placed over its top-right
+ * corner by CSS (.technique-row). */
+function TechniqueLearnButton({
+  instance,
+  onLearn,
+}: {
+  instance: TechniqueInstance
+  onLearn: (target: TutorialTarget) => void
+}) {
+  const target = tutorialTargetFor(instance.id)
+  if (!target) {
+    return null
+  }
+  return (
+    <button
+      type="button"
+      className="menu-help-button technique-learn-button"
+      aria-label={`Learn ${instance.name} in the Techniques overview`}
+      title="Learn this technique"
+      onClick={() => onLearn(target)}
+    >
+      ?
+    </button>
+  )
+}
+
 interface TechniquePanelProps {
   tab: TechniquePanelTab
   onTabChange: (tab: TechniquePanelTab) => void
@@ -1122,6 +1156,9 @@ interface TechniquePanelProps {
   onApply: () => void
   /** Opens the Hint popup (the Techniques tab's Hint button). */
   onHint: () => void
+  /** Opens the How It Works page on a technique's lesson - the ? at the
+   * right of a Techniques / Solve Path row. */
+  onLearn: (target: TutorialTarget) => void
   canApply: boolean
   onGenerateSolvePath: () => void
   solvePathStale: boolean
@@ -1176,6 +1213,7 @@ function TechniquePanel({
   onSelectSolvePathStep,
   onApply,
   onHint,
+  onLearn,
   canApply,
   onGenerateSolvePath,
   solvePathStale,
@@ -1234,7 +1272,7 @@ function TechniquePanel({
             aria-selected={tab === 'autocomplete'}
             className={['technique-tab', tab === 'autocomplete' ? 'active' : ''].filter(Boolean).join(' ')}
             onClick={() => onTabChange('autocomplete')}
-            title="Autocomplete Colours: finish a 3D Medusa you started painting and see what it proves."
+            title="Autocomplete Colours: finish a 3D Medusa you started colouring and see what it proves."
           >
             Find by colours
           </button>
@@ -1289,7 +1327,7 @@ function TechniquePanel({
               const moves = instance.moves
               const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
               return (
-                <li key={instance.id}>
+                <li key={instance.id} className="technique-row">
                   <button
                     type="button"
                     className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
@@ -1299,6 +1337,7 @@ function TechniquePanel({
                     <span className="technique-name">{instance.name}</span>
                     <span className="technique-notation">{instance.notation}</span>
                   </button>
+                  <TechniqueLearnButton instance={instance} onLearn={onLearn} />
                   {isActive && moves && (
                     <DragonStepper
                       moves={moves}
@@ -1411,7 +1450,7 @@ function TechniquePanel({
                   const moves = step.instance.moves
                   const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
                   return (
-                    <li key={`${step.instance.id}-${index}`}>
+                    <li key={`${step.instance.id}-${index}`} className="technique-row">
                       <button
                         type="button"
                         className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
@@ -1423,6 +1462,7 @@ function TechniquePanel({
                         </span>
                         <span className="technique-notation">{step.instance.notation}</span>
                       </button>
+                      <TechniqueLearnButton instance={step.instance} onLearn={onLearn} />
                       {isActive && moves && (
                         <DragonStepper
                           moves={moves}
@@ -1663,20 +1703,37 @@ function DropdownMenu({
           className={['dropdown-panel', panelClassName ?? ''].filter(Boolean).join(' ')}
           style={{ position: 'fixed' }}
           role="menu"
-          onClick={
-            closeOnItemClick
-              ? (event) => {
-                  if (event.target instanceof Element && event.target.closest('.dropdown-item')) {
-                    setOpen(false)
-                  }
-                }
-              : undefined
-          }
+          onClick={(event) => {
+            // A menu's ? opens the Settings guide over it - close the menu
+            // so it isn't left open behind (or above) the dialog.
+            const closer = closeOnItemClick ? '.dropdown-item, .menu-help-button' : '.menu-help-button'
+            if (event.target instanceof Element && event.target.closest(closer)) {
+              setOpen(false)
+            }
+          }}
         >
           {children}
         </div>
       )}
     </div>
+  )
+}
+
+/** The small round ? beside a settings menu's section heading: opens the
+ * Settings guide on the tab explaining that menu (see HELP_TABS). Its
+ * DropdownMenu closes itself when one is clicked. */
+function MenuHelpButton({ topic, onClick }: { topic: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="menu-help-button"
+      aria-label={`Explain the ${topic} settings`}
+      aria-haspopup="dialog"
+      title={`What do the ${topic} settings do?`}
+      onClick={onClick}
+    >
+      ?
+    </button>
   )
 }
 
@@ -1823,14 +1880,17 @@ export default function App() {
   const [dragonGenerationTimeoutMs, setDragonGenerationTimeoutMs] = useState(
     initialSettings.dragonGenerationTimeoutMs,
   )
-  const [helpOpen, setHelpOpen] = useState(false)
+  // null = closed; otherwise the tab it opens on (undefined = the top).
+  const [helpOpen, setHelpOpen] = useState<{ tab?: string } | null>(null)
   /** The Hint popup (Techniques tab): open while non-null. */
   const [hintView, setHintView] = useState<{ hint: TechniqueHint | null; revealed: number } | null>(null)
   /** The last hint shown, kept after the popup closes: reopening it for the
    * same technique keeps what was already revealed (see onOpenHint). */
   const lastHintRef = useRef<{ hint: TechniqueHint; revealed: number } | null>(null)
   const [confirmOptimizeDynamicOpen, setConfirmOptimizeDynamicOpen] = useState(false)
-  const [tutorialOpen, setTutorialOpen] = useState(false)
+  // Where How It Works is open (null: closed) - a hint's "Learn this
+  // technique" link opens it on that technique's tab/sub-tab.
+  const [tutorialTarget, setTutorialTarget] = useState<TutorialTarget | null>(null)
   const { compact, phone, landscape } = useCompactLayout()
 
   // Desktop: the Techniques panel ends level with the bottom of the "Drag or
@@ -1871,6 +1931,21 @@ export default function App() {
   // start and finish while it runs; each removes only its own entry.
   const [busyTasks, setBusyTasks] = useState<RunningBusyTask[]>([])
   const [ocrDragActive, setOcrDragActive] = useState(false)
+  // A screenshot import waiting to be proofread: its digits load as ordinary
+  // (editable) solved cells, so a misread one can be fixed, and only become
+  // givens when the user clicks "Lock as givens" in the banner under the
+  // grid. `historyIndex` is the import's undo-history entry - undoing past it
+  // hides the banner, and a new edit from there discards it (commitGrid).
+  // `imageUrl` is an object URL of the screenshot, shown for comparison.
+  const [ocrProofread, setOcrProofread] = useState<{ historyIndex: number; imageUrl: string } | null>(null)
+  const [ocrProofreadShowImage, setOcrProofreadShowImage] = useState(false)
+  const ocrProofreadVisible = ocrProofread !== null && historyIndex >= ocrProofread.historyIndex
+  useEffect(() => {
+    if (!ocrProofread) {
+      return
+    }
+    return () => URL.revokeObjectURL(ocrProofread.imageUrl)
+  }, [ocrProofread])
   const busy = busyTasks.length > 0
   const busyKinds = new Set(busyTasks.map((t) => t.kind))
   const solving = busyKinds.has('solve')
@@ -2069,6 +2144,7 @@ export default function App() {
     () => ({
       board,
       candidates,
+      givens,
       minBaseMedusaFilter,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
@@ -2088,6 +2164,7 @@ export default function App() {
     [
       board,
       candidates,
+      givens,
       minBaseMedusaFilter,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
@@ -2155,6 +2232,7 @@ export default function App() {
         analysis.maxTechniquesPerDragonStep,
         analysis.doubleDragonEnabled,
         analysis.doubleDynamicDragonEnabled,
+        analysis.givens,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
@@ -2165,6 +2243,7 @@ export default function App() {
       analysis.doubleDynamicDragonEnabled,
       analysis.board,
       analysis.candidates,
+      analysis.givens,
       analysis.minBaseMedusaFilter,
       analysis.effectiveAllowedRule3Techniques,
       analysis.shortAicEnabled,
@@ -2313,8 +2392,15 @@ export default function App() {
     trackSettingsChanges(currentSettings as unknown as Record<string, unknown>)
   })
   useEffect(() => {
-    saveGrid(grid)
-  }, [grid])
+    // A screenshot import still being proofread is saved already locked: the
+    // proofread (and the screenshot) doesn't survive a reload, so what comes
+    // back is the digits as they stood, as givens - same as "Lock as givens".
+    saveGrid(
+      ocrProofreadVisible
+        ? { ...grid, givens: grid.board.map((row) => row.map((value) => value !== 0)) }
+        : grid,
+    )
+  }, [grid, ocrProofreadVisible])
   const gridFilled = board.every((row) => row.every((value) => value !== 0)) && conflictedCells.size === 0
   useEffect(() => {
     if (gridFilled) {
@@ -2486,9 +2572,9 @@ export default function App() {
   const solvabilityRequest = useMemo(
     () =>
       puzzleSolveResult.status === 'solved' && candidatesAccurate
-        ? { board, candidates: freshAutofill, options: solvePathOptions }
+        ? { board, candidates: freshAutofill, givens, options: solvePathOptions }
         : null,
-    [board, freshAutofill, puzzleSolveResult, candidatesAccurate, solvePathOptions],
+    [board, freshAutofill, givens, puzzleSolveResult, candidatesAccurate, solvePathOptions],
   )
   const bruteSolvePath = useWorkerSolvePath(solvabilityRequest)
 
@@ -2517,8 +2603,8 @@ export default function App() {
         }
       }
     }
-    return removesSomething ? { board, candidates, options: solvabilityRequest.options } : null
-  }, [solvabilityRequest, bruteSolvePath, board, candidates, freshAutofill])
+    return removesSomething ? { board, candidates, givens, options: solvabilityRequest.options } : null
+  }, [solvabilityRequest, bruteSolvePath, board, candidates, givens, freshAutofill])
   const marksSolvePath = useWorkerSolvePath(marksSolvabilityRequest)
 
   const solvabilityChecking = solvabilityRequest !== null && bruteSolvePath === null
@@ -2555,7 +2641,7 @@ export default function App() {
   function commitGrid(
     next: Omit<GridState, 'candidateColors'> & { candidateColors?: CandidateColorGrid },
     nextSolvePath?: SolvePathResult | null,
-  ) {
+  ): number {
     const resolved: GridState = {
       board: next.board,
       givens: next.givens,
@@ -2568,6 +2654,17 @@ export default function App() {
     setSolvePath(resolvedSolvePath)
     setHistoryEntries([...truncated, { grid: resolved, solvePath: resolvedSolvePath }])
     setHistoryIndex(truncated.length)
+    // The screenshot proofread ends when its import entry is discarded (an
+    // edit after undoing past it) or a different puzzle loads (its givens
+    // change - the load sites with no givens clear it themselves).
+    if (
+      ocrProofread &&
+      (truncated.length <= ocrProofread.historyIndex ||
+        next.givens.some((row, r) => row.some((given, c) => given !== grid.givens[r][c])))
+    ) {
+      setOcrProofread(null)
+    }
+    return truncated.length
   }
 
   /** Same as commitGrid, but also drops any cached solve path - used only
@@ -2935,27 +3032,56 @@ export default function App() {
     setStatus(`Unique Rectangle ${parts.join(' and ')}.`)
   }
 
-  function onBugPlusOne() {
+  /** The BUG+1/2/3 auto-solve button - one technique (BUG+N) internally. */
+  function onBugPlusN() {
     if (!pairFinder.hasFullCandidates(board, candidates)) {
       setStatus('BUG+1 needs every empty cell to have its candidates marked first — try Autofill all.')
       return
     }
 
-    const bugPlusOne = bugPlusOneFinder.find(board, candidates)
-    if (!bugPlusOne) {
-      setStatus('No BUG+1 to apply - not every unsolved cell is bivalue except one.')
+    const bug = bugPlusNFinder.find(board, candidates)
+    if (!bug) {
+      setStatus('No BUG+1 to apply - not every unsolved cell is bivalue except one to three cells with three candidates.')
       return
     }
 
-    const [row, col] = bugPlusOne.cell
-    const nextBoard = cloneBoard(board)
-    nextBoard[row][col] = bugPlusOne.solvedDigit
-    const nextCandidates = cloneCandidates(candidates)
-    nextCandidates[row][col] = Array(9).fill(false)
-    SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, bugPlusOne.solvedDigit)
+    if (bug.solved) {
+      const { row, col, digit } = bug.solved
+      const nextBoard = cloneBoard(board)
+      nextBoard[row][col] = digit
+      const nextCandidates = cloneCandidates(candidates)
+      nextCandidates[row][col] = Array(9).fill(false)
+      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
+      commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
+      setStatus(`BUG+1 solved ${cellRef(row, col)} as ${digit}.`)
+      return
+    }
 
-    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
-    setStatus(`BUG+1 solved ${cellRef(row, col)} as ${bugPlusOne.solvedDigit}.`)
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of bug.eliminations) {
+      nextCandidates[row][col][digit - 1] = false
+    }
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
+    setStatus(`${bugPlusNName(bug)}: ${bugPlusNEliminationsText(bug)}.`)
+  }
+
+  function onAvoidableRectangle() {
+    // Needs no full candidates: every elimination is of a mark that's there.
+    const instances = avoidableRectangleFinder.find(board, candidates, givens)
+    if (instances.length === 0) {
+      setStatus('No Avoidable Rectangle deductions to apply.')
+      return
+    }
+    const nextCandidates = cloneCandidates(candidates)
+    let count = 0
+    for (const { row, col, digit } of instances.flatMap((ar) => ar.eliminations)) {
+      if (nextCandidates[row][col][digit - 1]) {
+        nextCandidates[row][col][digit - 1] = false
+        count++
+      }
+    }
+    commitAutoSolve({ board, givens, candidates: nextCandidates })
+    setStatus(`Avoidable Rectangle removed ${count} candidate${count === 1 ? '' : 's'}.`)
   }
 
   function onBivalueOddagon() {
@@ -3303,6 +3429,7 @@ export default function App() {
           optimizeDragons,
           optimizeDynamicDragons,
           maxTechniquesPerDragonStep,
+          givens,
         )
         // ALS-xz is never auto-solved, not even inside a Dynamic Dragon
         // chain - no setting opts back in.
@@ -3770,6 +3897,7 @@ export default function App() {
       allowedRule3Techniques: effectiveAllowedRule3Techniques,
       aicLimitPerStep: aicLimitPerDragonStep,
       maxTechniquesPerStep: maxTechniquesPerDragonStep,
+      givens,
       optimizeDynamic: optimizeDynamicDragons,
       dynamicEnabled: !dynamicDragonDisabled,
       doubleEnabled: doubleDragonEnabled,
@@ -4075,7 +4203,7 @@ export default function App() {
           if (colours.length > 1) {
             const labels = colours.map((id) => paintedSwatches.find((swatch) => swatch.id === id)!.label.toLowerCase())
             problems.push(
-              `${formatCandidate({ row, col, digit })} is painted both ${labels[0]} and ${labels[1]}, but a candidate can only have one Dragon colour.`,
+              `${formatCandidate({ row, col, digit })} is coloured both ${labels[0]} and ${labels[1]}, but a candidate can only have one Dragon colour.`,
             )
           } else {
             paintedCells.push({ row, col, digit, color: colours[0] })
@@ -4093,6 +4221,7 @@ export default function App() {
           allowedRule3Techniques: effectiveAllowedRule3Techniques,
           aicLimitPerStep: aicLimitPerDragonStep,
           maxTechniquesPerStep: maxTechniquesPerDragonStep,
+          givens,
           exhaustive: exhaustiveDragonColouring,
           // As for the solver's Dynamic Dragons: Optimize Dynamic Dragons
           // implies the optimized search.
@@ -4152,7 +4281,7 @@ export default function App() {
           const hasSecond = paint?.some((layer) => layer.color === second.id) ?? false
           if (hasFirst && hasSecond) {
             problems.push(
-              `${formatCandidate({ row, col, digit })} is painted both ${first.label.toLowerCase()} and ${second.label.toLowerCase()}, but a candidate can only be on one side of a Medusa.`,
+              `${formatCandidate({ row, col, digit })} is coloured both ${first.label.toLowerCase()} and ${second.label.toLowerCase()}, but a candidate can only be on one side of a Medusa.`,
             )
           } else if (hasFirst || hasSecond) {
             seeds.push({ row, col, digit, color: hasFirst ? 'blue' : 'yellow' })
@@ -4363,7 +4492,7 @@ export default function App() {
         try {
           // In a Web Worker: the page stays usable while it runs, which also
           // means the grid can change before it's done - see latestRef.
-          const nextSolvePath = await solvePathInWorker(board, candidates, solvePathOptions, controller.signal)
+          const nextSolvePath = await solvePathInWorker(board, candidates, givens, solvePathOptions, controller.signal)
           const { commitGrid: commitLatest, grid: latestGrid } = latestRef.current
           // Recorded against whatever the grid is *now*; if that's no longer
           // the grid it was searched from, the Solve Path tab flags it as
@@ -4501,6 +4630,7 @@ export default function App() {
       candidates: result.candidates,
       candidateColors: result.candidateColors ?? createEmptyCandidateColors(),
     })
+    setOcrProofread(null)
     reportImport(result.board, { importType: 'string', sourceFormat: importer.detectFormat(text) })
     setHighlightedDigit(null)
     setStatus('Puzzle imported. Click Solve to check it.')
@@ -4615,9 +4745,11 @@ export default function App() {
   /** Reads a screenshot of a Sudoku grid (dropped or pasted) and rebuilds
    * the board from it, colour and any overlaid lines/arrows ignored -
    * only which pixels are darker than their own cell's background is
-   * ever asked. Like the SudokuWiki text-board import, a screenshot has
-   * no way to tell an original given apart from a cell you'd already
-   * solved yourself, so nothing comes back locked. */
+   * ever asked. A screenshot has no reliable way to tell an original given
+   * apart from a cell already solved, so every digit it shows is to become
+   * a given - but OCR can misread, so they load editable first, with the
+   * proofread banner (ocrProofread) to check them against the screenshot
+   * and then lock them. */
   function onImportImage(file: Blob) {
     setStatus('Reading screenshot…')
     runBusyTask(
@@ -4636,18 +4768,20 @@ export default function App() {
             setStatus("Couldn't find a Sudoku grid in that image.")
             return
           }
-          latestRef.current.commitGrid({
+          const historyIndex = latestRef.current.commitGrid({
             board: result.board,
             givens: result.board.map((row) => row.map(() => false)),
             candidates: result.candidates,
           })
+          setOcrProofread({ historyIndex, imageUrl: URL.createObjectURL(file) })
+          setOcrProofreadShowImage(false)
           reportImport(result.board, { importType: 'ocr' })
           setHighlightedDigit(null)
-          const parts = [`read ${solvedCount} solved cell${solvedCount === 1 ? '' : 's'}`]
+          const parts = [`read ${solvedCount} digit${solvedCount === 1 ? '' : 's'}`]
           if (unrecognizedCount > 0) {
-            parts.push(`couldn't read ${unrecognizedCount} digit${unrecognizedCount === 1 ? '' : 's'} - check them`)
+            parts.push(`couldn't read ${unrecognizedCount} digit${unrecognizedCount === 1 ? '' : 's'}`)
           }
-          setStatus(`Screenshot imported: ${parts.join(', ')}.`)
+          setStatus(`Screenshot imported: ${parts.join(', ')}. Check the digits, then lock them as givens.`)
         } catch {
           setStatus("Couldn't read that screenshot.")
         }
@@ -4812,9 +4946,18 @@ export default function App() {
     )
   }
 
+  /** The proofread banner's "Lock as givens": every digit now on the grid
+   * (the screenshot's, as corrected) becomes a given, as one undoable step. */
+  function onLockOcrDigits() {
+    commitGrid({ board, givens: board.map((row) => row.map((value) => value !== 0)), candidates })
+    setOcrProofread(null)
+    setStatus('Digits locked as givens.')
+  }
+
   function onClear() {
     const empty = createEmptyBoard()
     commitGrid({ board: empty, givens: computeGivenMask(empty), candidates: createEmptyCandidates() })
+    setOcrProofread(null)
     setHighlightedDigit(null)
     setStatus('Board cleared.')
   }
@@ -5000,7 +5143,7 @@ export default function App() {
       <p>
         Advanced Sudoku solver and trainer emphasizing Colouring techniques, such as Dragon Colouring. <div></div>
         For the Colouring enthusiasts, click{' '}
-        <button type="button" className="header-link" onClick={() => setTutorialOpen(true)}>
+        <button type="button" className="header-link" onClick={() => setTutorialTarget({ tab: 'basics' })}>
           Techniques overview
         </button>{' '}
         for a quick overview.
@@ -5034,7 +5177,7 @@ export default function App() {
               type="button"
               className="how-it-works-trigger"
               title="Learn the colouring techniques, step by step"
-              onClick={() => setTutorialOpen(true)}
+              onClick={() => setTutorialTarget({ tab: 'basics' })}
             >
               Techniques overview
             </button>
@@ -5044,7 +5187,7 @@ export default function App() {
               aria-label="Open the settings guide"
               aria-haspopup="dialog"
               title="What do the settings do?"
-              onClick={() => setHelpOpen(true)}
+              onClick={() => setHelpOpen({})}
             >
               ?
             </button>
@@ -5077,7 +5220,10 @@ export default function App() {
           buttonClassName="generate-puzzle-trigger"
         >
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Generate Practice Puzzle</h3>
+            <h3 className="dropdown-section-title">
+              Generate Practice Puzzle
+              <MenuHelpButton topic="Generate Practice Puzzle" onClick={() => setHelpOpen({ tab: 'Generate Puzzle' })} />
+            </h3>
             <button type="button" className="dropdown-item" onClick={onNewPuzzle} disabled={busy}>
               Random puzzle
             </button>
@@ -5271,7 +5417,10 @@ export default function App() {
           align="right"
         >
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Dragon Colouring</h3>
+            <h3 className="dropdown-section-title">
+              Dragon Colouring
+              <MenuHelpButton topic="Dragon Colouring" onClick={() => setHelpOpen({ tab: 'Dragon Configuration' })} />
+            </h3>
             <label
               className="menu-checkbox"
               title="When on, Dragon Colouring (plain and Dynamic) keeps going after an elimination that doesn't settle which colour is true: the elimination is applied, and the colouring continues from there (promotions first) until a colour is proven false, the grid is fully coloured, or nothing more can be found. When off, it stops at the first elimination it finds."
@@ -5466,7 +5615,7 @@ export default function App() {
               type="button"
               className="dropdown-item settings-reset-button"
               onClick={resetSettingsToDefaults}
-              title="Puts every setting, including your custom paint colours, back to its default. Your puzzle is not touched."
+              title="Puts every setting, including your custom colours, back to its default. Your puzzle is not touched."
             >
               <span className="settings-reset-icon" aria-hidden="true">
                 ↺
@@ -5514,7 +5663,10 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title">Techniques</h3>
+            <h3 className="dropdown-section-title">
+              Techniques
+              <MenuHelpButton topic="Techniques" onClick={() => setHelpOpen({ tab: 'Settings' })} />
+            </h3>
             <label
               className="menu-checkbox"
               title="When off, the solver will not look for Short Single-Digit AIC chains at all. Disable this for a true Colouring experience."
@@ -5604,11 +5756,11 @@ export default function App() {
               type="button"
               className="dropdown-item"
               title="Learn the colouring techniques, step by step"
-              onClick={() => setTutorialOpen(true)}
+              onClick={() => setTutorialTarget({ tab: 'basics' })}
             >
               Techniques overview
             </button>
-            <button type="button" className="dropdown-item" onClick={() => setHelpOpen(true)}>
+            <button type="button" className="dropdown-item" onClick={() => setHelpOpen({})}>
               Settings guide (?)
             </button>
           </DropdownMenu>
@@ -5635,6 +5787,7 @@ export default function App() {
       onSelectSolvePathStep={onSelectSolvePathStep}
       onApply={onApplyPanelSelection}
       onHint={onOpenHint}
+      onLearn={setTutorialTarget}
       canApply={
         techniquePanelTab === 'solve-path'
           ? activeSolvePathIndex !== null
@@ -5941,11 +6094,51 @@ export default function App() {
         if (!aicLinks || aicLinks.length === 0) {
           return null
         }
+        // A grouped end (Empty Rectangle: "the digit is in one of these
+        // cells") is outlined, and its links meet the group's middle.
+        const endPoint = (ref: { row: number; col: number; digit: number }, cells?: ReadonlyArray<readonly [number, number]>) => {
+          if (!cells) {
+            return pipCenter(ref.row, ref.col, ref.digit)
+          }
+          const points = cells.map(([r, c]) => pipCenter(r, c, ref.digit))
+          return {
+            x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+            y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+          }
+        }
+        const groups = new Map<string, { digit: number; cells: ReadonlyArray<readonly [number, number]> }>()
+        for (const link of aicLinks) {
+          for (const [ref, cells] of [
+            [link.from, link.fromCells],
+            [link.to, link.toCells],
+          ] as const) {
+            if (cells) {
+              groups.set(`${ref.digit}:${cells.map(([r, c]) => `${r}.${c}`).join('|')}`, { digit: ref.digit, cells })
+            }
+          }
+        }
         return (
           <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
+            {[...groups.entries()].map(([key, group]) => {
+              const points = group.cells.map(([r, c]) => pipCenter(r, c, group.digit))
+              const pad = PIP_SIZE / 2
+              const x = Math.min(...points.map((p) => p.x)) - pad
+              const y = Math.min(...points.map((p) => p.y)) - pad
+              return (
+                <rect
+                  key={key}
+                  className="aic-group"
+                  x={x}
+                  y={y}
+                  width={Math.max(...points.map((p) => p.x)) + pad - x}
+                  height={Math.max(...points.map((p) => p.y)) + pad - y}
+                  rx={pad}
+                />
+              )
+            })}
             {aicLinks.map((link, index) => {
-              const p1 = pipCenter(link.from.row, link.from.col, link.from.digit)
-              const p2 = pipCenter(link.to.row, link.to.col, link.to.digit)
+              const p1 = endPoint(link.from, link.fromCells)
+              const p2 = endPoint(link.to, link.toCells)
               return (
                 <path
                   key={index}
@@ -5963,6 +6156,27 @@ export default function App() {
 
   const importRows = (
     <>
+      {ocrProofreadVisible && (
+        <div className="ocr-proofread" role="region" aria-label="Check the imported digits">
+          <p className="ocr-proofread-text">
+            <b>Check the imported digits.</b> Compare the grid with your screenshot, correct any mistakes, then lock them in.
+          </p>
+          {conflictedCells.size > 0 && (
+            <p className="ocr-proofread-warning">Some digits clash with each other (outlined in red) - fix them first.</p>
+          )}
+          <div className="ocr-proofread-actions">
+            <button type="button" onClick={() => setOcrProofreadShowImage((shown) => !shown)}>
+              {ocrProofreadShowImage ? 'Hide screenshot' : 'Show screenshot'}
+            </button>
+            <button type="button" className="primary" onClick={onLockOcrDigits} disabled={busy || conflictedCells.size > 0}>
+              Lock as givens
+            </button>
+          </div>
+          {ocrProofreadShowImage && (
+            <img className="ocr-proofread-image" src={ocrProofread.imageUrl} alt="The imported screenshot" />
+          )}
+        </div>
+      )}
       <div className="import-row">
         <textarea
           className="import-input"
@@ -6194,7 +6408,7 @@ export default function App() {
                     className={['paint-shape-option', selectedShape ? 'selected' : ''].filter(Boolean).join(' ')}
                     aria-pressed={selectedShape}
                     aria-label={`${swatch.label}: ${shape}`}
-                    title={`Paint ${swatch.label.toLowerCase()} as a ${shape}`}
+                    title={`Colour ${swatch.label.toLowerCase()} as a ${shape}`}
                     onClick={() => onSetSwatchShape(swatch.id, shape)}
                   >
                     <span
@@ -6318,21 +6532,30 @@ export default function App() {
         <div className="autosolve-grid">
           <button
             type="button"
-            className="autosolve-button wide"
+            className="autosolve-button"
             disabled={busy || filled === 81}
             onClick={onUniqueRectangleType1}
             title="Auto-solve all visible Unique Rectangles (every type)."
           >
-            Unique rectangle
+            Unique Rectangle
           </button>
           <button
             type="button"
             className="autosolve-button"
             disabled={busy || filled === 81}
-            onClick={onBugPlusOne}
-            title="Auto-solve BUG+1, if the grid is currently in that pattern."
+            onClick={onBugPlusN}
+            title="Auto-solve BUG+1, BUG+2 or BUG+3, if the grid is currently in one of those patterns."
           >
             BUG+1
+          </button>
+          <button
+            type="button"
+            className="autosolve-button"
+            disabled={busy || filled === 81}
+            onClick={onAvoidableRectangle}
+            title="Auto-solve all visible Avoidable Rectangles (Types 1 and 2)."
+          >
+            Avoidable rectangle
           </button>
           <button
             type="button"
@@ -6341,7 +6564,7 @@ export default function App() {
             onClick={onBivalueOddagon}
             title="Auto-solve all visible Bivalue Oddagons."
           >
-            Bivalue oddagon
+            Bivalue Oddagon
           </button>
         </div>
       </div>
@@ -6355,7 +6578,7 @@ export default function App() {
             onClick={onSimpleColoring}
             title="Auto-solve all visible Simple Colouring finds."
           >
-            Simple colouring
+            Simple Colouring
           </button>
           <button
             type="button"
@@ -6478,20 +6701,31 @@ export default function App() {
 
       {helpOpen && (
         <HelpModal
-          onClose={() => setHelpOpen(false)}
+          onClose={() => setHelpOpen(null)}
+          initialTab={helpOpen.tab}
           onOpenTutorial={() => {
-            setHelpOpen(false)
-            setTutorialOpen(true)
+            setHelpOpen(null)
+            setTutorialTarget({ tab: 'basics' })
           }}
         />
       )}
-      {tutorialOpen && <TutorialPage onClose={() => setTutorialOpen(false)} />}
+      {tutorialTarget && (
+        <TutorialPage
+          initialTab={tutorialTarget.tab}
+          initialGroup={tutorialTarget.group}
+          onClose={() => setTutorialTarget(null)}
+        />
+      )}
       {hintView && (
         <HintModal
           hint={hintView.hint}
           revealed={hintView.revealed}
           onNextHint={onNextHint}
           onClose={() => setHintView(null)}
+          onOpenTutorial={(target) => {
+            setHintView(null)
+            setTutorialTarget(target)
+          }}
         />
       )}
 

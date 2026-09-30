@@ -7,8 +7,9 @@
  */
 import { cloneBoard, cloneCandidates, markedCandidateDigits } from './sudoku/boardUtils'
 import { SudokuAlsXzFinder, type AlsXzInstance } from './sudoku/SudokuAlsXzFinder'
+import { SudokuAvoidableRectangleFinder, type GivenMask } from './sudoku/SudokuAvoidableRectangleFinder'
 import { SudokuBivalueOddagonFinder } from './sudoku/SudokuBivalueOddagonFinder'
-import { SudokuBugPlusOneFinder } from './sudoku/SudokuBugPlusOneFinder'
+import { bugPlusNName, bugPlusNEliminationsText, bugPlusNReasonText, SudokuBugPlusNFinder } from './sudoku/SudokuBugPlusNFinder'
 import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
 import {
   SudokuDragonFinder,
@@ -35,7 +36,17 @@ import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
 import { SudokuGenericAicFinder } from './sudoku/SudokuGenericAicFinder'
-import { classifyShortAic, SudokuShortAicFinder, type ShortAicInstance, type ShortAicKind } from './sudoku/SudokuShortAicFinder'
+import {
+  aicChainText,
+  aicChainView,
+  aicNodeText,
+  classifyShortAic,
+  SudokuShortAicFinder,
+  type AicLinkRef,
+  type ShortAicInstance,
+  type ShortAicKind,
+  type SingleDigitAicPattern,
+} from './sudoku/SudokuShortAicFinder'
 import { SudokuSingleFinder } from './sudoku/SudokuSingleFinder'
 import { explainUniqueRectangle, SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './sudoku/types'
@@ -51,7 +62,8 @@ export const shortAicFinder = new SudokuShortAicFinder()
 export const genericAicFinder = new SudokuGenericAicFinder()
 export const alsXzFinder = new SudokuAlsXzFinder()
 export const uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
-export const bugPlusOneFinder = new SudokuBugPlusOneFinder()
+export const bugPlusNFinder = new SudokuBugPlusNFinder()
+export const avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
 export const bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
 export const colorFinder = new SudokuColorFinder()
 export const medusaFinder = new SudokuMedusaFinder()
@@ -94,7 +106,13 @@ export interface TechniqueInstance {
    * 3 links between consecutive ones, drawn as curved lines - solid red
    * for a strong link, dotted blue for a weak one. */
   aicCandidates?: TechniqueCandidateRef[]
-  aicLinks?: Array<{ from: TechniqueCandidateRef; to: TechniqueCandidateRef; kind: 'strong' | 'weak' }>
+  /** A link to or from a grouped node (Empty Rectangle) also carries the
+   * group's cells, drawn outlined with the link meeting its middle. */
+  aicLinks?: AicLinkRef[]
+  /** Short Single-Digit AIC only: the named pattern the chain is (see
+   * SingleDigitAicPattern) and its shape in words, for the Hint popup. */
+  aicPattern?: SingleDigitAicPattern
+  aicPatternText?: string
   /** Dragon Colouring only: the ordered move log driving the move-by-move
    * player. When present, the panel row opens a stepper instead of
    * highlighting statically - the colors/eliminations/solves shown come
@@ -109,7 +127,8 @@ export interface TechniqueInstance {
 /** Numeric difficulty tier for every technique, lowest = easiest - the exact
  * order buildTechniqueInstances below pushes its blocks in (see CLAUDE.md's
  * documented difficulty order: Single -> LockedCandidate ->
- * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+1 -> BivalueOddagon
+ * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+N -> AvoidableRectangle
+ * -> BivalueOddagon
  * -> Color -> X-Wing -> Short Single-Digit AIC -> Finned X-Wing -> Short AIC
  * -> Swordfish -> Finned Swordfish -> Medusa -> Generic AIC -> ALS-xz -> Dragon
  * -> Double Dragon -> Dynamic Dragon -> Double Dynamic Dragon).
@@ -123,30 +142,31 @@ export const RANK_SINGLE = 0
 export const RANK_LOCKED_CANDIDATE = 1
 export const RANK_SUBSET = 2 // naked pair/triple/quad, hidden pair
 export const RANK_UR = 3
-export const RANK_BUG_PLUS_ONE = 4
-export const RANK_BIVALUE_ODDAGON = 5
-export const RANK_SIMPLE_COLOR = 6
+export const RANK_BUG_PLUS_N = 4 // BUG+1, BUG+2 and BUG+3 alike - one technique
+export const RANK_AVOIDABLE_RECTANGLE = 5
+export const RANK_BIVALUE_ODDAGON = 6
+export const RANK_SIMPLE_COLOR = 7
 // The fish interleave with the short AICs, and each fish is its own tier
 // (unlike the subsets above): a Swordfish is genuinely harder to spot than an
 // X-Wing, and a fin harder again.
-export const RANK_X_WING = 7
-export const RANK_SHORT_SINGLE_DIGIT_AIC = 8
-export const RANK_FINNED_X_WING = 9
-export const RANK_SHORT_AIC = 10
-export const RANK_SWORDFISH = 11
-export const RANK_FINNED_SWORDFISH = 12
-export const RANK_MEDUSA = 13
+export const RANK_X_WING = 8
+export const RANK_SHORT_SINGLE_DIGIT_AIC = 9
+export const RANK_FINNED_X_WING = 10
+export const RANK_SHORT_AIC = 11
+export const RANK_SWORDFISH = 12
+export const RANK_FINNED_SWORDFISH = 13
+export const RANK_MEDUSA = 14
 // Harder than 3D Medusa: a long chain is harder to find than a colouring.
-export const RANK_GENERIC_AIC = 14
+export const RANK_GENERIC_AIC = 15
 // The one non-colouring technique ranked above Generic AIC.
-export const RANK_ALS_XZ = 15
-export const RANK_DRAGON = 16
+export const RANK_ALS_XZ = 16
+export const RANK_DRAGON = 17
 // Two plain Dragons linked together - no Dynamic Dragon techniques.
-export const RANK_DOUBLE_DRAGON = 17
-export const RANK_DYNAMIC_DRAGON = 18
+export const RANK_DOUBLE_DRAGON = 18
+export const RANK_DYNAMIC_DRAGON = 19
 // Two Dragons linked, at least one of them Dynamic - only where single
 // Dynamic Dragon is stuck, so the hardest tier.
-export const RANK_DOUBLE_DYNAMIC_DRAGON = 19
+export const RANK_DOUBLE_DYNAMIC_DRAGON = 20
 
 const FISH_RANKS: Record<FishTechnique, number> = {
   'x-wing': RANK_X_WING,
@@ -344,6 +364,7 @@ export function computeStuckDynamicDragonExtensions(
   optimize = false,
   optimizeDynamic = false,
   maxTechniquesPerStep = Infinity,
+  givens: GivenMask | null = null,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
   for (const chain of medusaFinder.findChains(board, candidates)) {
@@ -375,6 +396,7 @@ export function computeStuckDynamicDragonExtensions(
       allowedRule3Techniques,
       aicLimitPerStep,
       maxTechniquesPerStep,
+      givens,
       exhaustive,
       optimize: optimize || optimizeDynamic,
       optimizeDynamic,
@@ -453,6 +475,7 @@ export function computeDoubleDynamicDragonExtensions(
   optimize = false,
   optimizeDynamic = false,
   doublePlainEnabled = false,
+  givens: GivenMask | null = null,
 ) {
   const chains = medusaFinder.findChains(board, candidates).filter(
     (chain) =>
@@ -481,7 +504,7 @@ export function computeDoubleDynamicDragonExtensions(
     optimize: optimize || optimizeDynamic,
     optimizeDynamic,
     minBaseCandidates,
-    dynamic: { allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep },
+    dynamic: { allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep, givens },
   })) {
     const key = `${chainKey(first)}~${chainKey(second)}`
     if (plainPairs.has(key) || !moves.some((move) => move.kind === 'extension-rule3')) {
@@ -547,12 +570,6 @@ export function computeGenericAicEliminations(
 export function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: string): TechniqueInstance {
   const x = aic.nodes[0]
   const y = aic.nodes[aic.nodes.length - 1]
-  const chainText = aic.nodes
-    .map((n, i) => {
-      const connector = i === 0 ? '' : i % 2 === 1 ? ' = ' : ' - '
-      return `${connector}${n.digit}${cellRef(n.row, n.col)}`
-    })
-    .join('')
   const eliminationText = aic.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
   const techniqueRank =
     idPrefix === 'short-single-digit-aic'
@@ -560,20 +577,23 @@ export function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: 
       : idPrefix === 'short-aic'
         ? RANK_SHORT_AIC
         : RANK_GENERIC_AIC
+  // A grouped end reads "2 in (r8c3, r9c3)": one of those cells is the digit.
+  const endText = (n: typeof x) => (n.cells ? `${n.digit} in (${n.cells.map(([r, c]) => cellRef(r, c)).join(', ')})` : aicNodeText(n))
+  const view = aicChainView(aic)
   return {
-    id: `${idPrefix}-${aic.eliminationType}-${aic.nodes.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
+    id: `${idPrefix}-${aic.eliminationType}-${view.candidates.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
     name,
-    notation: `${chainText} states that either ${x.digit}${cellRef(x.row, x.col)} or ${y.digit}${cellRef(y.row, y.col)} must be true, so ${eliminationText}.`,
+    // A named pattern (Skyscraper, Empty Rectangle, ...) reads like any AIC:
+    // the row's name already says which it is, and its shape in words
+    // (patternText) is left to the Hint popup.
+    notation: `${aicChainText(aic.nodes)} states that either ${endText(x)} or ${endText(y)} must be true, so ${eliminationText}.`,
     usedCells: [],
     usedCandidates: [],
     eliminatedCandidates: aic.eliminations,
     solvedCandidates: [],
-    aicCandidates: aic.nodes.map((n) => ({ row: n.row, col: n.col, digit: n.digit })),
-    aicLinks: aic.links.map((link) => ({
-      from: { row: link.from.row, col: link.from.col, digit: link.from.digit },
-      to: { row: link.to.row, col: link.to.col, digit: link.to.digit },
-      kind: link.kind,
-    })),
+    aicCandidates: view.candidates,
+    aicLinks: view.links,
+    ...(aic.pattern ? { aicPattern: aic.pattern, aicPatternText: aic.patternText } : {}),
     techniqueRank,
   }
 }
@@ -758,6 +778,9 @@ export function buildTechniqueInstances(
   maxTechniquesPerDragonStep = Infinity,
   doubleDragonEnabled = false,
   doubleDynamicDragonEnabled = false,
+  // Which cells are givens - only Avoidable Rectangle needs it, and it is
+  // skipped (here and inside Dynamic Dragon) without one.
+  givens: GivenMask | null = null,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -954,21 +977,63 @@ export function buildTechniqueInstances(
     })
   }
 
-  const bugPlusOne = bugPlusOneFinder.find(board, candidates)
-  if (bugPlusOne) {
-    const [row, col] = bugPlusOne.cell
-    const candidatesLabel = bugPlusOne.candidates.join(',')
+  // BUG+N: one technique and rank, named by its N in the UI (BUG+1/2/3).
+  // The id carries N (bug-plus-n-2-...) so the Hint popup and the How It
+  // Works link can tell them apart.
+  const bug = bugPlusNFinder.find(board, candidates)
+  if (bug?.solved) {
+    const { row, col, digit } = bug.solved
+    const [{ candidates: cellCandidates, unit, unitKind }] = bug.cells
     instances.push({
-      id: `bug-plus-one-${row}.${col}`,
-      name: 'BUG+1',
-      notation: `${cellRef(row, col)} (candidates ${candidatesLabel}) is the only cell with more than two candidates; ${bugPlusOne.solvedDigit} appears 3 times in its ${bugPlusOne.unitKind}, so ${cellRef(row, col)} is ${bugPlusOne.solvedDigit}`,
-      usedCells: [...bugPlusOne.unit],
-      usedCandidates: bugPlusOne.unit
-        .filter(([r, c]) => board[r][c] === 0 && candidates[r][c][bugPlusOne.solvedDigit - 1])
-        .map(([r, c]) => ({ row: r, col: c, digit: bugPlusOne.solvedDigit })),
+      id: `bug-plus-n-1-${row}.${col}`,
+      name: bugPlusNName(bug),
+      notation: `${cellRef(row, col)} (candidates ${cellCandidates.join(',')}) is the only cell with more than two candidates; ${digit} appears 3 times in its ${unitKind}, so ${cellRef(row, col)} is ${digit}`,
+      usedCells: [...(unit ?? [])],
+      usedCandidates: (unit ?? [])
+        .filter(([r, c]) => board[r][c] === 0 && candidates[r][c][digit - 1])
+        .map(([r, c]) => ({ row: r, col: c, digit })),
       eliminatedCandidates: [],
-      solvedCandidates: [{ row, col, digit: bugPlusOne.solvedDigit }],
-      techniqueRank: RANK_BUG_PLUS_ONE,
+      solvedCandidates: [{ row, col, digit }],
+      techniqueRank: RANK_BUG_PLUS_N,
+    })
+  } else if (bug) {
+    instances.push({
+      id: `bug-plus-n-${bug.n}-${bug.cells.map(({ cell: [r, c] }) => `${r}.${c}`).join('-')}`,
+      name: bugPlusNName(bug),
+      notation: `${bugPlusNReasonText(bug)}. So ${bugPlusNEliminationsText(bug)}`,
+      usedCells: bug.cells.map(({ cell }) => cell),
+      usedCandidates: bug.cells.map(({ cell: [row, col], bugDigit }) => ({ row, col, digit: bugDigit })),
+      eliminatedCandidates: [...bug.eliminations],
+      solvedCandidates: [],
+      techniqueRank: RANK_BUG_PLUS_N,
+    })
+  }
+
+  // Two Type 1 rectangles can rule out the same candidate - one row for it.
+  const avoidableRectangleEffects = new Set<string>()
+  for (const ar of avoidableRectangleFinder.find(board, candidates, givens)) {
+    const effectKey = ar.eliminations.map((e) => `${e.row},${e.col},${e.digit}`).join(';')
+    if (avoidableRectangleEffects.has(effectKey)) {
+      continue
+    }
+    avoidableRectangleEffects.add(effectKey)
+    const unsolvedCells = ar.cells.filter(([r, c]) => board[r][c] === 0)
+    instances.push({
+      id: `avoidable-rectangle-${ar.type}-${ar.cells.map(([r, c]) => `${r}.${c}`).join('-')}-${effectKey}`,
+      name: `Avoidable Rectangle (Type ${ar.type})`,
+      notation:
+        `Avoidable Rectangle Type ${ar.type} of {${ar.digits.join(',')}} at ${ar.cells.map(([r, c]) => cellRef(r, c)).join(', ')}, ` +
+        `${ar.reasonText}, thus ${ar.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')}`,
+      usedCells: [...ar.cells],
+      // Type 2: the unsolved corners' marks (the completing digit and the
+      // extra one) are the pattern.
+      usedCandidates:
+        ar.type === 2
+          ? unsolvedCells.flatMap(([r, c]) => markedCandidateDigits(candidates[r][c]).map((digit) => ({ row: r, col: c, digit })))
+          : [],
+      eliminatedCandidates: ar.eliminations,
+      solvedCandidates: [],
+      techniqueRank: RANK_AVOIDABLE_RECTANGLE,
     })
   }
 
@@ -1031,14 +1096,20 @@ export function buildTechniqueInstances(
 
       const rule1 = colorFinder.findRule1(chain)
       if (rule1) {
+        // The true colour's cells are placed (Apply, auto-solve's solve
+        // path, and the greedy picker all read solvedCandidates); the false
+        // colour's candidates then go as peer eliminations, since every one
+        // shares a unit with a true-colour cell. This row used to carry no
+        // effect at all, so Apply did nothing.
+        const sortedSolved = [...rule1.solvedCells].sort((a, b) => a[0] - b[0] || a[1] - b[1])
         rule1Instances.push({
           id: `simple-color-rule1-${digit}-${chainKey}`,
           name: `Simple Colouring Rule 1 (${digit})`,
-          notation: `Light ${rule1.falseColor} is false, so light ${rule1.trueColor} is true.`,
+          notation: `Light ${rule1.falseColor} is false, so light ${rule1.trueColor} is true: ${sortedSolved.map(([row, col]) => cellRef(row, col)).join(', ')} ${sortedSolved.length === 1 ? 'is' : 'are'} ${digit}.`,
           usedCells,
           usedCandidates: [],
           eliminatedCandidates: [],
-          solvedCandidates: [],
+          solvedCandidates: sortedSolved.map(([row, col]) => ({ row, col, digit })),
           blueCandidates,
           yellowCandidates,
           techniqueRank: RANK_SIMPLE_COLOR,
@@ -1102,7 +1173,9 @@ export function buildTechniqueInstances(
         buildAicInstance(
           aic,
           isSingleDigit ? 'short-single-digit-aic' : 'short-aic',
-          isSingleDigit ? 'Short Single-Digit AIC' : `Short AIC (Type ${aic.eliminationType})`,
+          // A named pattern (Skyscraper, Empty Rectangle, ...) is shown by
+          // its name; it is still this one technique.
+          isSingleDigit ? (aic.pattern ?? 'Short Single-Digit AIC') : `Short AIC (Type ${aic.eliminationType})`,
         ),
       )
     }
@@ -1144,7 +1217,7 @@ export function buildTechniqueInstances(
       instances,
       genericAicFinder
         .findGenericAics(board, candidates)
-        .map((aic) => buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}, ${aic.length} links)`)),
+        .map((aic) => buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}; ${aic.length} links)`)),
     )
   }
 
@@ -1201,6 +1274,7 @@ export function buildTechniqueInstances(
     optimizeDragons,
     optimizeDynamicDragons,
     maxTechniquesPerDragonStep,
+    givens,
   )
   dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
@@ -1220,6 +1294,7 @@ export function buildTechniqueInstances(
       optimizeDragons,
       optimizeDynamicDragons,
       doubleDragonEnabled,
+      givens,
     )
     doubleDynamicExtensions.sort((a, b) => a.moves.length - b.moves.length)
     for (const { chainKey, moves } of doubleDynamicExtensions) {
@@ -1386,7 +1461,8 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
       'naked quad',
       'hidden pair',
       'UR',
-      'BUG+1',
+      'BUG+N',
+      'avoidable rectangle',
       'bivalue oddagon',
       'x-wing',
       'short single-digit aic',
@@ -1398,8 +1474,29 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
       'als-xz',
     ] as const
   ).filter((t) => techniquesUsed.has(t))
-  return orderedTechniques.length > 0
-    ? `Dynamic Dragon Colouring (${orderedTechniques.join(', ')})`
+  // A Short Single-Digit AIC is listed by the pattern(s) it was (a
+  // Skyscraper, an Empty Rectangle, ...), plain "short single-digit aic"
+  // only for a chain that isn't one of them.
+  const singleDigitLabels = [
+    ...new Set(
+      moves.flatMap((m) =>
+        (m.substeps ?? [])
+          .filter((s) => s.technique === 'short single-digit aic')
+          .map((s) => s.aic?.pattern?.toLowerCase() ?? 'short single-digit aic'),
+      ),
+    ),
+  ]
+  // BUG+N is listed by the N it had: "BUG+2", not the internal "BUG+N".
+  const bugLabels = [
+    ...new Set(
+      moves.flatMap((m) => (m.substeps ?? []).filter((s) => s.technique === 'BUG+N').map((s) => s.displayName ?? 'BUG+N')),
+    ),
+  ].sort()
+  const labels = orderedTechniques.flatMap((t) =>
+    t === 'short single-digit aic' && singleDigitLabels.length > 0 ? singleDigitLabels : t === 'BUG+N' ? bugLabels : [t],
+  )
+  return labels.length > 0
+    ? `Dynamic Dragon Colouring (${labels.join(', ')})`
     : 'Dynamic Dragon Colouring'
 }
 
@@ -1628,6 +1725,7 @@ export function buildSolvePath(
   maxTechniquesPerDragonStep = Infinity,
   doubleDragonEnabled = false,
   doubleDynamicDragonEnabled = false,
+  givens: GivenMask | null = null,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1677,6 +1775,7 @@ export function buildSolvePath(
       maxTechniquesPerDragonStep,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
+      givens,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart

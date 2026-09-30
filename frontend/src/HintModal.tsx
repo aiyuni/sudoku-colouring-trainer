@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from 'react'
 import type { TechniqueHint } from './hints'
+import type { TutorialTarget } from './tutorial/tutorialLinks'
 import { AREA_LAYER, useAnalyticsArea } from './usageTracking'
 
 interface HintModalProps {
@@ -9,13 +10,15 @@ interface HintModalProps {
   revealed: number
   onNextHint: () => void
   onClose: () => void
+  /** A hint's "Learn this technique" link: open How It Works there. */
+  onOpenTutorial: (target: TutorialTarget) => void
 }
 
 /** The Techniques tab's Hint popup: the easiest technique on the grid, one
  * hint at a time (see hints.ts for what each one says). Centred over a
  * dimmed backdrop like ConfirmDialog; closes on the X, the Close button,
  * Escape, or a click on the backdrop. */
-export default function HintModal({ hint, revealed, onNextHint, onClose }: HintModalProps) {
+export default function HintModal({ hint, revealed, onNextHint, onClose, onOpenTutorial }: HintModalProps) {
   useAnalyticsArea('Hint', AREA_LAYER.dialog)
   const titleId = useId()
   const nextButtonRef = useRef<HTMLButtonElement>(null)
@@ -91,6 +94,11 @@ export default function HintModal({ hint, revealed, onNextHint, onClose }: HintM
                 <li key={index} className={index === steps.length - 1 ? 'hint-step-latest' : undefined}>
                   <span className="hint-step-label">{index === hint.steps.length - 1 && index > 0 ? 'Answer' : `Hint ${index + 1}`}</span>
                   <p>{step.text}</p>
+                  {step.learn && (
+                    <button type="button" className="hint-learn-link" onClick={() => onOpenTutorial(step.learn!)}>
+                      Learn this technique
+                    </button>
+                  )}
                   {step.lines && step.lines.length > 0 && (
                     <ul>
                       {step.lines.map((line, i) => (

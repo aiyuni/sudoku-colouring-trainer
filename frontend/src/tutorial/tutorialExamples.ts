@@ -2,7 +2,8 @@ import type { Rule3Technique } from '../sudoku/SudokuDragonFinder'
 import { SAMPLE_PUZZLE } from '../sudoku/types'
 import {
   buildBivalueOddagonLesson,
-  buildBugPlusOneLesson,
+  buildAvoidableRectangleLesson,
+  buildBugPlusNLesson,
   buildDoubleDragonLesson,
   buildDragonLesson,
   buildHiddenSingleLesson,
@@ -252,11 +253,45 @@ export function buildUniquenessGroups(): LessonGroup[] {
       title: 'BUG+1',
       blurb: 'Every cell has two candidates except one: that cell holds the digit that breaks the pattern.',
       lessons: safely(() =>
-        buildBugPlusOneLesson(
+        buildBugPlusNLesson(
           'bug-plus-one',
           'BUG+1',
-          'BUG+1 (avoiding an Binary Universal Grave)',
+          'BUG+1 (avoiding a Bivalue Universal Grave)',
           decodePuzzleState('086307250205608703734521869802736500053284607647915382561473928328169475479852136'),
+          1,
+        ),
+      ),
+    },
+    {
+      // The user's own example (a Sudoku.Coach state; its removed marks
+      // reproduce the state's candidates). Nothing easier applies there.
+      title: 'BUG+2',
+      blurb: 'Two cells have three candidates: one of their extra digits is true, so a cell seeing both loses that digit.',
+      lessons: safely(() =>
+        buildBugPlusNLesson(
+          'bug-plus-two',
+          'BUG+2',
+          'BUG+2: two cells hold the way out',
+          decodePuzzleState(
+            '000397040309504607047806039700983465435672918896145273054730090903450700178269354',
+            'r1c1-2 r1c2-1 r1c2-2 r1c7-1 r7c9-1',
+          ),
+          2,
+        ),
+      ),
+    },
+    {
+      // Mined by dragon-research/bug-n/mine.ts: a plain autofill (no marks
+      // removed) where BUG+3 is the easiest technique.
+      title: 'BUG+3',
+      blurb: 'Three cells have three candidates: one of their extra digits is true, so a cell seeing all three loses that digit.',
+      lessons: safely(() =>
+        buildBugPlusNLesson(
+          'bug-plus-three',
+          'BUG+3',
+          'BUG+3: three cells hold the way out',
+          decodePuzzleState('271463800395718624648529371539246718460801003180390460913680040754932186826104030'),
+          3,
         ),
       ),
     },
@@ -283,6 +318,43 @@ export function buildUniquenessGroups(): LessonGroup[] {
             state: decodePuzzleState('285090763103500492094002581501009826029050134408200957917625348842973615356000279'),
             type: 2,
             cell: [1, 5],
+          }),
+        ),
+      ],
+    },
+    {
+      // Mined from real solves (dragon-research/avoidable-rectangle): at each
+      // position nothing easier than an Avoidable Rectangle applies. The third
+      // string is the original puzzle, so the solved cells aren't givens.
+      title: 'Avoidable Rectangle',
+      blurb: 'A Unique Rectangle made partly of solved cells: none of them is a given, so they must not end up as two digits that could swap.',
+      lessons: [
+        ...safely(() =>
+          buildAvoidableRectangleLesson({
+            id: 'avoidable-rectangle-1',
+            title: 'Three corners solved',
+            hint: 'Type 1: the fourth corner must not complete the pattern.',
+            state: decodePuzzleState(
+              '000400809043008251081200000800005007030067000090004000009082415408500302052040086',
+              '',
+              '000000809043008050001200000800005007030067000090004000000000015400000300052040080',
+            ),
+            type: 1,
+            cell: [7, 4],
+          }),
+        ),
+        ...safely(() =>
+          buildAvoidableRectangleLesson({
+            id: 'avoidable-rectangle-2',
+            title: 'Two corners solved',
+            hint: 'Type 2: one of the two open corners must take its extra digit.',
+            state: decodePuzzleState(
+              '300104006000020070065800001130500900600291000009000000006900704843702000000460032',
+              'r6c6-3 r6c7-3 r6c8-8 r6c9-3 r7c8-5',
+              '300004006000020070065800001130500900600201000009000000000900704800000000000460032',
+            ),
+            type: 2,
+            cell: [6, 4],
           }),
         ),
       ],

@@ -1,7 +1,8 @@
 import { markedCandidateDigits } from '../sudoku/boardUtils'
 import { foldDragonMoves } from '../sudoku/dragonReplay'
+import { SudokuAvoidableRectangleFinder } from '../sudoku/SudokuAvoidableRectangleFinder'
 import { SudokuBivalueOddagonFinder } from '../sudoku/SudokuBivalueOddagonFinder'
-import { SudokuBugPlusOneFinder } from '../sudoku/SudokuBugPlusOneFinder'
+import { SudokuBugPlusNFinder } from '../sudoku/SudokuBugPlusNFinder'
 import { SudokuColorFinder } from '../sudoku/SudokuColorFinder'
 import {
   DEFAULT_RULE3_TECHNIQUES,
@@ -43,8 +44,9 @@ const dragonFinder = new SudokuDragonFinder()
 const lockedFinder = new SudokuLockedCandidateFinder()
 const pairFinder = new SudokuPairFinder()
 const urFinder = new SudokuUniqueRectangleFinder()
-const bugFinder = new SudokuBugPlusOneFinder()
+const bugFinder = new SudokuBugPlusNFinder()
 const oddagonFinder = new SudokuBivalueOddagonFinder()
+const avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
 
 // ---------------------------------------------------------------- helpers
 
@@ -791,7 +793,8 @@ const TECHNIQUE_PHRASE: Record<string, string> = {
   'finned swordfish': 'a Finned Swordfish',
   UR: 'a Unique Rectangle',
   'bivalue oddagon': 'a Bivalue Oddagon',
-  'BUG+1': 'a BUG+1',
+  'BUG+N': 'a BUG (Bivalue Universal Grave) pattern',
+  'avoidable rectangle': 'an Avoidable Rectangle',
   'short single-digit aic': 'a single-digit AIC',
   'short aic': 'a short AIC',
   'generic aic': 'a generic AIC',
@@ -1515,19 +1518,105 @@ export function buildUniqueRectangleLesson(options: UniqueRectangleOptions): Tut
   return { id, title, hint, state, frames }
 }
 
-export function buildBugPlusOneLesson(id: string, title: string, hint: string, state: PuzzleState): TutorialLesson {
+/**
+ * BUG+1, BUG+2 and BUG+3 - one technique (BUG+N), one lesson builder; `n`
+ * says which the example must show. BUG+1: the one tri-value cell is the
+ * digit that breaks the pattern. BUG+2/BUG+3: one of the tri-value cells'
+ * extra digits is true, so a cell that sees them all can't be that digit.
+ */
+export function buildBugPlusNLesson(id: string, title: string, hint: string, state: PuzzleState, n: 1 | 2 | 3): TutorialLesson {
   const instance = bugFinder.find(state.board, state.candidates)
-  if (!instance) {
-    throw new Error('No BUG+1 in this example.')
+  if (!instance || instance.n !== n) {
+    throw new Error(`No BUG+${n} in this example.`)
   }
-  const cell: TutorialCell = [instance.cell[0], instance.cell[1]]
-  const name = cellName(cell[0], cell[1])
-  const digit = instance.solvedDigit
-  const unit = unitContaining(instance.unitKind, cell)
-  const inUnit = unit.cells
-    .filter(([r, c]) => state.board[r][c] === 0 && state.candidates[r][c][digit - 1])
-    .map(([r, c]) => ref(r, c, digit))
-  const solved = [ref(cell[0], cell[1], digit)]
+  const triCells: TutorialCell[] = instance.cells.map(({ cell: [r, c] }) => [r, c])
+  const deadlyCaption =
+    'With only two candidates in every cell, each digit left in a row, column or box would appear there exactly twice: a pattern that always has two solutions.'
+
+  if (instance.solved) {
+    const [{ candidates, unitKind }] = instance.cells
+    const cell = triCells[0]
+    const name = cellName(cell[0], cell[1])
+    const digit = instance.solved.digit
+    const unit = unitContaining(unitKind ?? 'row', cell)
+    const inUnit = unit.cells
+      .filter(([r, c]) => state.board[r][c] === 0 && state.candidates[r][c][digit - 1])
+      .map(([r, c]) => ref(r, c, digit))
+    const solved = [ref(cell[0], cell[1], digit)]
+    return {
+      id,
+      title,
+      hint,
+      state,
+      frames: [
+        {
+          badge: 'Look',
+          caption: `Every unsolved cell has exactly two candidates, except ${name}, which has three (${joinPhrases(candidates.map(String))}).`,
+          outlineCells: [cell],
+        },
+        {
+          badge: 'Deadly',
+          caption: `${deadlyCaption} So ${name} must be the digit that breaks it.`,
+          outlineCells: [cell],
+        },
+        {
+          badge: 'Count',
+          caption: `In ${unitPhrase(unit)}, ${digit} appears three times, while every other digit pairs up. The odd one out is ${digit}.`,
+          outlineCells: [cell],
+          unitCells: unit.cells,
+          basis: inUnit,
+          spotlight: { digits: [digit] },
+        },
+        {
+          badge: 'Result',
+          caption: `So ${name} is ${digit}.`,
+          outlineCells: [cell],
+          solved,
+          spotlight: { digits: [digit] },
+          applied: true,
+        },
+      ],
+    }
+  }
+
+  const bugPips = instance.cells.map(({ cell: [r, c], bugDigit }) => ref(r, c, bugDigit))
+  const bugDigits = [...new Set(instance.cells.map((c) => c.bugDigit))]
+  const eliminated = instance.eliminations.map((e) => ref(e.row, e.col, e.digit))
+  const described = joinPhrases(instance.cells.map(({ cell: [r, c], candidates }) => `${cellName(r, c)} (${joinPhrases(candidates.map(String))})`))
+  const countFrames: TutorialFrame[] = instance.cells.map(({ cell: [r, c], bugDigit, unitKind }) => {
+    const name = cellName(r, c)
+    if (!unitKind) {
+      return {
+        badge: 'Count',
+        caption: `${name}'s extra digit is ${bugDigit}: take it out, and every digit pairs up again around ${name}.`,
+        outlineCells: triCells,
+        basis: [ref(r, c, bugDigit)],
+        spotlight: { digits: bugDigits },
+      }
+    }
+    const unit = unitContaining(unitKind, [r, c])
+    return {
+      badge: 'Count',
+      caption: `In ${unitPhrase(unit)}, ${bugDigit} appears three times - one too many for the pattern. So ${name}'s extra digit is ${bugDigit}.`,
+      outlineCells: triCells,
+      unitCells: unit.cells,
+      basis: unit.cells
+        .filter(([ur, uc]) => state.board[ur][uc] === 0 && state.candidates[ur][uc][bugDigit - 1])
+        .map(([ur, uc]) => ref(ur, uc, bugDigit)),
+      spotlight: { digits: [bugDigit] },
+    }
+  })
+  const eliminatedCells = eliminated.map((e) => [e.row, e.col] as const)
+  const sameDigit = bugDigits.length === 1
+  const count = n === 2 ? 'two' : 'three'
+  const allOf = n === 2 ? 'both' : 'all three'
+  const pipsText = bugPips.map((p) => `${p.digit} in ${cellName(p.row, p.col)}`)
+  // A digit in every tri-value cell that isn't their extra digit - the
+  // tempting wrong reading ("they share it, so it goes").
+  const sharedOther = instance.cells[0].candidates.find(
+    (d) => !bugDigits.includes(d) && instance.cells.every((c) => c.candidates.includes(d)),
+  )
+  const onlyOthers = eliminated.every((e) => !triCells.some((t) => sameCell(t, [e.row, e.col])))
 
   return {
     id,
@@ -1537,32 +1626,127 @@ export function buildBugPlusOneLesson(id: string, title: string, hint: string, s
     frames: [
       {
         badge: 'Look',
-        caption: `Every unsolved cell has exactly two candidates, except ${name}, which has three (${joinPhrases(instance.candidates.map(String))}).`,
-        outlineCells: [cell],
+        caption: `Every unsolved cell has exactly two candidates, except ${count} cells with three: ${described}.`,
+        outlineCells: triCells,
       },
       {
         badge: 'Deadly',
-        caption: `With only two candidates in every cell, each digit left in a row, column or box would appear there exactly twice: a pattern that always has two solutions. So ${name} must be the digit that breaks it.`,
-        outlineCells: [cell],
+        caption: `${deadlyCaption} So each of these ${count} cells has one extra digit, and the extras are what keep the puzzle to one solution.`,
+        outlineCells: triCells,
+      },
+      ...countFrames,
+      {
+        badge: 'Key',
+        caption:
+          n === 2
+            ? `If neither ${pipsText[0]} nor ${pipsText[1]} were true, taking them out would leave the two-solution pattern. So at least one of them is true.`
+            : `If none of ${pipsText.slice(0, -1).join(', ')} or ${pipsText[pipsText.length - 1]} were true, taking them out would leave the two-solution pattern. So at least one of them is true.`,
+        outlineCells: triCells,
+        basis: bugPips,
+        spotlight: { digits: bugDigits },
       },
       {
-        badge: 'Count',
-        caption: `In ${unitPhrase(unit)}, ${digit} appears three times, while every other digit pairs up. The odd one out is ${digit}.`,
-        outlineCells: [cell],
-        unitCells: unit.cells,
-        basis: inUnit,
-        spotlight: { digits: [digit] },
+        badge: 'Eliminate',
+        caption:
+          sameDigit && onlyOthers
+            ? `Whichever of them is ${bugDigits[0]}, a cell that sees ${allOf} of them can't be ${bugDigits[0]}.` +
+              (sharedOther
+                ? ` Only the extra digit counts: ${sharedOther} is in ${allOf} cells too, but it isn't an extra digit, so a cell seeing them can still be ${sharedOther}.`
+                : '')
+            : `Anything that can't be true alongside each of them goes.`,
+        outlineCells: triCells,
+        basis: bugPips,
+        eliminated,
+        links: eliminated.flatMap((e) =>
+          bugPips.filter((p) => !sameCell([p.row, p.col], [e.row, e.col])).map((p) => ({ from: e, to: p, kind: 'sees' as const })),
+        ),
+        spotlight: { digits: bugDigits },
       },
       {
         badge: 'Result',
-        caption: `So ${name} is ${digit}.`,
-        outlineCells: [cell],
-        solved,
-        spotlight: { digits: [digit] },
+        caption: `So ${joinPhrases(
+          [...new Set(eliminated.map((e) => e.digit))].map(
+            (d) => `${cellList(eliminatedCells.filter((_, i) => eliminated[i].digit === d))} can't be ${d}`,
+          ),
+        )}.`,
+        outlineCells: triCells,
+        eliminated,
+        spotlight: { digits: bugDigits },
         applied: true,
       },
     ],
   }
+}
+
+interface AvoidableRectangleOptions {
+  id: string
+  title: string
+  hint?: string
+  /** Decoded with the original clues, so solved cells aren't givens. */
+  state: PuzzleState
+  type: 1 | 2
+  /** A cell the rectangle eliminates from, in case there's more than one. */
+  cell: TutorialCell
+}
+
+export function buildAvoidableRectangleLesson(options: AvoidableRectangleOptions): TutorialLesson {
+  const { id, title, hint, state, type, cell } = options
+  const instance = avoidableRectangleFinder
+    .find(state.board, state.candidates, state.givens)
+    .find((ar) => ar.type === type && ar.eliminations.some((e) => e.row === cell[0] && e.col === cell[1]))
+  if (!instance) {
+    throw new Error(`No Avoidable Rectangle Type ${type} eliminating from ${cellName(cell[0], cell[1])} in this example.`)
+  }
+  const corners = instance.cells.map(([r, c]) => [r, c] as const)
+  const solvedCorners = instance.solvedCells.map(([r, c]) => [r, c] as const)
+  const unsolved = corners.filter(([r, c]) => state.board[r][c] === 0)
+  const eliminated = instance.eliminations.map((e) => ref(e.row, e.col, e.digit))
+  const [a, b] = instance.digits
+  const solvedText = joinPhrases(solvedCorners.map(([r, c]) => `${cellName(r, c)} (${state.board[r][c]})`))
+
+  const look: TutorialFrame = {
+    badge: 'Look',
+    caption: `${solvedText} were solved along the way - none of them is a given. With ${cellList(unsolved)} they make a rectangle over two boxes.`,
+    outlineCells: corners,
+    spotlight: { digits: [a, b, ...(instance.extraDigit ? [instance.extraDigit] : [])] },
+  }
+  let frames: TutorialFrame[]
+  if (type === 1) {
+    const { row, col, digit } = eliminated[0]
+    frames = [
+      look,
+      {
+        badge: 'Deadly',
+        caption: `If ${cellName(row, col)} were ${digit}, the corners would read ${a}, ${b}, ${a}, ${b} with no given among them - swap the ${a}s and ${b}s and you'd have a second solution.`,
+        outlineCells: corners,
+        eliminated,
+      },
+      { badge: 'Result', caption: `So ${cellName(row, col)} can't be ${digit}.`, outlineCells: corners, eliminated, applied: true },
+    ]
+  } else {
+    const x = instance.extraDigit!
+    const basis = unsolved.flatMap(([r, c]) => markedCandidateDigits(state.candidates[r][c]).map((d) => ref(r, c, d)))
+    const spotlight = { digits: [x] }
+    frames = [
+      { ...look, basis },
+      {
+        badge: 'Deadly',
+        caption: `If neither ${cellName(...unsolved[0])} nor ${cellName(...unsolved[1])} were ${x}, they'd complete ${a}, ${b}, ${a}, ${b} round the rectangle with no given - a second solution. So one of them is ${x}.`,
+        outlineCells: corners,
+        basis,
+      },
+      {
+        badge: 'Eliminate',
+        caption: `Any cell that sees both of them can't be ${x}: ${cellList(eliminated.map((e) => [e.row, e.col] as const))}.`,
+        outlineCells: corners,
+        basis,
+        eliminated,
+        spotlight,
+      },
+      { badge: 'Result', caption: `So ${x} goes from ${cellList(eliminated.map((e) => [e.row, e.col] as const))}.`, outlineCells: corners, eliminated, spotlight, applied: true },
+    ]
+  }
+  return { id, title, hint, state, frames }
 }
 
 interface OddagonOptions {

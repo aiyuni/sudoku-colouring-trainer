@@ -1,0 +1,130 @@
+{
+ "corpus": "random",
+ "count": 1000,
+ "offset": 0,
+ "solvedPuzzles": 1000,
+ "totalStates": 59241,
+ "totalStuck": 0,
+ "stats": {
+  "bug+1": {
+   "states": 80,
+   "puzzles": 80,
+   "degenerateStates": 0,
+   "newElims": 0,
+   "statesNew": 0,
+   "noSingles": 40,
+   "noSinglesNew": 0,
+   "basicsStuck": 40,
+   "basicsStuckNew": 0,
+   "puzzlesBasicsStuck": 40,
+   "bugTierStuck": 0,
+   "stuck": 0,
+   "rescued": 0,
+   "unsound": 0,
+   "sizes": {}
+  },
+  "rb-solved": {
+   "states": 1051,
+   "puzzles": 281,
+   "degenerateStates": 6216,
+   "newElims": 524,
+   "statesNew": 524,
+   "noSingles": 200,
+   "noSinglesNew": 40,
+   "basicsStuck": 80,
+   "basicsStuckNew": 40,
+   "puzzlesBasicsStuck": 40,
+   "bugTierStuck": 0,
+   "stuck": 0,
+   "rescued": 0,
+   "unsound": 0,
+   "sizes": {
+    "4": 200,
+    "5": 200,
+    "6": 7,
+    "7": 644
+   }
+  },
+  "rb-givens": {
+   "states": 1451,
+   "puzzles": 361,
+   "degenerateStates": 8735,
+   "newElims": 844,
+   "statesNew": 844,
+   "noSingles": 200,
+   "noSinglesNew": 40,
+   "basicsStuck": 80,
+   "basicsStuckNew": 40,
+   "puzzlesBasicsStuck": 40,
+   "bugTierStuck": 0,
+   "stuck": 0,
+   "rescued": 0,
+   "unsound": 0,
+   "sizes": {
+    "4": 280,
+    "5": 200,
+    "6": 87,
+    "7": 884
+   }
+  },
+  "lite-solved": {
+   "states": 634,
+   "puzzles": 200,
+   "degenerateStates": 955,
+   "newElims": 434,
+   "statesNew": 434,
+   "noSingles": 156,
+   "noSinglesNew": 156,
+   "basicsStuck": 39,
+   "basicsStuckNew": 39,
+   "puzzlesBasicsStuck": 39,
+   "bugTierStuck": 0,
+   "stuck": 0,
+   "rescued": 0,
+   "unsound": 0,
+   "sizes": {
+    "3": 40,
+    "4": 160,
+    "6": 160,
+    "7": 274
+   }
+  },
+  "lite-givens": {
+   "states": 1276,
+   "puzzles": 441,
+   "degenerateStates": 1513,
+   "newElims": 761,
+   "statesNew": 759,
+   "noSingles": 156,
+   "noSinglesNew": 156,
+   "basicsStuck": 39,
+   "basicsStuckNew": 39,
+   "puzzlesBasicsStuck": 39,
+   "bugTierStuck": 0,
+   "stuck": 0,
+   "rescued": 0,
+   "unsound": 0,
+   "sizes": {
+    "3": 40,
+    "4": 200,
+    "5": 2,
+    "6": 241,
+    "7": 795
+   }
+  }
+ },
+ "examples": [
+  "rb-solved 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-givens 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-solved 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-givens 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-solved 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-givens 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-solved 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-givens 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-solved 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-givens 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-solved 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4",
+  "rb-givens 093000000000100200600000001300080000000004307280007400851000004000040058004700000 step 42: 9r3c5 [6,9] n=4"
+ ]
+}

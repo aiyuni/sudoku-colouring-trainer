@@ -147,7 +147,8 @@ export const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
   'hidden pair': 'Hidden Pair',
   UR: 'Unique Rectangle',
   'bivalue oddagon': 'Bivalue Oddagon',
-  'BUG+1': 'BUG+1',
+  'BUG+N': 'BUG+1',  //technically bug+1, bug+2, bug+3, but the label is generic
+  'avoidable rectangle': 'Avoidable Rectangle',
   'x-wing': 'X-Wing',
   'short single-digit aic': 'Short Single-Digit AIC',
   'finned x-wing': 'Finned X-Wing',

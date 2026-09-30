@@ -598,6 +598,97 @@ html.app-busy .busy-cancel,
   border-color: #1d4ed8;
 }
 
+/* The proofread banner under the grid after a screenshot import (App.tsx,
+   ocrProofread): check/fix the read digits, then lock them as givens. */
+.ocr-proofread {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #fcd34d;
+  border-radius: 0.6rem;
+  background: #fffbeb;
+  color: #78350f;
+  text-align: left;
+}
+
+.ocr-proofread-text,
+.ocr-proofread-warning {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.ocr-proofread-warning {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.ocr-proofread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ocr-proofread-actions button {
+  min-height: 2.5rem;
+}
+
+.ocr-proofread-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin-top: 0.6rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.4rem;
+}
+
+/* The small "?" beside a settings menu's section heading (MenuHelpButton in
+   App.tsx) - opens the Settings guide on that menu's tab. Also the Techniques
+   / Solve Path rows' "learn this technique" ? (.technique-learn-button). Drawn small to sit
+   in the heading line, but the invisible ::before widens what a finger can
+   hit to ~2.4rem, and on a touch screen the circle itself grows too. */
+.menu-help-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-left: 0.45rem;
+  padding: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 50%;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  vertical-align: middle;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.menu-help-button::before {
+  content: '';
+  position: absolute;
+  inset: -0.6rem;
+}
+
+.menu-help-button:hover,
+.menu-help-button:focus-visible {
+  border-color: #1d4ed8;
+}
+
+@media (pointer: coarse) {
+  .menu-help-button {
+    width: 1.5rem;
+    height: 1.5rem;
+    font-size: 0.85rem;
+  }
+}
+
 /* The Settings guide modal. */
 .help-backdrop {
   position: fixed;
@@ -912,6 +1003,16 @@ html.app-busy .busy-cancel,
   stroke: var(--aic-strong-link-color);
   stroke-width: var(--aic-strong-link-width);
   stroke-linecap: round;
+}
+
+/* A grouped AIC node (Empty Rectangle): the cells that together hold the
+   digit, outlined as one node the links meet in the middle of. */
+.aic-group {
+  fill: none;
+  stroke: var(--aic-strong-link-color);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 4;
+  opacity: 0.8;
 }
 
 .aic-link-weak {
@@ -1797,6 +1898,24 @@ html.app-busy .busy-cancel,
   border-color: #ca8a04;
 }
 
+/* A row with a "learn this technique" ? (TechniqueLearnButton in App.tsx):
+   the ? sits over the row button's top-right corner, level with the name
+   line, and the row keeps its text clear of it. */
+.technique-row {
+  position: relative;
+}
+
+.technique-row:has(> .technique-learn-button) > .technique-item {
+  padding-right: 2.2rem;
+}
+
+.technique-learn-button {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.55rem;
+  margin-left: 0;
+}
+
 /* Dragon Colouring's move-by-move player - expands below its row in the
    Techniques list instead of just highlighting the grid on click. */
 .dragon-player {
@@ -2563,6 +2682,27 @@ button.primary {
     border-color: #60a5fa;
   }
 
+  .ocr-proofread {
+    background: #2a2210;
+    border-color: #854d0e;
+    color: #fde68a;
+  }
+
+  .ocr-proofread-warning {
+    color: #fca5a5;
+  }
+
+  .menu-help-button {
+    color: #93c5fd;
+    border-color: #1e3a5f;
+    background: #16233a;
+  }
+
+  .menu-help-button:hover,
+  .menu-help-button:focus-visible {
+    border-color: #60a5fa;
+  }
+
   .help-modal {
     background: #1e293b;
     color: #e2e8f0;
@@ -2883,6 +3023,17 @@ button.primary {
   padding: 0;
 }
 
+/* The dropdown panels sit inside .main-toolbar - keep the menu headings' ?
+   its own size rather than a full toolbar button's (its ::before already
+   gives it a finger-sized hit area). */
+.compact-layout .main-toolbar .menu-help-button {
+  width: 1.5rem;
+  height: 1.5rem;
+  min-height: 0;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
 /* Phone: always a single row. It fits a 320px-wide screen as is; the
    sideways scroll is only a safety net for very large text settings. The
    dropdown panels are position: fixed, so this scroller can't clip them. */
@@ -3115,6 +3266,15 @@ button.primary {
 
 .compact-layout .technique-item {
   padding: 0.6rem 0.7rem;
+}
+
+.compact-layout .technique-row:has(> .technique-learn-button) > .technique-item {
+  padding-right: 2.6rem;
+}
+
+.compact-layout .technique-learn-button {
+  top: 0.45rem;
+  right: 0.65rem;
 }
 
 .compact-layout .dragon-player-button {
@@ -3600,6 +3760,24 @@ button.primary {
   color: #64748b;
 }
 
+.hint-learn-link {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #2563eb;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.hint-learn-link:hover {
+  color: #1d4ed8;
+}
+
 .confirm-actions .hint-next {
   background: #2563eb;
   border-color: #2563eb;
@@ -3631,6 +3809,14 @@ button.primary {
 
   .hint-step-label {
     color: #94a3b8;
+  }
+
+  .hint-learn-link {
+    color: #93c5fd;
+  }
+
+  .hint-learn-link:hover {
+    color: #bfdbfe;
   }
 }
 

@@ -299,7 +299,7 @@ function alsXzReasonText(a: AlsInfo, b: AlsInfo, rcc: number, zDigits: number[])
       ? `${zDigits[0]} must be in one of them`
       : `${zDigits.slice(0, -1).join(', ')} and ${zDigits[zDigits.length - 1]} must each be in one of them`
   return (
-    `ALS A ${alsLabel(a)} and ALS B ${alsLabel(b)} are linked by ${rcc} ` +
+    `ALS A ${alsLabel(a)} and ALS B ${alsLabel(b)} are linked by RCC digit ${rcc} ` +
     `(every ${rcc} in A sees every ${rcc} in B, so at most one of them holds ${rcc} and the other is locked), so ${zLabel}`
   )
 }
