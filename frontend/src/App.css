@@ -3470,6 +3470,32 @@ button.primary {
   }
 }
 
+/* Phone, portrait: while a technique is open, the toolbar and the dock tabs
+   step aside so the step text gets their height too - on an iPhone in
+   Safari (browser bars showing) the dock is otherwise ~160px and the text
+   got a single line. The grid keeps its size; ‹ All brings both back. */
+.compact-phone.compact-portrait.compact-technique-focused > .main-toolbar,
+.compact-phone.compact-portrait.compact-technique-focused > .compact-tabs {
+  display: none;
+}
+
+/* Tighter padding while focused: every pixel here is a pixel of text. */
+.compact-phone .compact-dock > .technique-panel-focused {
+  padding: 0.4rem 0.5rem;
+}
+
+.compact-phone .technique-focus {
+  gap: 0.3rem;
+}
+
+.compact-phone .technique-focus-text {
+  padding: 0.4rem 0.5rem;
+}
+
+.undo-redo-icon {
+  display: block;
+}
+
 /* ---- toolbar Hint (touch layout only; the desktop's is beside Apply) ---- */
 
 .compact-layout .main-toolbar .toolbar-hint-button {

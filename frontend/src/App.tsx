@@ -758,6 +758,23 @@ function DragonStepper({
   )
 }
 
+/** The phone toolbar's Undo / Redo: the familiar curved-arrow icons
+ * (Material Design's, Apache 2.0), drawn in the button's text colour. */
+function UndoRedoIcon({ direction }: { direction: 'undo' | 'redo' }) {
+  return (
+    <svg className="undo-redo-icon" viewBox="0 0 24 24" width="1.35em" height="1.35em" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d={
+          direction === 'undo'
+            ? 'M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z'
+            : 'M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.4 3.6z'
+        }
+      />
+    </svg>
+  )
+}
+
 /** Touch layout only: the selected Techniques-list row, alone, filling the
  * dock. In the list the row's step player sits below its (often long)
  * notation, and a Dynamic Dragon's substep player below that, so stepping
@@ -5314,7 +5331,7 @@ export default function App() {
           aria-label={phone ? 'Undo' : undefined}
           title={phone ? 'Undo' : undefined}
         >
-          {phone ? '↶' : 'Undo'}
+          {phone ? <UndoRedoIcon direction="undo" /> : 'Undo'}
         </button>
         <button
           type="button"
@@ -5324,7 +5341,7 @@ export default function App() {
           aria-label={phone ? 'Redo' : undefined}
           title={phone ? 'Redo' : undefined}
         >
-          {phone ? '↷' : 'Redo'}
+          {phone ? <UndoRedoIcon direction="redo" /> : 'Redo'}
         </button>
         {/* On a phone, Clear grid / Techniques overview / ? move into the
             "⋯" menu at the end so the toolbar stays one row - every row
@@ -6960,6 +6977,9 @@ export default function App() {
   )
 
   if (compact) {
+    // A selected Techniques-list row fills the dock (TechniqueFocusView).
+    const techniqueFocused =
+      compactSection === 'techniques' && techniquePanelTab === 'techniques' && techniquesRevealed && activeTechnique != null
     const dockContent: Record<CompactSection, ReactNode> = {
       techniques: techniquePanel,
       input: (
@@ -6990,6 +7010,7 @@ export default function App() {
           'compact-layout',
           landscape ? 'compact-landscape' : 'compact-portrait',
           phone ? 'compact-phone' : '',
+          techniqueFocused ? 'compact-technique-focused' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -7009,9 +7030,7 @@ export default function App() {
             `compact-dock-${compactSection}`,
             // The focused technique (TechniqueFocusView) fills the dock and
             // scrolls only its own text, so the dock itself must not scroll.
-            compactSection === 'techniques' && techniquePanelTab === 'techniques' && techniquesRevealed && activeTechnique
-              ? 'compact-dock-focused'
-              : '',
+            techniqueFocused ? 'compact-dock-focused' : '',
           ]
             .filter(Boolean)
             .join(' ')}
