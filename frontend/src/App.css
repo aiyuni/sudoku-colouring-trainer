@@ -3041,6 +3041,9 @@ button.primary {
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Seven icon buttons (Undo, Redo, Hint, Generate, Dragon, Settings, more)
+     just fit a 360px screen with these gaps. */
+  gap: 0.25rem;
 }
 
 .compact-phone .main-toolbar::-webkit-scrollbar {
@@ -3049,6 +3052,7 @@ button.primary {
 
 .compact-phone .toolbar-group {
   flex-wrap: nowrap;
+  gap: 0.25rem;
 }
 
 .compact-phone .main-toolbar button {
@@ -3294,6 +3298,194 @@ button.primary {
 .compact-layout .solve-path-timeout select {
   min-height: 2.5rem;
   font-size: 0.85rem;
+}
+
+/* ---- Techniques tab: a selected technique fills the dock ----
+   (TechniqueFocusView in App.tsx). The dock stops scrolling; the panel
+   fills it as a column of a fixed head, the reasoning text (the only
+   scroller) and a fixed row of step/substep controls at the bottom, so the
+   buttons stay put however long a step's text is. */
+
+.compact-dock.compact-dock-focused {
+  overflow: hidden;
+}
+
+.compact-dock > .technique-panel-focused {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.6rem;
+}
+
+.technique-focus {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.technique-focus-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.compact-layout .technique-focus-back {
+  flex: none;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.technique-focus-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.technique-focus-name,
+.technique-focus-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.technique-focus-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.technique-focus-summary {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+/* In the head's flow here, not pinned to a list row's corner. */
+.technique-focus-head .technique-learn-button {
+  position: relative;
+  top: auto;
+  right: auto;
+  margin: 0 0.2rem;
+}
+
+.compact-layout .technique-focus-head .technique-apply-button {
+  flex: none;
+  margin-left: 0;
+}
+
+.technique-focus-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #ca8a04;
+  border-radius: 0.5rem;
+  background: #fef9c3;
+}
+
+.technique-focus-text .technique-notation {
+  display: block;
+  margin: 0;
+}
+
+.technique-focus-text .dragon-player-description {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.technique-focus-text .technique-notation + .dragon-player-description {
+  margin-top: 0.45rem;
+}
+
+.technique-focus-text .technique-focus-substep {
+  margin: 0.45rem 0 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.4rem;
+  background: var(--aic-node-bg);
+  font-size: 0.85rem;
+}
+
+/* Step and substep controls side by side on one row: a second row would
+   cost the text most of what is left of a phone's dock. */
+.technique-focus-controls {
+  flex: none;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.technique-focus-controls > .dragon-player-controls {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.compact-layout .technique-focus-controls .dragon-player-button {
+  flex: none;
+  min-width: var(--compact-touch);
+  min-height: var(--compact-touch);
+  font-size: 0.95rem;
+}
+
+.technique-focus-counter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.15;
+  font-size: 0.85rem;
+}
+
+.technique-focus-counter-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .technique-focus-name {
+    color: #94a3b8;
+  }
+
+  .technique-focus-summary {
+    color: #e2e8f0;
+  }
+
+  .technique-focus-text .technique-focus-substep {
+    background: #2e1065;
+  }
+
+  .technique-focus-text {
+    border-color: #eab308;
+    background: #3f3405;
+  }
+}
+
+/* ---- toolbar Hint (touch layout only; the desktop's is beside Apply) ---- */
+
+.compact-layout .main-toolbar .toolbar-hint-button {
+  flex: none;
+  margin: 0;
+  min-width: var(--compact-touch);
+  font-size: 0.9rem;
+}
+
+.compact-phone .main-toolbar .toolbar-hint-button,
+.compact-phone .main-toolbar .generate-puzzle-trigger,
+.compact-phone .main-toolbar .undo-trigger,
+.compact-phone .main-toolbar .redo-trigger {
+  min-width: var(--compact-touch);
+  padding: 0.5rem;
+  font-size: 1.1rem;
 }
 
 /* ---- Digits / Colour tabs: 3x3 pads become one row of 9 ---- */

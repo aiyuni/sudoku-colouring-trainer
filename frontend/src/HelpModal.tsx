@@ -12,7 +12,13 @@ interface HelpModalProps {
    * the ? beside a settings menu's section heading does. Omitted: the first
    * tab, scrolled to the top (quickstart box). */
   initialTab?: string
+  /** Touch device without a hardware keyboard: the Settings tab's keyboard
+   * shortcuts section describes controls that are hidden there. */
+  hideKeyboardShortcuts?: boolean
 }
+
+/** helpContent.ts's title for the section hideKeyboardShortcuts drops. */
+const KEYBOARD_SHORTCUTS_SECTION = 'Keyboard shortcuts'
 
 /** Renders `text`, turning each [label](how-it-works) into a link button and
  * each **text** into bold text. */
@@ -41,7 +47,7 @@ function renderWithLinks(text: string, onOpenTutorial: () => void): ReactNode[] 
  * menu. All of its wording lives in helpContent.ts; this only lays it out.
  * Closes on the X, the Close button, Escape, or a click on the dimmed
  * backdrop. */
-export default function HelpModal({ onClose, onOpenTutorial, initialTab }: HelpModalProps) {
+export default function HelpModal({ onClose, onOpenTutorial, initialTab, hideKeyboardShortcuts = false }: HelpModalProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const tabsRef = useRef<HTMLDivElement>(null)
@@ -157,7 +163,9 @@ export default function HelpModal({ onClose, onOpenTutorial, initialTab }: HelpM
           <div className="help-body" role="tabpanel" id="help-panel" aria-labelledby={`help-tab-${tabIndex}`} ref={panelRef}>
             {tab.intro && <p className="help-tab-intro">{renderWithLinks(tab.intro, onOpenTutorial)}</p>}
 
-            {tab.sections.map((section) => (
+            {tab.sections
+              .filter((section) => !(hideKeyboardShortcuts && section.title === KEYBOARD_SHORTCUTS_SECTION))
+              .map((section) => (
               <section key={section.title} className="help-section">
                 <h3 className="help-section-title">{section.title}</h3>
                 {section.intro && <p className="help-section-intro">{renderWithLinks(section.intro, onOpenTutorial)}</p>}

@@ -86,6 +86,7 @@ import {
 import TutorialPage from './tutorial/TutorialPage'
 import { tutorialTargetFor, type TutorialTarget } from './tutorial/tutorialLinks'
 import { useCompactLayout } from './useCompactLayout'
+import { useHasKeyboard } from './useHasKeyboard'
 import { BusyIndicator } from './BusyIndicator'
 import ConfirmDialog from './ConfirmDialog'
 import { afterPaint, useSettledValue, type BusyTask } from './busyTask'
@@ -757,6 +758,127 @@ function DragonStepper({
   )
 }
 
+/** Touch layout only: the selected Techniques-list row, alone, filling the
+ * dock. In the list the row's step player sits below its (often long)
+ * notation, and a Dynamic Dragon's substep player below that, so stepping
+ * through one meant scrolling the dock between the buttons and the text on
+ * every tap. Here the dock is split into a fixed head (back, name, ?,
+ * Apply), the reasoning text (the only part that scrolls, back to its top
+ * on every step), and one fixed row holding both players' controls at the
+ * bottom, within thumb reach - so the buttons never move. */
+function TechniqueFocusView({
+  instance,
+  onClose,
+  onApply,
+  canApply,
+  onLearn,
+  stepIndex,
+  onDragonStep,
+  substepIndex,
+  onSubstep,
+}: {
+  instance: TechniqueInstance
+  onClose: () => void
+  onApply: () => void
+  canApply: boolean
+  onLearn: (target: TutorialTarget) => void
+  stepIndex: number
+  onDragonStep: (delta: number) => void
+  substepIndex: number | null
+  onSubstep: (delta: number) => void
+}) {
+  const moves = instance.moves
+  const move = moves ? moves[Math.min(stepIndex, moves.length - 1)] : null
+  const substeps = move?.substeps && move.substeps.length > 1 ? move.substeps : null
+  const resolvedSubstepIndex = substeps ? (substepIndex ?? substeps.length - 1) : 0
+  return (
+    <div className="technique-focus">
+      <div className="technique-focus-head">
+        <button type="button" className="technique-focus-back" onClick={onClose} aria-label="Back to all techniques">
+          ‹ All
+        </button>
+        {/* A Dragon's notation is a one-line summary ("14 steps - eliminates
+            26 candidates"), so it goes under the name here rather than
+            taking a line of the text area, which on a short phone only has
+            room for a few lines; other techniques' notation is the whole
+            explanation and stays in the text area. */}
+        <span className="technique-focus-title" title={moves ? instance.notation : undefined}>
+          <span className="technique-focus-name">{instance.name}</span>
+          {moves && <span className="technique-focus-summary">{instance.notation}</span>}
+        </span>
+        <TechniqueLearnButton instance={instance} onLearn={onLearn} />
+        <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
+          Apply
+        </button>
+      </div>
+      {/* Keyed on the step, so each step's text starts scrolled to its top. */}
+      <div className="technique-focus-text" key={`${stepIndex}-${resolvedSubstepIndex}`}>
+        {!moves && <p className="technique-notation">{instance.notation}</p>}
+        {move && <p className="dragon-player-description">{move.description}</p>}
+        {substeps && (
+          <p className="dragon-substep-description technique-focus-substep">
+            {capitalizeFirst(substeps[resolvedSubstepIndex].clause)}.
+          </p>
+        )}
+      </div>
+      {moves && (
+        <div className="technique-focus-controls">
+          <div className="dragon-player-controls">
+            <button
+              type="button"
+              className="dragon-player-button"
+              aria-label="Previous step"
+              disabled={stepIndex <= 0}
+              onClick={() => onDragonStep(-1)}
+            >
+              ◀
+            </button>
+            <span className="dragon-player-step technique-focus-counter">
+              <span className="technique-focus-counter-label">Step</span>
+              {stepIndex + 1}/{moves.length}
+            </span>
+            <button
+              type="button"
+              className="dragon-player-button"
+              aria-label="Next step"
+              disabled={stepIndex >= moves.length - 1}
+              onClick={() => onDragonStep(1)}
+            >
+              ▶
+            </button>
+          </div>
+          {substeps && (
+            <div className="dragon-player-controls dragon-substep-controls">
+              <button
+                type="button"
+                className="dragon-player-button"
+                aria-label="Previous substep"
+                disabled={resolvedSubstepIndex <= 0}
+                onClick={() => onSubstep(-1)}
+              >
+                ◀
+              </button>
+              <span className="dragon-player-step technique-focus-counter">
+                <span className="technique-focus-counter-label">Substep</span>
+                {resolvedSubstepIndex + 1}/{substeps.length}
+              </span>
+              <button
+                type="button"
+                className="dragon-player-button"
+                aria-label="Next substep"
+                disabled={resolvedSubstepIndex >= substeps.length - 1}
+                onClick={() => onSubstep(1)}
+              >
+                ▶
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** "Find by elims": type the candidates you want gone (8r2c3, 2r3c4) and get
  * the Dragon or Dynamic Dragon Colouring that eliminates them, shown like a
  * row of the Techniques list - same name, summary and step player - with the
@@ -1155,7 +1277,9 @@ interface TechniquePanelProps {
   onSelectSolvePathStep: (index: number) => void
   onApply: () => void
   /** Opens the Hint popup (the Techniques tab's Hint button). */
-  onHint: () => void
+  /** Omitted: no Hint button in the header (the touch layout has its own
+   * in the toolbar). */
+  onHint?: () => void
   /** Opens the How It Works page on a technique's lesson - the ? at the
    * right of a Techniques / Solve Path row. */
   onLearn: (target: TutorialTarget) => void
@@ -1177,6 +1301,9 @@ interface TechniquePanelProps {
    * techniquePanelHeight) - the tabs and Apply stay put and the rest scrolls
    * - while a short one keeps its natural height. Null: no cap. */
   fittedHeight?: number | null
+  /** Touch layout: a selected Techniques-list row takes over the panel
+   * (TechniqueFocusView) instead of expanding inside the list. */
+  compact?: boolean
 }
 
 /** The panel to the left of the grid, with three tabs sharing one "Apply"
@@ -1228,8 +1355,27 @@ function TechniquePanel({
   onSolvePathTimeoutChange,
   panelRef,
   fittedHeight,
+  compact = false,
 }: TechniquePanelProps) {
   const fitted = fittedHeight != null
+  const focused = compact && tab === 'techniques' && techniquesRevealed ? instances.find((t) => t.id === activeId) : undefined
+  if (focused) {
+    return (
+      <div ref={panelRef} className="technique-panel technique-panel-focused">
+        <TechniqueFocusView
+          instance={focused}
+          onClose={() => onSelect(focused.id)}
+          onApply={onApply}
+          canApply={canApply}
+          onLearn={onLearn}
+          stepIndex={dragonStepIndex}
+          onDragonStep={onDragonStep}
+          substepIndex={dragonSubstepIndex}
+          onSubstep={onDragonSubstep}
+        />
+      </div>
+    )
+  }
   return (
     <div
       ref={panelRef}
@@ -1278,7 +1424,7 @@ function TechniquePanel({
           </button>
         </div>
         <div className="technique-header-actions">
-          {tab === 'techniques' && (
+          {tab === 'techniques' && onHint && (
             <button
               type="button"
               className="technique-hint-button"
@@ -1892,6 +2038,9 @@ export default function App() {
   // technique" link opens it on that technique's tab/sub-tab.
   const [tutorialTarget, setTutorialTarget] = useState<TutorialTarget | null>(null)
   const { compact, phone, landscape } = useCompactLayout()
+  // Touch device with no hardware keyboard: the Keyboard Input switches and
+  // keyboard-shortcut settings are hidden (always true on desktop).
+  const hasKeyboard = useHasKeyboard(compact)
 
   // Desktop: the Techniques panel ends level with the bottom of the "Drag or
   // paste a grid" row next to it. The grid is square and shrinks with the
@@ -1922,7 +2071,9 @@ export default function App() {
     observer.observe(document.body)
     return () => observer.disconnect()
   }, [compact])
-  const [compactSection, setCompactSection] = useState<CompactSection>('techniques')
+  // The touch layout opens on the digit pads - entering and marking digits
+  // is what a phone user does first; the Techniques list is a spoiler anyway.
+  const [compactSection, setCompactSection] = useState<CompactSection>('input')
   const [importText, setImportText] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   // Every explicitly started long operation still running (see
@@ -5154,11 +5305,26 @@ export default function App() {
   const toolbar = (
     <div className="main-toolbar">
       <div className="toolbar-group">
-        <button type="button" onClick={undo} disabled={busy || !canUndo}>
-          Undo
+        {/* Icons on a phone, so the one-row toolbar still fits the 💡 Hint. */}
+        <button
+          type="button"
+          className="undo-trigger"
+          onClick={undo}
+          disabled={busy || !canUndo}
+          aria-label={phone ? 'Undo' : undefined}
+          title={phone ? 'Undo' : undefined}
+        >
+          {phone ? '↶' : 'Undo'}
         </button>
-        <button type="button" onClick={redo} disabled={busy || !canRedo}>
-          Redo
+        <button
+          type="button"
+          className="redo-trigger"
+          onClick={redo}
+          disabled={busy || !canRedo}
+          aria-label={phone ? 'Redo' : undefined}
+          title={phone ? 'Redo' : undefined}
+        >
+          {phone ? '↷' : 'Redo'}
         </button>
         {/* On a phone, Clear grid / Techniques overview / ? move into the
             "⋯" menu at the end so the toolbar stays one row - every row
@@ -5169,6 +5335,23 @@ export default function App() {
           </button>
         )}
       </div>
+
+      {/* Touch layout: Hint lives here, in the middle of the toolbar, rather
+          than in the Techniques tab's header - it is wanted most while
+          playing on the Digits tab, and the dock header has no room for it.
+          The desktop keeps it beside Apply. */}
+      {compact && (
+        <button
+          type="button"
+          className="technique-hint-button toolbar-hint-button"
+          onClick={onOpenHint}
+          aria-label="Hint"
+          title="Get a hint about the easiest technique on the grid, one step at a time."
+        >
+          <span aria-hidden="true">💡</span>
+          {!phone && ' Hint'}
+        </button>
+      )}
 
       <div className="toolbar-group toolbar-group-end">
         {!phone && (
@@ -5196,12 +5379,21 @@ export default function App() {
         <DropdownMenu
           trackingName="Generate Puzzle"
           label={
+            phone ? (
+              // An icon like the 🐉 / ⚙ menus beside it, so the row still fits
+              // a 320px screen with the 💡 Hint button added to it.
+              generating ? (
+                '⏳'
+              ) : (
+                '🧩'
+              )
+            ) : (
             <>
               {generating ? (
                 'Generating…'
               ) : (
                 <>
-                  {phone ? 'Generate' : 'Generate Puzzle'}
+                  {'Generate Puzzle'}
                   {/* <span
                     style={{
                       fontSize: '0.45em',
@@ -5216,7 +5408,9 @@ export default function App() {
               )}{' '}
               <span className="dropdown-caret">▾</span>
             </>
+            )
           }
+          ariaLabel={phone ? (generating ? 'Generating puzzle' : 'Generate Puzzle') : undefined}
           buttonClassName="generate-puzzle-trigger"
         >
           <div className="dropdown-section">
@@ -5639,10 +5833,14 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           */}
-          <div className="dropdown-section">
-            <HotkeySettings hotkeys={hotkeys} onChange={setHotkeys} />
-          </div>
-          <div className="dropdown-divider" />
+          {hasKeyboard && (
+            <>
+              <div className="dropdown-section">
+                <HotkeySettings hotkeys={hotkeys} onChange={setHotkeys} />
+              </div>
+              <div className="dropdown-divider" />
+            </>
+          )}
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">Display &amp; hints</h3>
             <label className="menu-checkbox">
@@ -5786,7 +5984,8 @@ export default function App() {
       activeSolvePathIndex={activeSolvePathIndex}
       onSelectSolvePathStep={onSelectSolvePathStep}
       onApply={onApplyPanelSelection}
-      onHint={onOpenHint}
+      // The touch layout's Hint button is in the toolbar instead.
+      onHint={compact ? undefined : onOpenHint}
       onLearn={setTutorialTarget}
       canApply={
         techniquePanelTab === 'solve-path'
@@ -5824,6 +6023,7 @@ export default function App() {
       onSolvePathTimeoutChange={onSolvePathTimeoutChange}
       panelRef={techniquePanelRef}
       fittedHeight={compact ? null : techniquePanelHeight}
+      compact={compact}
     />
   )
 
@@ -6244,6 +6444,9 @@ export default function App() {
   // on and clicking either just flips the mode. Lives here rather than in
   // Settings so it is visible right next to the pads it affects.
   const keyboardInputToggle = (mode: 'solution' | 'candidate') => {
+    if (!hasKeyboard) {
+      return null
+    }
     const active = keyboardMode === mode
     return (
       <button
@@ -6703,6 +6906,7 @@ export default function App() {
         <HelpModal
           onClose={() => setHelpOpen(null)}
           initialTab={helpOpen.tab}
+          hideKeyboardShortcuts={!hasKeyboard}
           onOpenTutorial={() => {
             setHelpOpen(null)
             setTutorialTarget({ tab: 'basics' })
@@ -6800,7 +7004,17 @@ export default function App() {
             its top instead of wherever the previous tab was left. */}
         <div
           key={compactSection}
-          className={`compact-dock compact-dock-${compactSection}`}
+          className={[
+            'compact-dock',
+            `compact-dock-${compactSection}`,
+            // The focused technique (TechniqueFocusView) fills the dock and
+            // scrolls only its own text, so the dock itself must not scroll.
+            compactSection === 'techniques' && techniquePanelTab === 'techniques' && techniquesRevealed && activeTechnique
+              ? 'compact-dock-focused'
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
           role="tabpanel"
           id="compact-dock"
           aria-labelledby={`compact-tab-${compactSection}`}
