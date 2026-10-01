@@ -27,7 +27,7 @@ import {
   type AicLinkRef,
   type LinkGraphs,
   type ShortAicInstance,
-  type SingleDigitAicPattern,
+  type ShortAicPattern,
 } from './SudokuShortAicFinder'
 import { sudokuUnits } from './SudokuUnits'
 import { SudokuUniqueRectangleFinder, type UniqueRectangleInstance } from './SudokuUniqueRectangleFinder'
@@ -315,7 +315,7 @@ export interface DragonRule3Substep {
     links: AicLinkRef[]
     /** A Short Single-Digit AIC that is a named pattern (Skyscraper, Empty
      * Rectangle, ...) - see dynamicDragonLabel. */
-    pattern?: SingleDigitAicPattern
+    pattern?: ShortAicPattern
   }
   /** 'BUG+N' only: the name the UI gives it - "BUG+1", "BUG+2" or "BUG+3"
    * (see dynamicDragonLabel). */

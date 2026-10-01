@@ -45,9 +45,10 @@ import {
   type AicLinkRef,
   type ShortAicInstance,
   type ShortAicKind,
-  type SingleDigitAicPattern,
+  type ShortAicPattern,
 } from './sudoku/SudokuShortAicFinder'
 import { SudokuSingleFinder } from './sudoku/SudokuSingleFinder'
+import { SudokuSueDeCoqFinder, type SueDeCoqInstance } from './sudoku/SudokuSueDeCoqFinder'
 import { explainUniqueRectangle, SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './sudoku/types'
 
@@ -61,6 +62,7 @@ export const fishFinder = new SudokuFishFinder()
 export const shortAicFinder = new SudokuShortAicFinder()
 export const genericAicFinder = new SudokuGenericAicFinder()
 export const alsXzFinder = new SudokuAlsXzFinder()
+export const sueDeCoqFinder = new SudokuSueDeCoqFinder()
 export const uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
 export const bugPlusNFinder = new SudokuBugPlusNFinder()
 export const avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
@@ -109,9 +111,9 @@ export interface TechniqueInstance {
   /** A link to or from a grouped node (Empty Rectangle) also carries the
    * group's cells, drawn outlined with the link meeting its middle. */
   aicLinks?: AicLinkRef[]
-  /** Short Single-Digit AIC only: the named pattern the chain is (see
-   * SingleDigitAicPattern) and its shape in words, for the Hint popup. */
-  aicPattern?: SingleDigitAicPattern
+  /** Short Single-Digit AIC / Short AIC only: the named pattern the chain
+   * is (see ShortAicPattern) and its shape in words, for the Hint popup. */
+  aicPattern?: ShortAicPattern
   aicPatternText?: string
   /** Dragon Colouring only: the ordered move log driving the move-by-move
    * player. When present, the panel row opens a stepper instead of
@@ -129,9 +131,10 @@ export interface TechniqueInstance {
  * documented difficulty order: Single -> LockedCandidate ->
  * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+N -> AvoidableRectangle
  * -> BivalueOddagon
- * -> Color -> X-Wing -> Short Single-Digit AIC -> Finned X-Wing -> Short AIC
- * -> Swordfish -> Finned Swordfish -> Medusa -> Generic AIC -> ALS-xz -> Dragon
- * -> Double Dragon -> Dynamic Dragon -> Double Dynamic Dragon).
+ * -> Color -> X-Wing -> Short Single-Digit AIC -> Finned X-Wing -> Medusa
+ * -> Short AIC -> Swordfish -> Finned Swordfish -> Sue-de-Coq (exotic)
+ * -> Generic AIC -> ALS-xz -> Dragon -> Double Dragon -> Dynamic Dragon
+ * -> Double Dynamic Dragon).
  * Techniques sharing a tier are equally "simple" as far as this goes - a
  * naked pair is no simpler than a naked quad here, since a solver who can
  * spot one can spot the other; what matters is the category, not which
@@ -152,21 +155,35 @@ export const RANK_SIMPLE_COLOR = 7
 export const RANK_X_WING = 8
 export const RANK_SHORT_SINGLE_DIGIT_AIC = 9
 export const RANK_FINNED_X_WING = 10
-export const RANK_SHORT_AIC = 11
-export const RANK_SWORDFISH = 12
-export const RANK_FINNED_SWORDFISH = 13
-export const RANK_MEDUSA = 14
+// 3D Medusa before Short AIC (and so before Swordfish), by request.
+export const RANK_MEDUSA = 11
+export const RANK_SHORT_AIC = 12
+export const RANK_SWORDFISH = 13
+export const RANK_FINNED_SWORDFISH = 14
+// Exotic (Settings -> Exotic Techniques, off by default), but ranked before
+// Generic AIC, ALS-xz and every Dragon, by request.
+export const RANK_SUE_DE_COQ = 15
 // Harder than 3D Medusa: a long chain is harder to find than a colouring.
-export const RANK_GENERIC_AIC = 15
+export const RANK_GENERIC_AIC = 16
 // The one non-colouring technique ranked above Generic AIC.
-export const RANK_ALS_XZ = 16
-export const RANK_DRAGON = 17
+export const RANK_ALS_XZ = 17
+export const RANK_DRAGON = 18
 // Two plain Dragons linked together - no Dynamic Dragon techniques.
-export const RANK_DOUBLE_DRAGON = 18
-export const RANK_DYNAMIC_DRAGON = 19
+export const RANK_DOUBLE_DRAGON = 19
+export const RANK_DYNAMIC_DRAGON = 20
 // Two Dragons linked, at least one of them Dynamic - only where single
 // Dynamic Dragon is stuck, so the hardest tier.
-export const RANK_DOUBLE_DYNAMIC_DRAGON = 20
+export const RANK_DOUBLE_DYNAMIC_DRAGON = 21
+
+/** Settings -> Exotic Techniques: advanced techniques the solver only looks
+ * for when enabled there (all off by default), each at its own rank. Never used inside Dynamic
+ * Dragon and never by the puzzle generator (so the stocks needn't be checked
+ * against them). */
+export type ExoticTechnique = 'sue de coq'
+export const ALL_EXOTIC_TECHNIQUES: readonly ExoticTechnique[] = ['sue de coq']
+export const EXOTIC_TECHNIQUE_NAMES: Record<ExoticTechnique, string> = {
+  'sue de coq': 'Sue-de-Coq',
+}
 
 const FISH_RANKS: Record<FishTechnique, number> = {
   'x-wing': RANK_X_WING,
@@ -580,13 +597,21 @@ export function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: 
   // A grouped end reads "2 in (r8c3, r9c3)": one of those cells is the digit.
   const endText = (n: typeof x) => (n.cells ? `${n.digit} in (${n.cells.map(([r, c]) => cellRef(r, c)).join(', ')})` : aicNodeText(n))
   const view = aicChainView(aic)
+  // A W-Wing is explained as the contradiction it is, in the user's own
+  // wording, instead of as a chain.
+  const wWing = aic.wWing
+  const notation = wWing
+    ? `If any of these eliminated candidates (${aic.eliminations.map((e) => `${e.digit}${cellRef(e.row, e.col)}`).join(', ')}) were true, ` +
+      `then it would force the remote pair {${wWing.digits.join(',')}} in ${wWing.cells.map(([r, c]) => cellRef(r, c)).join(', ')} to both be ${wWing.linkDigit}. ` +
+      `This would mean there are no places for ${wWing.linkDigit} in ${wWing.unitName}, which is impossible!`
+    : `${aicChainText(aic.nodes)} states that either ${endText(x)} or ${endText(y)} must be true, so ${eliminationText}.`
   return {
     id: `${idPrefix}-${aic.eliminationType}-${view.candidates.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
     name,
-    // A named pattern (Skyscraper, Empty Rectangle, ...) reads like any AIC:
-    // the row's name already says which it is, and its shape in words
-    // (patternText) is left to the Hint popup.
-    notation: `${aicChainText(aic.nodes)} states that either ${endText(x)} or ${endText(y)} must be true, so ${eliminationText}.`,
+    // A named single-digit pattern (Skyscraper, Empty Rectangle, ...) reads
+    // like any AIC: the row's name already says which it is, and its shape
+    // in words (patternText) is left to the Hint popup.
+    notation,
     usedCells: [],
     usedCandidates: [],
     eliminatedCandidates: aic.eliminations,
@@ -781,6 +806,7 @@ export function buildTechniqueInstances(
   // Which cells are givens - only Avoidable Rectangle needs it, and it is
   // skipped (here and inside Dynamic Dragon) without one.
   givens: GivenMask | null = null,
+  enabledExotic: ReadonlySet<ExoticTechnique> = new Set(),
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
 
@@ -1140,8 +1166,8 @@ export function buildTechniqueInstances(
   instances.push(...rule1Instances, ...rule2Instances)
 
   // Fish and the short AICs interleave in the difficulty order (X-Wing <
-  // Short Single-Digit AIC < Finned X-Wing < Short AIC < Swordfish < Finned
-  // Swordfish), so they're gathered together and pushed rank by rank. Short
+  // Short Single-Digit AIC < Finned X-Wing < [3D Medusa] < Short AIC <
+  // Swordfish < Finned Swordfish), so they're gathered together and pushed rank by rank. Short
   // Single-Digit AIC (length 3, one digit throughout - a classic X-chain) and
   // Short AIC (everything else that finder finds: length 5, or the rare
   // length-3 chain that switches digits via a same-cell link) are two
@@ -1173,16 +1199,19 @@ export function buildTechniqueInstances(
         buildAicInstance(
           aic,
           isSingleDigit ? 'short-single-digit-aic' : 'short-aic',
-          // A named pattern (Skyscraper, Empty Rectangle, ...) is shown by
-          // its name; it is still this one technique.
-          isSingleDigit ? (aic.pattern ?? 'Short Single-Digit AIC') : `Short AIC (Type ${aic.eliminationType})`,
+          // A named pattern (Skyscraper, Empty Rectangle, W-Wing, ...) is
+          // shown by its name; it is still this one technique.
+          aic.pattern ?? (isSingleDigit ? 'Short Single-Digit AIC' : `Short AIC (Type ${aic.eliminationType})`),
         ),
       )
     }
   }
-  // Stable, so each technique keeps the finder's own order.
+  // Stable, so each technique keeps the finder's own order. 3D Medusa ranks
+  // inside this tier (after Finned X-Wing, before Short AIC), so the tier is
+  // pushed in two halves around it - Medusa rows themselves are never hidden
+  // (see below), but they do hide the harder half's redundant rows.
   middleTier.sort((a, b) => a.techniqueRank - b.techniqueRank)
-  pushUnlessCoveredByEasier(instances, middleTier)
+  pushUnlessCoveredByEasier(instances, middleTier.filter((instance) => instance.techniqueRank < RANK_MEDUSA))
 
   // 3D Medusa: one row per chain, listing everything that chain proves -
   // its mass elimination (rules 1-2, if any) and every rule 3/4/5
@@ -1207,6 +1236,16 @@ export function buildTechniqueInstances(
   }
 
   instances.push(...massMedusaInstances, ...otherMedusaInstances)
+
+  pushUnlessCoveredByEasier(instances, middleTier.filter((instance) => instance.techniqueRank > RANK_MEDUSA))
+
+  // Exotic techniques (Settings -> Exotic Techniques), each at its own rank.
+  // Sue-de-Coq: after Finned Swordfish, before Generic AIC. A small one is
+  // often a naked/hidden subset or locked candidate in disguise, so a row an
+  // easier one already makes in full isn't listed.
+  if (enabledExotic.has('sue de coq')) {
+    pushUnlessCoveredByEasier(instances, sueDeCoqFinder.find(board, candidates).map(buildSueDeCoqInstance))
+  }
 
   // Generic AIC (chains longer than Short AIC's, up to GENERIC_AIC_MAX_LENGTH
   // links) ranks after 3D Medusa: a long chain that only reaches what any
@@ -1379,6 +1418,35 @@ function buildAlsXzInstance(als: AlsXzInstance): TechniqueInstance {
   }
 }
 
+/** A Techniques-panel row for one Sue-de-Coq. The intersection cells and the
+ * two bivalue cells are the basis (the bivalue cells also get the distinct
+ * border); the line's digits are blue and the box's yellow, in all the cells
+ * they're locked to. */
+function buildSueDeCoqInstance(s: SueDeCoqInstance): TechniqueInstance {
+  const refs = (cells: readonly (readonly [number, number])[], digits: readonly number[]): TechniqueCandidateRef[] =>
+    cells.flatMap(([row, col]) => digits.map((digit) => ({ row, col, digit })))
+  // Grouped by cell ("r6c9 cannot be 269"): eliminations are sorted by cell.
+  const byCell = new Map<string, number[]>()
+  for (const e of s.eliminations) {
+    const key = cellRef(e.row, e.col)
+    byCell.set(key, [...(byCell.get(key) ?? []), e.digit])
+  }
+  const eliminationText = [...byCell].map(([cell, digits]) => `${cell} cannot be ${digits.join('')}`).join(', ')
+  return {
+    id: `sue-de-coq-${s.cells.map(([r, c]) => `${r}${c}`).join('.')}-${s.lineCell.join('')}-${s.boxCell.join('')}`,
+    name: 'Sue-de-Coq',
+    notation: `${s.reasonText}, thus ${eliminationText}.`,
+    usedCells: [...s.cells, s.lineCell, s.boxCell],
+    usedCandidates: refs(s.cells, s.extraDigits),
+    eliminatedCandidates: s.eliminations,
+    solvedCandidates: [],
+    blueCandidates: refs([...s.cells, s.lineCell], s.lineDigits),
+    yellowCandidates: refs([...s.cells, s.boxCell], s.boxDigits),
+    medusaHighlightCells: [s.lineCell, s.boxCell],
+    techniqueRank: RANK_SUE_DE_COQ,
+  }
+}
+
 export function buildDragonInstance(
   board: Board,
   candidates: CandidateGrid,
@@ -1474,18 +1542,18 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
       'als-xz',
     ] as const
   ).filter((t) => techniquesUsed.has(t))
-  // A Short Single-Digit AIC is listed by the pattern(s) it was (a
-  // Skyscraper, an Empty Rectangle, ...), plain "short single-digit aic"
+  // A short AIC is listed by the pattern(s) it was (a Skyscraper, an Empty
+  // Rectangle, a W-Wing, ...), plain "short single-digit aic" / "short aic"
   // only for a chain that isn't one of them.
-  const singleDigitLabels = [
+  const patternLabels = (technique: 'short single-digit aic' | 'short aic') => [
     ...new Set(
       moves.flatMap((m) =>
-        (m.substeps ?? [])
-          .filter((s) => s.technique === 'short single-digit aic')
-          .map((s) => s.aic?.pattern?.toLowerCase() ?? 'short single-digit aic'),
+        (m.substeps ?? []).filter((s) => s.technique === technique).map((s) => s.aic?.pattern?.toLowerCase() ?? technique),
       ),
     ),
   ]
+  const singleDigitLabels = patternLabels('short single-digit aic')
+  const shortAicLabels = patternLabels('short aic')
   // BUG+N is listed by the N it had: "BUG+2", not the internal "BUG+N".
   const bugLabels = [
     ...new Set(
@@ -1493,7 +1561,13 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
     ),
   ].sort()
   const labels = orderedTechniques.flatMap((t) =>
-    t === 'short single-digit aic' && singleDigitLabels.length > 0 ? singleDigitLabels : t === 'BUG+N' ? bugLabels : [t],
+    t === 'short single-digit aic' && singleDigitLabels.length > 0
+      ? singleDigitLabels
+      : t === 'short aic' && shortAicLabels.length > 0
+        ? shortAicLabels
+        : t === 'BUG+N'
+          ? bugLabels
+          : [t],
   )
   return labels.length > 0
     ? `Dynamic Dragon Colouring (${labels.join(', ')})`
@@ -1726,6 +1800,7 @@ export function buildSolvePath(
   doubleDragonEnabled = false,
   doubleDynamicDragonEnabled = false,
   givens: GivenMask | null = null,
+  enabledExotic: ReadonlySet<ExoticTechnique> = new Set(),
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1776,6 +1851,7 @@ export function buildSolvePath(
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
       givens,
+      enabledExotic,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart

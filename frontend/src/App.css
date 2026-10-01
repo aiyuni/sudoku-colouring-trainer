@@ -389,6 +389,13 @@ html.app-busy .busy-cancel,
   color: #475569;
 }
 
+/* The panel is width: min-content, so a title wraps at every opportunity;
+   this keeps a long title and its ? help button on one line (the panel
+   widens to fit, up to its max-width). */
+.dropdown-section-title-nowrap {
+  white-space: nowrap;
+}
+
 .dropdown-divider {
   height: 1px;
   background: #e2e8f0;
@@ -620,6 +627,24 @@ html.app-busy .busy-cancel,
 .ocr-proofread-warning {
   color: #b91c1c;
   font-weight: 600;
+}
+
+/* The technique sections while an imported screenshot's digits are not yet
+   locked as givens (techniquesLockedNotice in App.tsx). */
+.techniques-locked {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.techniques-locked .technique-empty,
+.techniques-locked .ocr-proofread-warning {
+  margin: 0;
+}
+
+.autosolve-locked .autosolve-subgroup {
+  opacity: 0.45;
 }
 
 .ocr-proofread-actions {
@@ -985,10 +1010,10 @@ html.app-busy .busy-cancel,
   opacity: 0.85;
 }
 
-/* Short AIC chain overlay: same 900x900 coordinate space as the strong-link
-   overlay above, but each link is a curved (quadratic-bezier) path instead
-   of a straight line, so a strong and a weak link between nearby pips never
-   visually merge into one. */
+/* AIC chain overlay: same 900x900 coordinate space as the strong-link
+   overlay above. Each link is straight where that reads cleanly, else a
+   curve bent to keep clear of the chain and of other links - see
+   aicLinkLayout.ts. */
 .aic-links {
   position: absolute;
   inset: 0;

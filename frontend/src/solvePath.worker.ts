@@ -1,7 +1,7 @@
 import type { Board, CandidateGrid } from './sudoku/types'
 import type { Rule3Technique } from './sudoku/SudokuDragonFinder'
 import type { FishTechnique } from './sudoku/SudokuFishFinder'
-import { buildSolvePath, type SolvePathResult } from './techniqueEngine'
+import { buildSolvePath, type ExoticTechnique, type SolvePathResult } from './techniqueEngine'
 
 /** Everything buildSolvePath takes besides the grid - plain data, so it
  * survives the trip into the worker (a Set would too, but an array keeps the
@@ -30,6 +30,8 @@ export interface SolvePathOptions {
   doubleDragonEnabled: boolean
   /** Double Dynamic Dragon Colouring enabled (off by default). */
   doubleDynamicDragonEnabled: boolean
+  /** The exotic techniques enabled in Settings (none by default). */
+  enabledExotic: ExoticTechnique[]
 }
 
 export interface SolvePathWorkerRequest {
@@ -71,6 +73,7 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.doubleDragonEnabled,
         options.doubleDynamicDragonEnabled,
         givens,
+        new Set(options.enabledExotic),
       ),
     }
   } catch (error) {

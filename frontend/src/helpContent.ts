@@ -203,7 +203,8 @@ export const HELP_TABS: HelpTab[] = [
           {
             name: 'Enable Short AIC',
             settingKey: 'shortAicEnabled',
-            description: 'General AICs of length up to 5. Needs Short Single-Digit AIC ON.',
+            description:
+              'General AICs of length up to 5, including W-Wings, which are shown by that name and listed first. Needs Short Single-Digit AIC ON.',
           },
           {
             name: 'Enable Generic AIC',
@@ -240,6 +241,21 @@ export const HELP_TABS: HelpTab[] = [
             settingKey: 'alsXzEnabled',
             description:
               'Enable ALS-xz to be found by the solver.',
+          },
+        ],
+      },
+      {
+        title: 'Exotic Techniques',
+        intro:
+          'Advanced techniques for experienced solvers, hidden until you click Show exotic techniques. ' +
+          'Once enabled, the solver finds them, each at its own place in the difficulty order (Sue-de-Coq: after Finned Swordfish, before Generic AIC). ' +
+          'They are never used inside Dynamic Dragon Colouring and do not affect puzzle generation.',
+        items: [
+          {
+            name: 'Enable Sue-de-Coq',
+            settingKey: 'sueDeCoqEnabled',
+            description:
+              'Two or three cells where a row or column crosses a box hold two more digits than cells. A two-digit cell in the row/column and another in the box, each using digits from that set but none in common, lock those digits into the row/column and the box.',
           },
         ],
       },

@@ -103,16 +103,33 @@ export interface ShortAicInstance {
    * other end's digit. */
   eliminationType: 1 | 2
   eliminations: CandidateElimination[]
-  /** Short Single-Digit AICs only: the named pattern the chain is, if any
-   * (see classifySingleDigitPattern and findEmptyRectangles). The UI shows
-   * this name instead of "Short Single-Digit AIC"; it is still that one
+  /** The named pattern the chain is, if any: a Short Single-Digit AIC
+   * pattern (see classifySingleDigitPattern and findEmptyRectangles), or a
+   * W-Wing, the one named Short AIC (see findWWings). The UI shows this name
+   * instead of "Short Single-Digit AIC" / "Short AIC"; it is still that one
    * technique (same toggle, same auto-solve button, same Dynamic Dragon
    * tier). */
-  pattern?: SingleDigitAicPattern
+  pattern?: ShortAicPattern
   /** With `pattern`: the pattern's shape in words ("2 appears only twice in
    * column 3 (r3c3, r8c3) and ..."), for the Hint popup - the Techniques
-   * row shows only the chain, like any other AIC. */
+   * row shows only the chain, like any other AIC (a W-Wing has its own
+   * wording, see `wWing`). */
   patternText?: string
+  /** W-Wings only: what the Techniques row's explanation is worded from. */
+  wWing?: WWingDetails
+}
+
+/** A W-Wing's parts: two cells holding only the same two digits, and a unit
+ * where every candidate of one of them (`linkDigit`) sees one of the two
+ * cells - so they can't both be `linkDigit`, and one is `eliminatedDigit`. */
+export interface WWingDetails {
+  cells: readonly [readonly [number, number], readonly [number, number]]
+  /** The two cells' digits, ascending. */
+  digits: readonly [number, number]
+  linkDigit: number
+  eliminatedDigit: number
+  /** "column 3" */
+  unitName: string
 }
 
 /** The named shapes a Short Single-Digit AIC can take, as Sudoku.Coach
@@ -121,6 +138,10 @@ export interface ShortAicInstance {
  * one the plain chain search can't find: its chain runs through a grouped
  * node, see findEmptyRectangles. */
 export type SingleDigitAicPattern = 'Skyscraper' | 'Two-String Kite' | 'Crane' | 'Empty Rectangle'
+
+/** Every named pattern an AIC row can carry: the single-digit ones, plus
+ * W-Wing, a (general) Short AIC. */
+export type ShortAicPattern = SingleDigitAicPattern | 'W-Wing'
 
 /** Which chain explains an elimination set best when several do (see
  * pickBestPerEliminationSet): Sudoku.Coach's own order (it tries Skyscraper,
@@ -326,7 +347,7 @@ function eliminationSetKey(eliminations: readonly CandidateElimination[]): strin
 }
 
 function patternPreference(instance: ShortAicInstance): number {
-  return instance.pattern ? PATTERN_PREFERENCE[instance.pattern] : UNNAMED_PREFERENCE
+  return instance.pattern && instance.pattern !== 'W-Wing' ? PATTERN_PREFERENCE[instance.pattern] : UNNAMED_PREFERENCE
 }
 
 /** When several chains reach the exact same elimination(s), keep only the
@@ -337,7 +358,12 @@ function patternPreference(instance: ShortAicInstance): number {
  * a Skyscraper is never listed as a plain chain just because an unnamed
  * chain to the same eliminations happened to be found first. That last rule
  * only compares single-digit chains with each other, so it never changes
- * whether an elimination set counts as single-digit or general. */
+ * whether an elimination set counts as single-digit or general.
+ *
+ * Likewise a W-Wing beats any other general Short AIC to the same
+ * eliminations, whatever their lengths (by request: a W-Wing is always shown
+ * as one) - but never a single-digit chain, which is a different, easier
+ * technique and is always shorter. */
 export function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]): ShortAicInstance[] {
   const bestBySet = new Map<string, ShortAicInstance>()
   for (const instance of instances) {
@@ -345,6 +371,17 @@ export function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]
     const current = bestBySet.get(key)
     if (!current) {
       bestBySet.set(key, instance)
+      continue
+    }
+    const instanceIsWWing = instance.pattern === 'W-Wing'
+    if (
+      instanceIsWWing !== (current.pattern === 'W-Wing') &&
+      classifyShortAic(instance) === 'general' &&
+      classifyShortAic(current) === 'general'
+    ) {
+      if (instanceIsWWing) {
+        bestBySet.set(key, instance)
+      }
       continue
     }
     if (instance.links.length < current.links.length) {
@@ -713,6 +750,146 @@ export function findEmptyRectangles(
   return out
 }
 
+// ---- W-Wing -----------------------------------------------------------------
+
+/** "row 4", "column 3", "box 7" for an index into sudokuUnits(). */
+function unitName(index: number): string {
+  // sudokuUnits() order: the 9 rows, then the 9 columns, then the 9 boxes.
+  const kind = index < BOARD_SIZE ? 'row' : index < 2 * BOARD_SIZE ? 'column' : 'box'
+  return `${kind} ${(index % BOARD_SIZE) + 1}`
+}
+
+/**
+ * W-Wing, as Sudoku.Coach's solver defines it (read from its code behind
+ * sudoku.coach/en/learn/w-wing): two cells A and B that don't see each other
+ * (seeing each other they'd be a naked pair) holding only the same two digits
+ * {L, E}, and a unit, containing neither, in which every candidate for L sees
+ * A or B. A and B can't both be L - that unit would have nowhere left for L -
+ * so one of them is E, and E goes from every cell seeing both.
+ *
+ * Usually the unit is a conjugate pair (one L seeing A, one seeing B), but it
+ * needn't be: it may hold more L candidates, as long as each sees A or B. As
+ * a chain it is a Short AIC of length 5, through two (possibly grouped)
+ * nodes for the unit's L candidates:
+ *
+ *   E(A) = L(A) - L(unit cells seeing A) = L(the unit's other cells) - L(B) = E(B)
+ *
+ * The plain chain search finds the conjugate-pair W-Wings too (under no
+ * name); pickBestPerEliminationSet then keeps this, named, version. A unit
+ * where no L candidate sees one of the wings is skipped (Sudoku.Coach accepts
+ * it): that proves more - the other wing is E outright - and has no chain of
+ * this shape. Each wing pair and link digit is reported once, through its unit
+ * with the fewest L candidates (a plain conjugate pair if there is one).
+ */
+export function findWWings(board: Board, candidates: CandidateGrid): ShortAicInstance[] {
+  type Cell = readonly [number, number]
+  const out: ShortAicInstance[] = []
+  const has = (row: number, col: number, digit: number) => board[row][col] === 0 && candidates[row][col][digit - 1]
+  const units = sudokuUnits()
+  const bivalue: Array<{ cell: Cell; digits: number[] }> = []
+  for (let row = 0; row < BOARD_SIZE; row++) {
+    for (let col = 0; col < BOARD_SIZE; col++) {
+      if (board[row][col] === 0) {
+        const digits = markedCandidateDigits(candidates[row][col])
+        if (digits.length === 2) {
+          bivalue.push({ cell: [row, col], digits })
+        }
+      }
+    }
+  }
+  for (let i = 0; i < bivalue.length; i++) {
+    for (let j = i + 1; j < bivalue.length; j++) {
+      const a = bivalue[i]
+      const b = bivalue[j]
+      if (a.digits[0] !== b.digits[0] || a.digits[1] !== b.digits[1] || sameUnit(a.cell, b.cell)) {
+        continue
+      }
+      for (const [linkDigit, eliminatedDigit] of [
+        [a.digits[0], a.digits[1]],
+        [a.digits[1], a.digits[0]],
+      ]) {
+        const eliminations: CandidateElimination[] = []
+        for (let row = 0; row < BOARD_SIZE; row++) {
+          for (let col = 0; col < BOARD_SIZE; col++) {
+            if (has(row, col, eliminatedDigit) && sameUnit([row, col], a.cell) && sameUnit([row, col], b.cell)) {
+              eliminations.push({ row, col, digit: eliminatedDigit })
+            }
+          }
+        }
+        if (eliminations.length === 0) {
+          continue
+        }
+        let bestUnit = -1
+        let seesA: Cell[] = []
+        let seesB: Cell[] = []
+        for (let unitIndex = 0; unitIndex < units.length; unitIndex++) {
+          const unit = units[unitIndex]
+          // A unit with L already placed has no L to place; one holding a
+          // wing has an L candidate (the wing) that sees neither wing.
+          if (unit.some(([r, c]) => board[r][c] === linkDigit)) {
+            continue
+          }
+          const withL = unit.filter(([r, c]) => has(r, c, linkDigit))
+          if (withL.some(([r, c]) => (r === a.cell[0] && c === a.cell[1]) || (r === b.cell[0] && c === b.cell[1]))) {
+            continue
+          }
+          if (!withL.every((cell) => sameUnit(cell, a.cell) || sameUnit(cell, b.cell))) {
+            continue
+          }
+          // Split into the chain's two groups. A cell seeing both wings can
+          // go in either; it joins B's group unless that would leave A's
+          // empty (B's then takes only the cells that don't see A).
+          let unitSeesA = withL.filter((cell) => sameUnit(cell, a.cell) && !sameUnit(cell, b.cell))
+          let unitSeesB = withL.filter((cell) => sameUnit(cell, b.cell))
+          if (unitSeesA.length === 0) {
+            unitSeesA = withL.filter((cell) => sameUnit(cell, a.cell))
+            unitSeesB = withL.filter((cell) => !sameUnit(cell, a.cell))
+          }
+          if (unitSeesA.length === 0 || unitSeesB.length === 0) {
+            continue
+          }
+          if (bestUnit < 0 || withL.length < seesA.length + seesB.length) {
+            bestUnit = unitIndex
+            seesA = unitSeesA
+            seesB = unitSeesB
+          }
+        }
+        if (bestUnit < 0) {
+          continue
+        }
+        const nodes: AicCandidate[] = [
+          { row: a.cell[0], col: a.cell[1], digit: eliminatedDigit },
+          { row: a.cell[0], col: a.cell[1], digit: linkDigit },
+          groupNode(linkDigit, seesA),
+          groupNode(linkDigit, seesB),
+          { row: b.cell[0], col: b.cell[1], digit: linkDigit },
+          { row: b.cell[0], col: b.cell[1], digit: eliminatedDigit },
+        ]
+        out.push({
+          nodes,
+          links: nodes.slice(1).map((to, k) => ({ from: nodes[k], to, kind: k % 2 === 0 ? 'strong' : 'weak' })),
+          length: 5,
+          isSingleDigit: false,
+          eliminationType: 1,
+          eliminations,
+          pattern: 'W-Wing',
+          patternText:
+            `${cellText(a.cell[0], a.cell[1])} and ${cellText(b.cell[0], b.cell[1])} both hold only {${a.digits.join(',')}}, ` +
+            `and every ${linkDigit} in ${unitName(bestUnit)} sees one of them`,
+          wWing: {
+            cells: [a.cell, b.cell],
+            digits: [a.digits[0], a.digits[1]],
+            linkDigit,
+            eliminatedDigit,
+            unitName: unitName(bestUnit),
+          },
+        })
+      }
+    }
+  }
+  return out
+}
+
 /**
  * Rectangle Elimination (sudokuwiki.org/Rectangle_Elimination), the method
  * sudokuwiki now uses in place of Empty Rectangles. Not used by the app -
@@ -905,12 +1082,18 @@ export class SudokuShortAicFinder {
     // grouped nodes the link graph above doesn't have - found separately and
     // judged alongside the plain chains.
     instances.push(...findEmptyRectangles(board, candidates))
+    // W-Wings likewise: a grouped one is out of the link graph's reach, and
+    // a plain one needs its name.
+    instances.push(...findWWings(board, candidates))
 
     // Bidirectional traversal already collapsed forward/backward duplicates
     // of the *same* chain (see chainDedupeKey); this collapses *different*
     // chains that happen to reach the same conclusion, keeping only the
-    // most elegant one per elimination set.
-    return pickBestPerEliminationSet(instances)
+    // most elegant one per elimination set. W-Wings go first, by request -
+    // in the Techniques list and as Dynamic Dragon's first pick among
+    // Short AICs.
+    const best = pickBestPerEliminationSet(instances)
+    return [...best.filter((aic) => aic.pattern === 'W-Wing'), ...best.filter((aic) => aic.pattern !== 'W-Wing')]
   }
 
   findShortAicEliminations(board: Board, candidates: CandidateGrid): CandidateElimination[] {

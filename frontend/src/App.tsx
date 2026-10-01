@@ -103,6 +103,7 @@ import {
 import { loadSavedGrid, loadSavedSettings, saveGrid, saveSettings } from './persistedState'
 import { isNativePasteHotkey, keyNameOf, matchHotkey, type HotkeyBindings } from './hotkeys'
 import HotkeySettings from './HotkeySettings'
+import { layoutAicOverlay } from './aicLinkLayout'
 import {
   singleFinder,
   lockedCandidateFinder,
@@ -137,6 +138,8 @@ import {
   type SolvePathResult,
   boardsEqual,
   candidatesEqual,
+  EXOTIC_TECHNIQUE_NAMES,
+  type ExoticTechnique,
 } from './techniqueEngine'
 import './App.css'
 
@@ -395,22 +398,6 @@ function pipCenter(row: number, col: number, digit: number) {
     x: col * CELL_SIZE + (pipCol + 0.5) * PIP_SIZE,
     y: row * CELL_SIZE + (pipRow + 0.5) * PIP_SIZE,
   }
-}
-
-/** A quadratic-bezier path between two candidate pip centers, bowed out
- * perpendicular to the line between them - Short AIC's chain links are
- * drawn curved (rather than straight, like the strong-link overlay) so
- * overlapping links stay visually distinguishable. */
-function curvedPath(p1: { x: number; y: number }, p2: { x: number; y: number }): string {
-  const mx = (p1.x + p2.x) / 2
-  const my = (p1.y + p2.y) / 2
-  const dx = p2.x - p1.x
-  const dy = p2.y - p1.y
-  const length = Math.hypot(dx, dy) || 1
-  const curvature = Math.min(60, length * 0.25)
-  const cx = mx + (-dy / length) * curvature
-  const cy = my + (dx / length) * curvature
-  return `M ${p1.x} ${p1.y} Q ${cx} ${cy} ${p2.x} ${p2.y}`
 }
 
 /** Cell groups (units) a strong link can form within: each row, column, and box. */
@@ -1321,6 +1308,10 @@ interface TechniquePanelProps {
   /** Touch layout: a selected Techniques-list row takes over the panel
    * (TechniqueFocusView) instead of expanding inside the list. */
   compact?: boolean
+  /** Shown instead of the whole panel (tabs, Apply and all) while an
+   * imported screenshot's digits are still waiting to be locked as givens -
+   * until then a misread digit would make every technique wrong. */
+  locked?: ReactNode
 }
 
 /** The panel to the left of the grid, with three tabs sharing one "Apply"
@@ -1373,8 +1364,20 @@ function TechniquePanel({
   panelRef,
   fittedHeight,
   compact = false,
+  locked,
 }: TechniquePanelProps) {
   const fitted = fittedHeight != null
+  if (locked) {
+    return (
+      <div
+        ref={panelRef}
+        className={['technique-panel', fitted ? 'technique-panel-fitted' : ''].filter(Boolean).join(' ')}
+        style={fitted ? { maxHeight: fittedHeight } : undefined}
+      >
+        <div className="technique-panel-body">{locked}</div>
+      </div>
+    )
+  }
   const focused = compact && tab === 'techniques' && techniquesRevealed ? instances.find((t) => t.id === activeId) : undefined
   if (focused) {
     return (
@@ -1999,6 +2002,16 @@ export default function App() {
   const [swordfishEnabled, setSwordfishEnabled] = useState(initialSettings.swordfishEnabled)
   const [finnedSwordfishEnabled, setFinnedSwordfishEnabled] = useState(initialSettings.finnedSwordfishEnabled)
   const [alsXzEnabled, setAlsXzEnabled] = useState(initialSettings.alsXzEnabled)
+  const [sueDeCoqEnabled, setSueDeCoqEnabled] = useState(initialSettings.sueDeCoqEnabled)
+  // Settings -> Exotic Techniques starts collapsed every session: it's for
+  // advanced users only, so it stays out of the way until asked for.
+  const [exoticTechniquesShown, setExoticTechniquesShown] = useState(false)
+  // The exotic technique toggles as the one set the engine takes.
+  const enabledExotic = useMemo(() => {
+    const enabled = new Set<ExoticTechnique>()
+    if (sueDeCoqEnabled) enabled.add('sue de coq')
+    return enabled
+  }, [sueDeCoqEnabled])
   // The four fish toggles as the one set the engine takes.
   const enabledFish = useMemo(() => {
     const enabled = new Set<FishTechnique>()
@@ -2328,6 +2341,7 @@ export default function App() {
       alsXzEnabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
+      enabledExotic,
     }),
     [
       board,
@@ -2348,6 +2362,7 @@ export default function App() {
       alsXzEnabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
+      enabledExotic,
     ],
   )
   const [analysis, analysisPending] = useSettledValue(liveAnalysisInputs)
@@ -2401,11 +2416,13 @@ export default function App() {
         analysis.doubleDragonEnabled,
         analysis.doubleDynamicDragonEnabled,
         analysis.givens,
+        analysis.enabledExotic,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
       analysis.enabledFish,
+      analysis.enabledExotic,
       analysis.alsXzEnabled,
       analysis.doubleDragonEnabled,
       analysis.doubleDynamicDragonEnabled,
@@ -2498,6 +2515,7 @@ export default function App() {
       swordfishEnabled,
       finnedSwordfishEnabled,
       alsXzEnabled,
+      sueDeCoqEnabled,
       dynamicDragonDisabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
@@ -2532,6 +2550,7 @@ export default function App() {
       swordfishEnabled,
       finnedSwordfishEnabled,
       alsXzEnabled,
+      sueDeCoqEnabled,
       dynamicDragonDisabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
@@ -2673,6 +2692,19 @@ export default function App() {
     [visibleSubsteps],
   )
 
+  // The AIC chain overlay: which links to draw, and where (straight or how
+  // curved - see aicLinkLayout.ts). Memoized because the layout scores
+  // several curves per link against the chain and every other link.
+  const highlightedAicLinks = highlightedTechnique?.aicLinks
+  const highlightedEliminations = highlightedTechnique?.eliminatedCandidates
+  const aicLinkOverlay = useMemo(() => {
+    const links = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedAicLinks
+    // What the chain eliminates - the hypothetical eliminations, inside a
+    // Dynamic Dragon step - is kept clear of lines, like the chain itself.
+    const eliminations = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.hypotheticalEliminations) : (highlightedEliminations ?? [])
+    return links && links.length > 0 ? layoutAicOverlay(links, eliminations, board, candidates) : null
+  }, [dragonAicChains, highlightedAicLinks, highlightedEliminations, board, candidates])
+
   // True once the live board/candidates have drifted from what the cached
   // solve path's own next step expects (someone applied it out of order,
   // edited a cell by hand, undid something, etc.) - the remaining steps
@@ -2707,9 +2739,11 @@ export default function App() {
       maxTechniquesPerDragonStep,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
+      enabledExotic: [...enabledExotic],
     }),
     [
       enabledFish,
+      enabledExotic,
       alsXzEnabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
@@ -3808,6 +3842,7 @@ export default function App() {
     setSwordfishEnabled(DEFAULT_SETTINGS.swordfishEnabled)
     setFinnedSwordfishEnabled(DEFAULT_SETTINGS.finnedSwordfishEnabled)
     setAlsXzEnabled(DEFAULT_SETTINGS.alsXzEnabled)
+    setSueDeCoqEnabled(DEFAULT_SETTINGS.sueDeCoqEnabled)
     setDynamicDragonDisabled(DEFAULT_SETTINGS.dynamicDragonDisabled)
     setDoubleDragonEnabled(DEFAULT_SETTINGS.doubleDragonEnabled)
     setDoubleDynamicDragonEnabled(DEFAULT_SETTINGS.doubleDynamicDragonEnabled)
@@ -4570,6 +4605,9 @@ export default function App() {
    * to the first hint that has changed since (the user has coloured the
    * candidate it pointed at, say), so the new one is the latest shown. */
   function onOpenHint() {
+    if (ocrProofreadVisible) {
+      return
+    }
     runBusyTask('hint', { title: 'Working out a hint…', detail: 'Finding the easiest technique on the grid.' }, () => {
       const hint = computeHint()
       if (!hint) {
@@ -5362,6 +5400,7 @@ export default function App() {
           type="button"
           className="technique-hint-button toolbar-hint-button"
           onClick={onOpenHint}
+          disabled={ocrProofreadVisible}
           aria-label="Hint"
           title="Get a hint about the easiest technique on the grid, one step at a time."
         >
@@ -5878,8 +5917,8 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title">
-              Techniques
+            <h3 className="dropdown-section-title dropdown-section-title-nowrap">
+              Techniques (Non-Colouring)
               <MenuHelpButton topic="Techniques" onClick={() => setHelpOpen({ tab: 'Settings' })} />
             </h3>
             <label
@@ -5950,6 +5989,40 @@ export default function App() {
               Enable ALS-xz
             </label>
           </div>
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">
+              Exotic Techniques
+              <MenuHelpButton topic="Exotic Techniques" onClick={() => setHelpOpen({ tab: 'Settings' })} />
+            </h3>
+            {!exoticTechniquesShown ? (
+              <button
+                type="button"
+                className="dropdown-item"
+                title="Advanced techniques, for experienced solvers only."
+                onClick={() => setExoticTechniquesShown(true)}
+              >
+                Show exotic techniques (advanced){enabledExotic.size > 0 ? ` - ${enabledExotic.size} enabled` : ''}
+              </button>
+            ) : (
+              <>
+                {(
+                  [['sue de coq', sueDeCoqEnabled, setSueDeCoqEnabled]] as const
+                ).map(([technique, enabled, setEnabled]) => (
+                  <label
+                    key={technique}
+                    className="menu-checkbox"
+                    title={`When on, the solver looks for ${EXOTIC_TECHNIQUE_NAMES[technique]}. Exotic techniques can't be used inside Dynamic Dragon Colouring and don't affect puzzle generation.`}
+                  >
+                    <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
+                    Enable {EXOTIC_TECHNIQUE_NAMES[technique]}
+                  </label>
+                ))}
+                <button type="button" className="dropdown-item" onClick={() => setExoticTechniquesShown(false)}>
+                  Hide exotic techniques
+                </button>
+              </>
+            )}
+          </div>
         </DropdownMenu>
         {phone && (
           <DropdownMenu
@@ -5984,8 +6057,27 @@ export default function App() {
     </div>
   )
 
+  // While an imported screenshot's digits await proofreading, the technique
+  // sections are off: a misread digit would make every technique, hint and
+  // auto-solve wrong, and locking is what turns them into givens.
+  const techniquesLockedNotice = ocrProofreadVisible ? (
+    <div className="techniques-locked">
+      <p className="technique-empty">
+        <b>Lock the imported digits first.</b> Check the grid against your screenshot, then lock the digits as givens to
+        see the techniques.
+      </p>
+      {conflictedCells.size > 0 && (
+        <p className="ocr-proofread-warning">Some digits clash with each other (outlined in red) - fix them first.</p>
+      )}
+      <button type="button" className="primary" onClick={onLockOcrDigits} disabled={busy || conflictedCells.size > 0}>
+        Lock as givens
+      </button>
+    </div>
+  ) : null
+
   const techniquePanel = (
     <TechniquePanel
+      locked={techniquesLockedNotice}
       tab={techniquePanelTab}
       onTabChange={onTechniquePanelTabChange}
       instances={techniqueInstances}
@@ -6306,67 +6398,30 @@ export default function App() {
         </svg>
       )}
 
-      {(() => {
-        const aicLinks = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedTechnique?.aicLinks
-        if (!aicLinks || aicLinks.length === 0) {
-          return null
-        }
-        // A grouped end (Empty Rectangle: "the digit is in one of these
-        // cells") is outlined, and its links meet the group's middle.
-        const endPoint = (ref: { row: number; col: number; digit: number }, cells?: ReadonlyArray<readonly [number, number]>) => {
-          if (!cells) {
-            return pipCenter(ref.row, ref.col, ref.digit)
-          }
-          const points = cells.map(([r, c]) => pipCenter(r, c, ref.digit))
-          return {
-            x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
-            y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
-          }
-        }
-        const groups = new Map<string, { digit: number; cells: ReadonlyArray<readonly [number, number]> }>()
-        for (const link of aicLinks) {
-          for (const [ref, cells] of [
-            [link.from, link.fromCells],
-            [link.to, link.toCells],
-          ] as const) {
-            if (cells) {
-              groups.set(`${ref.digit}:${cells.map(([r, c]) => `${r}.${c}`).join('|')}`, { digit: ref.digit, cells })
-            }
-          }
-        }
-        return (
-          <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
-            {[...groups.entries()].map(([key, group]) => {
-              const points = group.cells.map(([r, c]) => pipCenter(r, c, group.digit))
-              const pad = PIP_SIZE / 2
-              const x = Math.min(...points.map((p) => p.x)) - pad
-              const y = Math.min(...points.map((p) => p.y)) - pad
-              return (
-                <rect
-                  key={key}
-                  className="aic-group"
-                  x={x}
-                  y={y}
-                  width={Math.max(...points.map((p) => p.x)) + pad - x}
-                  height={Math.max(...points.map((p) => p.y)) + pad - y}
-                  rx={pad}
-                />
-              )
-            })}
-            {aicLinks.map((link, index) => {
-              const p1 = endPoint(link.from, link.fromCells)
-              const p2 = endPoint(link.to, link.toCells)
-              return (
-                <path
-                  key={index}
-                  className={link.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'}
-                  d={curvedPath(p1, p2)}
-                />
-              )
-            })}
-          </svg>
-        )
-      })()}
+      {aicLinkOverlay && (
+        <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
+          {aicLinkOverlay.groups.map(([key, group]) => {
+            const points = group.cells.map(([r, c]) => pipCenter(r, c, group.digit))
+            const pad = PIP_SIZE / 2
+            const x = Math.min(...points.map((p) => p.x)) - pad
+            const y = Math.min(...points.map((p) => p.y)) - pad
+            return (
+              <rect
+                key={key}
+                className="aic-group"
+                x={x}
+                y={y}
+                width={Math.max(...points.map((p) => p.x)) + pad - x}
+                height={Math.max(...points.map((p) => p.y)) + pad - y}
+                rx={pad}
+              />
+            )
+          })}
+          {aicLinkOverlay.paths.map((path, index) => (
+            <path key={index} className={path.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'} d={path.d} />
+          ))}
+        </svg>
+      )}
 
     </div>
   )
@@ -6673,8 +6728,14 @@ export default function App() {
   )
 
   const autosolveGroup = (
-    <section className="control-group autosolve-group">
+    <section
+      className={['control-group', 'autosolve-group', ocrProofreadVisible ? 'autosolve-locked' : ''].filter(Boolean).join(' ')}
+      // Off until an imported screenshot's digits are locked (see
+      // techniquesLockedNotice); inert takes every button out of reach.
+      inert={ocrProofreadVisible}
+    >
       <h2 className="control-label">Auto-solve</h2>
+      {ocrProofreadVisible && <p className="dropdown-hint">Lock the imported digits as givens first.</p>}
       {/* Two columns under difficulty-tier subheadings instead of one
           full-width button per technique (18 rows) - the labels are
           shortened to fit a column; each button's title still spells out

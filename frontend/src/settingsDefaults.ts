@@ -31,6 +31,10 @@ export interface AppSettings {
    * ('als-xz' in allowedRule3Techniques, also off by default) only counts
    * while this is on, like a fish. */
   alsXzEnabled: boolean
+  /** Settings -> Exotic Techniques (hidden behind a Show button), off by
+   * default. Exotic techniques are never used inside Dynamic Dragon or by
+   * the puzzle generator. */
+  sueDeCoqEnabled: boolean
   /** ON = no Dynamic Dragon Colouring anywhere (Techniques list, solve
    * path, solvability check, Find by elims, auto-solve, generation), so plain
    * Dragon is the strongest technique. Named for what ON does, matching its
@@ -81,6 +85,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   swordfishEnabled: false,
   finnedSwordfishEnabled: false,
   alsXzEnabled: false,
+  sueDeCoqEnabled: false,
   dynamicDragonDisabled: false,
   doubleDragonEnabled: false,
   doubleDynamicDragonEnabled: false,

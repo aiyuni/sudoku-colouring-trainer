@@ -101,7 +101,7 @@ export function techniqueHintLabel(instance: TechniqueInstance): string {
   if (id.startsWith('ur-')) return 'Unique Rectangle'
   if (id.startsWith('bivalue-oddagon-')) return 'Bivalue Oddagon'
   if (id.startsWith('avoidable-rectangle-')) return 'Avoidable Rectangle'
-  if (id.startsWith('short-aic-')) return 'Short AIC'
+  if (id.startsWith('short-aic-')) return instance.aicPattern ?? 'Short AIC'
   if (id.startsWith('generic-aic-')) return 'generic AIC'
   return instance.name
 }
@@ -142,9 +142,13 @@ function techniqueBlurb(instance: TechniqueInstance): string {
         return 'A short chain of strong and weak links on a single digit.'
     }
   }
+  if (id.startsWith('short-aic-') && instance.aicPattern === 'W-Wing')
+    return 'Two cells that don\'t see each other hold only the same two digits, and some row, column or box would have no place left for one of those digits if both cells were it.'
   if (id.startsWith('short-aic-') || id.startsWith('generic-aic-'))
     return 'A chain of alternating strong and weak links whose two ends can\'t both be false.'
   if (id.startsWith('als-xz-')) return 'Two almost locked sets linked by a restricted common digit.'
+  if (id.startsWith('sue-de-coq-'))
+    return 'Cells where a row or column crosses a box hold two more digits than cells; two two-digit cells, one in the line and one in the box, split those digits between them.'
   if (id.startsWith('medusa-')) return 'Colour a network of strong links across digits in two colours until something contradicts or sees both colours.'
   if (id.startsWith('double-dynamic-dragon-') || id.startsWith('double-dragon-'))
     return 'Two stuck Dragons, linked to each other.'
@@ -313,6 +317,9 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
   if (id.includes('aic-')) {
     const links = instance.aicLinks ?? []
     const digits = uniqueSorted((instance.aicCandidates ?? []).map((n) => n.digit))
+    if (instance.aicPattern === 'W-Wing' && instance.aicPatternText) {
+      return [{ text: `Look for two cells holding only {${digits.join(',')}}.` }, { text: `${instance.aicPatternText}.` }]
+    }
     if (instance.aicPattern && instance.aicPatternText) {
       return [{ text: `Look at digit ${digits[0]}.` }, { text: `${instance.aicPatternText}.` }]
     }
@@ -328,6 +335,16 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
       ...(first && last
         ? [{ text: `The chain starts at ${endText(first.from, first.fromCells)} and ends at ${endText(last.to, last.toCells)}.  This means one of those two must be true.` }]
         : []),
+    ]
+  }
+
+  if (id.startsWith('sue-de-coq-')) {
+    const reason = instance.notation.split(', thus ')[0]
+    const [first, ...rest] = reason.split('. ')
+    return [
+      { text: `${first}.` },
+      ...(rest.length > 0 ? [{ text: `${rest.join('. ')}.` }] : []),
+      { text: `It eliminates ${eliminatedText}.` },
     ]
   }
 
