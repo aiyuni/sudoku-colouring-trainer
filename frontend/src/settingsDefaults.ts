@@ -64,6 +64,13 @@ export interface AppSettings {
   /** Only settable ON while dynamicDragonPuzzleForbidsPlainDragon is ON:
    * Dynamic Dragon puzzles also reject positions a Double Dragon solves. */
   dynamicDragonPuzzleForbidsDoubleDragon: boolean
+  /** "Dynamic Dragon only uses defaults" (Generate Puzzle menu): Double
+   * Dynamic Dragon puzzles come from the defaults-only stock
+   * (defaultsDoubleDynamicDragonPuzzleStockData.ts). Dynamic Dragon puzzles
+   * are unaffected: the generator (and so its stock) only ever lets Dynamic
+   * Dragon use DEFAULT_RULE3_TECHNIQUES already. Live "must not allow plain
+   * Dragon" generation was timed for this (2026-10-03) and takes minutes. */
+  dynamicDragonPuzzleUsesDefaultsOnly: boolean
   dragonGenerationTimeoutMs: number
   easySolveEnabled: boolean
   solvePathTimeoutMs: number
@@ -101,6 +108,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dragonGenerationDisregardsGenericAic: true,
   dynamicDragonPuzzleForbidsPlainDragon: false,
   dynamicDragonPuzzleForbidsDoubleDragon: false,
+  dynamicDragonPuzzleUsesDefaultsOnly: false,
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
   solvePathTimeoutMs: 12_000,

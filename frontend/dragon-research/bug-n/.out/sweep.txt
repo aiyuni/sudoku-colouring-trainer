@@ -1,1 +1,0 @@
-{"puzzles":4669,"states":341052,"n1":137,"n2":67,"n3":32,"wrong1":0,"wrong2":0,"wrong3":0,"easiest2":49,"easiest3":19,"looseRuleWrong":69,"looseRuleExtra":136,"noElimTri":0}

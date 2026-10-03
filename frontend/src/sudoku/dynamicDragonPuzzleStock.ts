@@ -8,6 +8,10 @@ import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import type { Board } from './types'
 import { DOUBLE_DRAGON_PUZZLE_STOCK } from './doubleDragonPuzzleStockData'
 import { DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK } from './doubleDynamicDragonPuzzleStockData'
+import {
+  DEFAULTS_DOUBLE_DYNAMIC_DRAGON_INDEPENDENT_STOCK,
+  DEFAULTS_DOUBLE_DYNAMIC_DRAGON_NON_INDEPENDENT_STOCK,
+} from './defaultsDoubleDynamicDragonPuzzleStockData'
 import { PuzzleImporter } from './PuzzleImporter'
 import { DYNAMIC_DRAGON_PUZZLE_STOCK } from './dynamicDragonPuzzleStockData'
 
@@ -90,6 +94,34 @@ export async function pickStockDoubleDynamicDragonPuzzle(): Promise<GeneratedDra
   const imported = await new PuzzleImporter().import(DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK[doubleDynamicBag.pop()!])
   return imported.ok ? { board: imported.board, givens: imported.givens, candidates: imported.candidates } : null
 }
+
+/** "Dynamic Dragon only uses defaults" (Generate Puzzle menu): a Double
+ * Dynamic Dragon position verified with every standalone technique on except
+ * Sue-de-Coq, Dynamic Dragon limited to the default techniques and at most 3
+ * per step - drawn at random from the independent and non-independent stocks
+ * together (defaultsDoubleDynamicDragonPuzzleStockData.ts). Served as is, like
+ * the other Double Dynamic stock: an 81-char entry gets autofilled candidates,
+ * a Sudoku.Coach state keeps its own. */
+let defaultsDoubleDynamicBag: number[] = []
+export async function pickStockDefaultsDoubleDynamicDragonPuzzle(): Promise<GeneratedDragonPuzzle | null> {
+  if (DEFAULTS_DOUBLE_DYNAMIC_STOCK.length === 0) {
+    return null
+  }
+  if (defaultsDoubleDynamicBag.length === 0) {
+    defaultsDoubleDynamicBag = shuffled(DEFAULTS_DOUBLE_DYNAMIC_STOCK.map((_, index) => index))
+  }
+  const entry = DEFAULTS_DOUBLE_DYNAMIC_STOCK[defaultsDoubleDynamicBag.pop()!]
+  if (/^\d{81}$/.test(entry)) {
+    return withAutofilledCandidates(parseBoard(entry))
+  }
+  const imported = await new PuzzleImporter().import(entry)
+  return imported.ok ? { board: imported.board, givens: imported.givens, candidates: imported.candidates } : null
+}
+
+const DEFAULTS_DOUBLE_DYNAMIC_STOCK: readonly string[] = [
+  ...DEFAULTS_DOUBLE_DYNAMIC_DRAGON_INDEPENDENT_STOCK,
+  ...DEFAULTS_DOUBLE_DYNAMIC_DRAGON_NON_INDEPENDENT_STOCK,
+]
 
 function pickFromStock(stock: readonly string[], checkOptions: DragonPuzzleGenerateOptions): GeneratedDragonPuzzle | null {
   if (stock.length === 0) {

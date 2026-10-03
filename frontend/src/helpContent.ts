@@ -144,13 +144,6 @@ export const HELP_TABS: HelpTab[] = [
             description:
               'Controls how many non-singles techniques a single Dynamic Dragon step may use to extend its colours.  Does not control the techniques used; only controls the quantity of techniques used. \n\nInfinite: no limits - makes the solver extremely strong if all techniques are enabled.',
           },
-          {
-            name: 'Auto-solve includes AICs',
-            settingKey: 'dynamicDragonAutoSolveIncludesAics',
-            description:
-              'OFF: the Dynamic Dragon auto-solve button skips Dragons whose steps needed an AIC, even with AICs.' +
-              'enabled. \n\n ON: applies those too.  This setting only affects Auto-Solve feature.',
-          },
         ],
       },
       {
@@ -394,6 +387,16 @@ export const HELP_TABS: HelpTab[] = [
               'Can only be ON while "Dynamic Dragon puzzles must not allow plain Dragon" is ON.\n\n' +
               'ON: a Dynamic Dragon is required to progress the puzzle.' +
               '\n\nOFF: a Double Dragon may also progress the puzzle.',
+          },
+          {
+            name: 'Dynamic Dragon only uses defaults',
+            settingKey: 'dynamicDragonPuzzleUsesDefaultsOnly',
+            description:
+              'ON: "Double Dynamic Dragon Colouring puzzle" picks from a stock where the Dynamic Dragons need only the default ' +
+              'Dynamic Dragon techniques (at most 3 per step), checked with every other technique enabled except Sue-de-Coq, ' +
+              'so it holds whatever techniques you have enabled.' +
+              '\n\nOFF: Double Dynamic Dragon puzzles come from the stock that needs every Dynamic Dragon technique.' +
+              '\n\n"Dynamic Dragon Colouring puzzle" is the same either way: its Dynamic Dragon only ever uses the default techniques.',
           },
           {
             name: 'Dragon puzzle generation max timeout',

@@ -48,6 +48,7 @@ import {
 import { generateDragonPuzzleInParallel } from './sudoku/ParallelDragonPuzzleGenerator'
 import {
   pickStockDoubleDragonPuzzle,
+  pickStockDefaultsDoubleDynamicDragonPuzzle,
   pickStockDoubleDynamicDragonPuzzle,
   pickStockDynamicDragonPuzzle,
 } from './sudoku/dynamicDragonPuzzleStock'
@@ -1268,6 +1269,9 @@ interface TechniquePanelProps {
   tab: TechniquePanelTab
   onTabChange: (tab: TechniquePanelTab) => void
   instances: TechniqueInstance[]
+  /** How many rows the "3+ base Medusa candidates" filter hid, counted only
+   * when it left the list empty (see hiddenByMedusaFilterCount in App). */
+  hiddenByMedusaFilterCount: number
   activeId: string | null
   onSelect: (id: string) => void
   techniquesRevealed: boolean
@@ -1335,6 +1339,7 @@ function TechniquePanel({
   tab,
   onTabChange,
   instances,
+  hiddenByMedusaFilterCount,
   activeId,
   onSelect,
   techniquesRevealed,
@@ -1475,9 +1480,17 @@ function TechniquePanel({
             <button type="button" className="technique-spoiler-toggle" onClick={onToggleTechniquesRevealed}>
               Hide (spoiler view)
             </button>
-            <p className="technique-empty">
-              None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (click "Autofill all" under Candidates)
-            </p>
+            {hiddenByMedusaFilterCount > 0 ? (
+              <p className="technique-empty">
+                {hiddenByMedusaFilterCount === 1 ? '1 Dragon row is' : `${hiddenByMedusaFilterCount} Dragon rows are`} hidden
+                by the "Dragon: require {MIN_BASE_MEDUSA_CANDIDATES}+ base Medusa candidates" setting (Dragon
+                Configuration). Turn it off to see {hiddenByMedusaFilterCount === 1 ? 'it' : 'them'}.
+              </p>
+            ) : (
+              <p className="technique-empty">
+                None currently apply. Either the solver can't find any, or the puzzle doesn't have full candidates (click "Autofill all" under Candidates)
+              </p>
+            )}
           </>
         ) : (
         <>
@@ -2043,6 +2056,9 @@ export default function App() {
   const [dynamicDragonPuzzleForbidsPlainDragon, setDynamicDragonPuzzleForbidsPlainDragon] = useState(
     initialSettings.dynamicDragonPuzzleForbidsPlainDragon,
   )
+  const [dynamicDragonPuzzleUsesDefaultsOnly, setDynamicDragonPuzzleUsesDefaultsOnly] = useState(
+    initialSettings.dynamicDragonPuzzleUsesDefaultsOnly,
+  )
   const [aicLimitPerDragonStep, setAicLimitPerDragonStep] = useState(initialSettings.aicLimitPerDragonStep)
   const [maxTechniquesPerDragonStep, setMaxTechniquesPerDragonStep] = useState(initialSettings.maxTechniquesPerDragonStep)
   const [exhaustiveDragonColouring, setExhaustiveDragonColouring] = useState(initialSettings.exhaustiveDragonColouring)
@@ -2442,6 +2458,63 @@ export default function App() {
       analysis.dynamicDragonDisabled,
     ],
   )
+  // The "3+ base Medusa candidates" filter only hides Dragon rows from this
+  // list - the Solve Path and the solvability status ignore it - so with
+  // the filter on, an empty list could sit next to "Solvable" with no clue
+  // why. Only then is the list rebuilt without the filter, to say how many
+  // rows it hid: an empty filtered list means every other finder found
+  // nothing, so whatever the unfiltered run lists is exactly what the filter
+  // dropped. Not done for a non-empty list (by request), which would double
+  // the Dragon work on every change.
+  const hiddenByMedusaFilterCount = useMemo(
+    () =>
+      !analysis.minBaseMedusaFilter || techniqueInstances.length > 0
+        ? 0
+        : buildTechniqueInstances(
+            analysis.board,
+            analysis.candidates,
+            0,
+            analysis.effectiveAllowedRule3Techniques,
+            analysis.shortAicEnabled,
+            analysis.shortSingleDigitAicEnabled,
+            analysis.aicLimitPerDragonStep,
+            analysis.exhaustiveDragonColouring,
+            analysis.genericAicEnabled,
+            analysis.optimizeDragons,
+            analysis.optimizeDynamicDragons,
+            !analysis.dynamicDragonDisabled,
+            analysis.enabledFish,
+            analysis.alsXzEnabled,
+            analysis.maxTechniquesPerDragonStep,
+            analysis.doubleDragonEnabled,
+            analysis.doubleDynamicDragonEnabled,
+            analysis.givens,
+            analysis.enabledExotic,
+          ).length,
+    // Same inputs as techniqueInstances (which it also reads).
+    [
+      techniqueInstances,
+      analysis.enabledFish,
+      analysis.enabledExotic,
+      analysis.alsXzEnabled,
+      analysis.doubleDragonEnabled,
+      analysis.doubleDynamicDragonEnabled,
+      analysis.board,
+      analysis.candidates,
+      analysis.givens,
+      analysis.minBaseMedusaFilter,
+      analysis.effectiveAllowedRule3Techniques,
+      analysis.shortAicEnabled,
+      analysis.shortSingleDigitAicEnabled,
+      analysis.aicLimitPerDragonStep,
+      analysis.maxTechniquesPerDragonStep,
+      analysis.exhaustiveDragonColouring,
+      analysis.genericAicEnabled,
+      analysis.optimizeDragons,
+      analysis.optimizeDynamicDragons,
+      analysis.dynamicDragonDisabled,
+    ],
+  )
   // Looked up by id (rather than kept as its own state) so that if the
   // board changes underneath an active selection, it silently reflects the
   // fresh instance, or disappears if it no longer applies.
@@ -2531,6 +2604,7 @@ export default function App() {
       dragonGenerationDisregardsGenericAic,
       dynamicDragonPuzzleForbidsPlainDragon,
       dynamicDragonPuzzleForbidsDoubleDragon,
+      dynamicDragonPuzzleUsesDefaultsOnly,
       dragonGenerationTimeoutMs,
       easySolveEnabled,
       solvePathTimeoutMs,
@@ -2566,6 +2640,7 @@ export default function App() {
       dragonGenerationDisregardsGenericAic,
       dynamicDragonPuzzleForbidsPlainDragon,
       dynamicDragonPuzzleForbidsDoubleDragon,
+      dynamicDragonPuzzleUsesDefaultsOnly,
       dragonGenerationTimeoutMs,
       easySolveEnabled,
       solvePathTimeoutMs,
@@ -3645,7 +3720,8 @@ export default function App() {
         // is left entirely untouched by auto-solve, even if AICs are
         // otherwise enabled for Dynamic Dragon Colouring - the "Dynamic
         // Dragon Colouring auto-solve includes AICs?" setting is what
-        // opts back in.
+        // opts back in (its checkbox is hidden by request; only a value
+        // saved before then, or Reset to defaults, still changes it).
         return withoutAlsXz.filter(
           ({ moves }) =>
             !moves.some((move) =>
@@ -3860,6 +3936,7 @@ export default function App() {
     setDragonGenerationDisregardsGenericAic(DEFAULT_SETTINGS.dragonGenerationDisregardsGenericAic)
     setDynamicDragonPuzzleForbidsPlainDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsPlainDragon)
     setDynamicDragonPuzzleForbidsDoubleDragon(DEFAULT_SETTINGS.dynamicDragonPuzzleForbidsDoubleDragon)
+    setDynamicDragonPuzzleUsesDefaultsOnly(DEFAULT_SETTINGS.dynamicDragonPuzzleUsesDefaultsOnly)
     setDragonGenerationTimeoutMs(DEFAULT_SETTINGS.dragonGenerationTimeoutMs)
     setHotkeys(DEFAULT_SETTINGS.hotkeys)
     setSwatchColors(defaultSwatchColors())
@@ -3894,10 +3971,6 @@ export default function App() {
 
   function toggleEasySolveEnabled() {
     setEasySolveEnabled((current) => !current)
-  }
-
-  function toggleDynamicDragonAutoSolveIncludesAics() {
-    setDynamicDragonAutoSolveIncludesAics((current) => !current)
   }
 
   function onDragonGenerationTimeoutChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -5287,13 +5360,16 @@ export default function App() {
       'Generating a puzzle that needs Dynamic Dragon Colouring…',
       // "Must not allow plain Dragon" positions are too rare to find live
       // (minutes each), so they come from the pre-generated stock instead.
+      // Either way Dynamic Dragon only uses the default techniques (the
+      // generator, and so the stock, never uses any other), which is why
+      // "Dynamic Dragon only uses defaults" doesn't change this button.
       (signal) =>
         dynamicDragonPuzzleForbidsPlainDragon
           ? pickStockDynamicDragonPuzzle(options)
           : generateDragonPuzzleInParallel(options, signal),
       dynamicDragonPuzzleForbidsPlainDragon
-        ? 'New Dynamic Dragon puzzle loaded: plain Dragon Colouring is stuck on every chain - only Dynamic Dragon Colouring can continue.'
-        : 'New Dynamic Dragon puzzle loaded: contains at least 1 Dynamic Dragon Colouring technique.',
+        ? 'New Dynamic Dragon puzzle loaded: Easiest technique to progress is Dynamic Dragon Colouring.'
+        : 'New Dynamic Dragon puzzle loaded:  The grid contains at least one Dynamic Dragon Colouring technique.',
       dynamicDragonPuzzleForbidsPlainDragon,
     )
   }
@@ -5313,7 +5389,7 @@ export default function App() {
           enabledFish: [...enabledFish],
           alsXzEnabled,
         }),
-      'New Double Dragon puzzle loaded: plain Dragon Colouring is stuck on every chain - link two plain Dragons to continue.',
+      'New Double Dragon puzzle loaded: A Double Plain Dragon is the easiest technique to progress.',
       true,
     )
   }
@@ -5324,8 +5400,13 @@ export default function App() {
   function onNewDoubleDynamicDragonPuzzle() {
     runPracticePuzzleGeneration(
       'Picking a puzzle that needs Double Dynamic Dragon Colouring…',
-      () => pickStockDoubleDynamicDragonPuzzle(),
-      'New Double Dynamic Dragon puzzle loaded: nothing else progresses here - it needs Double Dynamic Dragon Colouring with every Dynamic Dragon technique and no AIC or technique limits.',
+      () =>
+        dynamicDragonPuzzleUsesDefaultsOnly
+          ? pickStockDefaultsDoubleDynamicDragonPuzzle()
+          : pickStockDoubleDynamicDragonPuzzle(),
+      dynamicDragonPuzzleUsesDefaultsOnly
+        ? 'New Double Dynamic Dragon puzzle loaded: nothing else can progress here except for Double Dynamic Dragon Colouring, with Dynamic Dragon using only the default techniques (at most 3 per step).'
+        : 'New Double Dynamic Dragon puzzle loaded: nothing else can progress here except for Double Dynamic Dragon Colouring with every Dynamic Dragon technique and no AIC or technique limits.',
       true,
     )
   }
@@ -5602,6 +5683,17 @@ export default function App() {
               />
               Dragon disregards Generic AIC
             </label>
+                        <label
+              className="menu-checkbox"
+              title="When on, a Double Dynamic Dragon puzzle is picked from a stock where Dynamic Dragon needs only its default techniques (at most 3 per step), whatever other techniques are enabled. Dynamic Dragon puzzles always use only the default techniques, so they don't change."
+            >
+              <input
+                type="checkbox"
+                checked={dynamicDragonPuzzleUsesDefaultsOnly}
+                onChange={() => setDynamicDragonPuzzleUsesDefaultsOnly((value) => !value)}
+              />
+              Dynamic Dragon puzzles only use default techniques
+            </label>
             <label
               className="menu-checkbox"
               title="When on, a Dynamic Dragon puzzle is a state where plain Dragon Colouring is stuck on every chain, so Dynamic Dragon is the only way forward. These are too rare to generate live, so one is picked instantly from a built-in stock instead. When off, plain Dragon may still work on some other chain."
@@ -5633,7 +5725,7 @@ export default function App() {
                 disabled={!dynamicDragonPuzzleForbidsPlainDragon}
                 onChange={() => setDynamicDragonPuzzleForbidsDoubleDragon((value) => !value)}
               />
-              Dynamic Dragon puzzles must not allow double Dragons
+              Dynamic Dragon puzzles must not allow Double plain Dragons
             </label>
             <label
               className="menu-select"
@@ -5760,20 +5852,6 @@ export default function App() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label
-              className="menu-checkbox"
-              title={
-                dynamicDragonDisabled ? 'Dynamic Dragons are disabled, so this has no effect' : 'When off, clicking the Dynamic Dragon Colouring auto-solve button skips Dragons whose steps needed an AIC, even if AICs are enabled in Settings.'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={dynamicDragonAutoSolveIncludesAics}
-                disabled={dynamicDragonDisabled}
-                onChange={toggleDynamicDragonAutoSolveIncludesAics}
-              />
-              Auto-solve includes AICs
             </label>
           <div className="dropdown-divider" />
 
@@ -6081,6 +6159,7 @@ export default function App() {
       tab={techniquePanelTab}
       onTabChange={onTechniquePanelTabChange}
       instances={techniqueInstances}
+      hiddenByMedusaFilterCount={hiddenByMedusaFilterCount}
       activeId={activeTechniqueId}
       onSelect={onSelectTechnique}
       techniquesRevealed={techniquesRevealed}

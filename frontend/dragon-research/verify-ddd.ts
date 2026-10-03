@@ -8,6 +8,7 @@ import { SudokuSolver } from 'C:/Git/sudoku-solver/frontend/src/sudoku/SudokuSol
 import { SudokuRules } from 'C:/Git/sudoku-solver/frontend/src/sudoku/SudokuRules'
 import { PuzzleImporter } from 'C:/Git/sudoku-solver/frontend/src/sudoku/PuzzleImporter'
 import type { Board, CandidateGrid } from 'C:/Git/sudoku-solver/frontend/src/sudoku/types'
+import { isIndependentDoubleDragon } from './independent'
 
 const DIR = (process.env.DRAGON_RESEARCH_DIR ?? 'C:/Git/sudoku-solver/frontend/dragon-research/data/')
 type Ref = { row: number; col: number; digit: number }
@@ -15,6 +16,9 @@ type Ref = { row: number; col: number; digit: number }
 const AIC_LIMIT = process.env.AIC_LIMIT === '1'
 const MAX_TECH = process.env.MAX_TECH ? Number(process.env.MAX_TECH) : Infinity
 const OUT_FILE = process.env.OUT_FILE ?? 'ddd-verified.jsonl'
+// INDEPENDENT=1: at the stored (first stuck) position at least one Double Dynamic row must be independent
+// (its second Medusa shares no candidate with the first Dragon - see independent.ts), and one of those is applied.
+const INDEPENDENT = process.env.INDEPENDENT === '1'
 
 const techniques = (board: Board, cands: CandidateGrid, ddd: boolean): TechniqueInstance[] =>
   // everything on: all AIC kinds, AIC limit off, exhaustive, every fish, ALS-xz, no technique cap,
@@ -45,6 +49,10 @@ export async function verify(p: string) {
       inst = techniques(board, cands, true)
       if (!inst.length) return { puzzle: p, ok: false, reason: 'stuck even with Double Dynamic', steps }
       if (inst.some((i) => !i.id.startsWith('double-dynamic-dragon'))) return { puzzle: p, ok: false, reason: 'non-DDD row appeared only with DDD on?!' }
+      if (INDEPENDENT && !firstStuck) {
+        inst = inst.filter((i) => i.moves && isIndependentDoubleDragon(i.moves))
+        if (!inst.length) return { puzzle: p, ok: false, reason: 'no independent Double Dynamic at the first stuck position', steps }
+      }
       if (!firstStuck) {
         firstStuck = await new PuzzleImporter().exportToSudokuCoachState(board, givens, cands)
         // The position itself (not the givens, which the state also carries),

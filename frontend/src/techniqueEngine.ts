@@ -165,11 +165,12 @@ export const RANK_FINNED_SWORDFISH = 14
 export const RANK_SUE_DE_COQ = 15
 // Harder than 3D Medusa: a long chain is harder to find than a colouring.
 export const RANK_GENERIC_AIC = 16
-// The one non-colouring technique ranked above Generic AIC.
-export const RANK_ALS_XZ = 17
-export const RANK_DRAGON = 18
+export const RANK_DRAGON = 17
 // Two plain Dragons linked together - no Dynamic Dragon techniques.
-export const RANK_DOUBLE_DRAGON = 19
+export const RANK_DOUBLE_DRAGON = 18
+// The one non-colouring technique ranked above Generic AIC - and above plain
+// and Double plain Dragon too (only Dynamic Dragons rank higher), by request.
+export const RANK_ALS_XZ = 19
 export const RANK_DYNAMIC_DRAGON = 20
 // Two Dragons linked, at least one of them Dynamic - only where single
 // Dynamic Dragon is stuck, so the hardest tier.
@@ -1260,14 +1261,6 @@ export function buildTechniqueInstances(
     )
   }
 
-  // ALS-xz (singly linked only) ranks after Generic AIC. Every ALS-xz is an
-  // AIC with ALS nodes, and the short ones are often a naked pair, a Short
-  // AIC or a Medusa rule in disguise, so a row an easier one already makes in
-  // full isn't listed.
-  if (alsXzEnabled) {
-    pushUnlessCoveredByEasier(instances, alsXzFinder.find(board, candidates).map(buildAlsXzInstance))
-  }
-
   // Dragon Colouring and Dynamic Dragon Colouring: one instance per stuck
   // Medusa chain the extension turned into something actionable, each
   // carrying its own move log for the Techniques panel's step-by-step
@@ -1300,6 +1293,21 @@ export function buildTechniqueInstances(
       instances.push(buildDragonInstance(board, candidates, 'double-dragon', 'Double Dragon Colouring', chainKey, moves))
     }
   }
+  // ALS-xz (singly linked only) ranks after Generic AIC,
+  // plain Dragon and Double Dragon, before Dynamic Dragon. Every ALS-xz is an
+  // AIC with ALS nodes, and the short ones are often a naked pair, a Short
+  // AIC or a Medusa rule in disguise, so a row an easier one already makes in
+  // full isn't listed - but a Dragon or Double Dragon row making the same
+  // eliminations doesn't hide it, by request (only the non-Dragon rows
+  // count).
+  if (alsXzEnabled) {
+    pushUnlessCoveredByEasier(
+      instances,
+      alsXzFinder.find(board, candidates).map(buildAlsXzInstance),
+      instances.filter((instance) => instance.techniqueRank < RANK_DRAGON),
+    )
+  }
+
   // The "Disable Dynamic Dragons" setting: plain Dragon becomes the
   // strongest technique, here and so in the solve path built on this list.
   const dynamicDragonExtensions = !dynamicDragonEnabled ? [] : computeStuckDynamicDragonExtensions(
@@ -1348,12 +1356,16 @@ export function buildTechniqueInstances(
 
 /** Appends `candidates` (sorted by techniqueRank) to `instances`, except any
  * whose eliminations rows of a strictly lower rank - everything already in
- * `instances`, plus lower tiers of `candidates` itself - already make in
- * full. Only elimination-only rows can be hidden this way; one that solves a
- * cell is always kept. */
-function pushUnlessCoveredByEasier(instances: TechniqueInstance[], candidates: TechniqueInstance[]): void {
+ * `instances` (or just the `coveringRows` given), plus lower tiers of
+ * `candidates` itself - already make in full. Only elimination-only rows can
+ * be hidden this way; one that solves a cell is always kept. */
+function pushUnlessCoveredByEasier(
+  instances: TechniqueInstance[],
+  candidates: TechniqueInstance[],
+  coveringRows: readonly TechniqueInstance[] = instances,
+): void {
   const keyOf = (e: TechniqueCandidateRef) => `${e.row},${e.col},${e.digit}`
-  const covered = new Set(instances.flatMap((instance) => instance.eliminatedCandidates.map(keyOf)))
+  const covered = new Set(coveringRows.flatMap((instance) => instance.eliminatedCandidates.map(keyOf)))
   let tierRank = -1
   let tierKeys: string[] = []
   for (const candidate of candidates) {

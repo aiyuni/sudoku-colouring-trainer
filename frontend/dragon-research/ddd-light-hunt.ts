@@ -16,6 +16,8 @@
 // the repo):
 //   npx rolldown dragon-research/ddd-light-hunt.ts --format esm --platform node -o <tmp>/ddd-light-hunt.mjs
 //   node <tmp>/ddd-light-hunt.mjs <workers> <maxLevel>
+// KEEP_GOING=1 doesn't stop at a light position: it keeps hunting stock positions until the stock reaches
+// STOCK_TARGET (default 42).
 import fs from 'fs'
 import { Worker, isMainThread, parentPort } from 'worker_threads'
 import { runPuzzle, SCENARIOS } from './research'
@@ -28,8 +30,15 @@ import { DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK } from 'C:/Git/sudoku-solver/fronten
 import type { Board, CandidateGrid } from 'C:/Git/sudoku-solver/frontend/src/sudoku/types'
 
 const DIR = process.env.DRAGON_RESEARCH_DIR ?? 'C:/Git/sudoku-solver/frontend/dragon-research/data/'
-const OUT = DIR + 'ddd-light-hunt.jsonl'
-const HITS = DIR + 'ddd-light-hits.jsonl'
+// INDEPENDENT=1 (2026-10-02): stock positions must have an independent Double Dynamic Dragon (see independent.ts and
+// verify-ddd.ts). Own files; the plain run's records are reused as a cache: a puzzle that had no Double-Dynamic-only
+// stuck point there (ddd 0) can't have one now, so it isn't recomputed, and one that had needs only verify().
+// Positions aren't graded (teaching grades are the plain run's job). Stops when STOCK_BASE (independent positions
+// already in the stock) + new hits reach STOCK_TARGET.
+const INDEPENDENT = process.env.INDEPENDENT === '1'
+const OUT = DIR + (INDEPENDENT ? 'ddd-light-hunt-independent.jsonl' : 'ddd-light-hunt.jsonl')
+const HITS = DIR + (INDEPENDENT ? 'ddd-light-hits-independent.jsonl' : 'ddd-light-hits.jsonl')
+const PLAIN_OUT = DIR + 'ddd-light-hunt.jsonl'
 
 // Technique sets, simplest first; 'hidden single' and 'naked pair' are always on in a Dynamic Dragon.
 const T = (...t: Rule3Technique[]) => new Set<Rule3Technique>(['hidden single', 'naked pair', ...t])
@@ -99,14 +108,21 @@ async function grade(state: string) {
 }
 
 if (isMainThread) {
-  const seeds = fs.readFileSync(DIR + (process.env.SEEDS ?? 'ddd-seeds.txt'), 'utf8').split(/\s+/).filter((s) => s.length === 81)
+  // SEEDS: a file name in the data dir, or an absolute path (big corpora live outside the repo).
+  const seedFile = process.env.SEEDS ?? 'ddd-seeds.txt'
+  const seeds = fs.readFileSync(/^([A-Za-z]:|\/)/.test(seedFile) ? seedFile : DIR + seedFile, 'utf8').split(/\s+/).filter((s) => s.length === 81)
   const nWorkers = Number(process.argv[2] ?? 14)
   const maxLevel = Number(process.argv[3] ?? 3)
   const solver = new SudokuSolver()
   const lines = (f: string) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
   const done = new Set<string>(lines(OUT).map((l) => l.puzzle))
+  const cache = new Map<string, { stuck: number; ddd: number }>(INDEPENDENT ? lines(PLAIN_OUT).map((l) => [l.puzzle, l]) : [])
   // Positions already in the stock or already found: a clue variant often gets stuck in the same place.
   const known = new Set<string>(lines(HITS).map((l) => l.key))
+  // Stock hits not yet loaded into the app (the 6th stock entry came from this file and is already in the stock).
+  const stockInApp = new Set(DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK)
+  const stockTotal = () => lines(HITS).filter((l) => l.stock && !stockInApp.has(l.state)).length
+  const stockCount = () => (INDEPENDENT ? Number(process.env.STOCK_BASE ?? 0) : DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK.length) + stockTotal()
   for (const state of DOUBLE_DYNAMIC_DRAGON_PUZZLE_STOCK) {
     const imp = await importState(state)
     if (imp) known.add(positionKey(imp.board, imp.candidates))
@@ -116,7 +132,10 @@ if (isMainThread) {
     return [...p].flatMap((ch, i) => (ch === '0' ? [p.slice(0, i) + sol[i] + p.slice(i + 1)] : []))
   }
   const queue: { p: string; level: number }[] = []
-  for (const s of seeds) for (const v of variants(s)) queue.push({ p: v, level: 1 })
+  // SEEDS_TOO: screen the seeds themselves first (level 0) - for a corpus not yet known to get stuck; only
+  // the stuck ones get their variants queued.
+  if (process.env.SEEDS_TOO) for (const s of seeds) queue.push({ p: s, level: 0 })
+  else for (const s of seeds) for (const v of variants(s)) queue.push({ p: v, level: 1 })
   // Resuming: re-expand the stuck variants found last time.
   for (const l of lines(OUT)) if (l.stuck && l.level < maxLevel) for (const v of variants(l.puzzle)) queue.push({ p: v, level: l.level + 1 })
   let next = 0, finished = 0, inFlight = 0, stock = 0
@@ -127,12 +146,27 @@ if (isMainThread) {
     for (const w of workers) void w.terminate()
     process.exit(0)
   }
+  const record = (m: { puzzle: string; level: number; stuck: number; ddd: number }) => {
+    fs.appendFileSync(OUT, JSON.stringify({ puzzle: m.puzzle, level: m.level, stuck: m.stuck, ddd: m.ddd }) + '\n')
+    // Variants of a stuck puzzle go to the front: far likelier than the rest of a big seed corpus.
+    if (m.stuck && m.level < maxLevel) queue.splice(next, 0, ...variants(m.puzzle).filter((v) => !done.has(v)).map((v) => ({ p: v, level: m.level + 1 })))
+  }
   const feed = (w: Worker) => {
-    while (next < queue.length && done.has(queue[next].p)) next++
+    for (;;) {
+      while (next < queue.length && done.has(queue[next].p)) next++
+      const c = next < queue.length ? cache.get(queue[next].p) : undefined
+      if (!c || c.ddd) break
+      // Known from the plain run to have no Double-Dynamic-only stuck point: nothing to compute.
+      const t = queue[next++]
+      done.add(t.p)
+      finished++
+      record({ puzzle: t.p, level: t.level, stuck: c.stuck, ddd: 0 })
+    }
     if (next < queue.length) {
       done.add(queue[next].p)
       inFlight++
-      w.postMessage(queue[next++])
+      const t = queue[next++]
+      w.postMessage({ ...t, cached: cache.get(t.p) })
     } else if (inFlight === 0) stop(`queue empty - finished ${finished}, new stock positions ${stock}, no light one`)
     else setTimeout(() => feed(w), 5000)
   }
@@ -142,15 +176,16 @@ if (isMainThread) {
     w.on('message', (m: any) => {
       finished++
       inFlight--
-      fs.appendFileSync(OUT, JSON.stringify({ puzzle: m.puzzle, level: m.level, stuck: m.stuck, ddd: m.ddd }) + '\n')
-      if (m.stuck && m.level < maxLevel) for (const v of variants(m.puzzle)) if (!done.has(v)) queue.push({ p: v, level: m.level + 1 })
+      record(m)
       for (const hit of m.hits) {
         if (known.has(hit.key)) continue
         known.add(hit.key)
         if (hit.stock) stock++
         fs.appendFileSync(HITS, JSON.stringify(hit) + '\n')
         console.log(new Date().toISOString(), hit.stock ? 'NEW STOCK POSITION' : 'NEW POSITION (not stock)', m.puzzle, JSON.stringify(hit.grade))
-        if (hit.grade?.light && hit.grade.strongestStuck) stop(`LIGHT position found: ${m.puzzle}`)
+        if (hit.grade?.light && hit.grade.strongestStuck && !process.env.KEEP_GOING) stop(`LIGHT position found: ${m.puzzle}`)
+        // KEEP_GOING: stock mode - run until the stock (existing + new stock hits) reaches STOCK_TARGET.
+        if (process.env.KEEP_GOING && stockCount() >= Number(process.env.STOCK_TARGET ?? 42)) stop(`stock target reached (${stockCount()})`)
       }
       if (finished % 25 === 0) console.log(new Date().toISOString(), `finished ${finished}, queued ${queue.length - next}, new stock positions ${stock}`)
       feed(w)
@@ -158,15 +193,19 @@ if (isMainThread) {
     feed(w)
   }
 } else {
-  parentPort!.on('message', async (task: { p: string; level: number }) => {
-    const r: any = await runPuzzle(task.p, SCENARIOS[0])
-    const stuck = (r.stuckStates ?? []).length
-    const ddd = (r.stuckStates ?? []).filter((s: any) => s.doubleDynamic && !s.doublePlain).length
+  parentPort!.on('message', async (task: { p: string; level: number; cached?: { stuck: number; ddd: number } }) => {
+    const r: any = task.cached ? { stuckStates: [] } : await runPuzzle(task.p, SCENARIOS[0])
+    const stuck = task.cached ? task.cached.stuck : (r.stuckStates ?? []).length
+    const ddd = task.cached ? task.cached.ddd : (r.stuckStates ?? []).filter((s: any) => s.doubleDynamic && !s.doublePlain).length
     const hits: unknown[] = []
     if (ddd) {
       const v: any = await verify(task.p)
       if (v.ok) {
-        hits.push({ puzzle: task.p, level: task.level, stock: true, key: v.firstStuckKey, state: v.firstStuck, rows: v.firstStuckRows, grade: await grade(v.firstStuck) })
+        hits.push({ puzzle: task.p, level: task.level, stock: true, key: v.firstStuckKey, state: v.firstStuck, rows: v.firstStuckRows, grade: INDEPENDENT ? null : await grade(v.firstStuck) })
+      }
+      if (INDEPENDENT) {
+        parentPort!.postMessage({ puzzle: task.p, level: task.level, stuck, ddd, hits })
+        return
       }
       for (const s of r.stuckStates.filter((x: any) => x.doubleDynamic && !x.doublePlain)) {
         const imp = await importState(s.sc)
