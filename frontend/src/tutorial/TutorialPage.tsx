@@ -327,8 +327,8 @@ function DoubleDragonView({ initialGroup }: { initialGroup?: string }) {
 }
 
 /** Abusing Uniqueness: a sub-tab per technique, each played step by step. */
-function UniquenessView({ initialGroup }: { initialGroup?: string }) {
-  const groups = useMemo(() => buildUniquenessGroups(), [])
+function UniquenessView({ initialGroup, extendedUrEnabled }: { initialGroup?: string; extendedUrEnabled: boolean }) {
+  const groups = useMemo(() => buildUniquenessGroups({ extendedUr: extendedUrEnabled }), [extendedUrEnabled])
   return (
     <GroupTabs
       groups={groups}
@@ -381,6 +381,9 @@ interface TutorialPageProps {
   initialTab?: TabId
   /** The sub-tab to open `initialTab` on (see GroupTabs). */
   initialGroup?: string
+  /** The Extended UR setting: its Abusing Uniqueness sub-tab is only shown
+   * while the technique is enabled, by request. */
+  extendedUrEnabled?: boolean
 }
 
 /**
@@ -389,7 +392,7 @@ interface TutorialPageProps {
  * tab per technique. Everything on it is generated from real positions by the
  * app's own solver code - see tutorialExamples.ts to change what it teaches.
  */
-export default function TutorialPage({ onClose, initialTab = 'basics', initialGroup }: TutorialPageProps) {
+export default function TutorialPage({ onClose, initialTab = 'basics', initialGroup, extendedUrEnabled = false }: TutorialPageProps) {
   const [tab, setTab] = useState<TabId>(initialTab)
   const contentRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
@@ -453,7 +456,7 @@ export default function TutorialPage({ onClose, initialTab = 'basics', initialGr
         {tab === 'basics' ? (
           <BasicsView initialGroup={groupFor('basics')} />
         ) : tab === 'uniqueness' ? (
-          <UniquenessView initialGroup={groupFor('uniqueness')} />
+          <UniquenessView initialGroup={groupFor('uniqueness')} extendedUrEnabled={extendedUrEnabled} />
         ) : tab === 'double' ? (
           <DoubleDragonView initialGroup={groupFor('double')} />
         ) : (

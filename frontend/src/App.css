@@ -263,7 +263,7 @@ html.app-busy .busy-cancel,
   max-width: 60rem;
 }
 
-/* Inline "Techniques overview" link in the header blurb: a button (it opens
+/* Inline "Learn techniques" link in the header blurb: a button (it opens
    the overlay, not a URL) dressed as a text link. */
 .header-link {
   display: inline;
@@ -314,6 +314,201 @@ html.app-busy .busy-cancel,
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* Desktop toolbar: one card, like the panels under it, holding three kinds
+   of thing - edit actions (left), learning (Learn techniques + ?), and
+   the menus (Generate Puzzle, then the three settings menus). Buttons that
+   belong together are joined into one .toolbar-segment so the row reads as
+   a few groups instead of nine separate buttons. All of it is scoped to the
+   desktop page: the touch layout has its own one-row icon toolbar below,
+   where a segment is display: contents (its buttons lay out as before). */
+.page:not(.compact-layout) > .main-toolbar {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.page:not(.compact-layout) > .main-toolbar .toolbar-group {
+  gap: 0.6rem;
+}
+
+.toolbar-segment {
+  display: flex;
+  align-items: stretch;
+}
+
+.compact-layout .toolbar-segment {
+  display: contents;
+}
+
+.page:not(.compact-layout) .toolbar-segment > button,
+.page:not(.compact-layout) .toolbar-segment > .dropdown-menu > .dropdown-trigger {
+  border-radius: 0;
+}
+
+/* Neighbours share one border line; the hovered/open one is lifted so its
+   own coloured border isn't hidden under the next button. */
+.page:not(.compact-layout) .toolbar-segment > * + * {
+  margin-left: -1px;
+}
+
+/* The lift goes on the trigger, never on its .dropdown-menu wrapper: a
+   z-index there makes the wrapper a stacking context, which traps the open
+   panel (z-index 30) at level 1 - under the Candidate Colours picker. */
+.page:not(.compact-layout) .toolbar-segment > button:hover:not(:disabled),
+.page:not(.compact-layout) .toolbar-segment > .dropdown-menu > .dropdown-trigger:hover,
+.page:not(.compact-layout) .toolbar-segment > .dropdown-menu > .dropdown-trigger.active {
+  position: relative;
+  z-index: 1;
+}
+
+.page:not(.compact-layout) .toolbar-segment > button:first-child,
+.page:not(.compact-layout) .toolbar-segment > .dropdown-menu:first-child > .dropdown-trigger {
+  border-top-left-radius: 0.5rem;
+  border-bottom-left-radius: 0.5rem;
+}
+
+.page:not(.compact-layout) .toolbar-segment > button:last-child,
+.page:not(.compact-layout) .toolbar-segment > .dropdown-menu:last-child > .dropdown-trigger {
+  border-top-right-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+}
+
+.page:not(.compact-layout) > .main-toolbar .toolbar-group > button:hover:not(:disabled),
+.page:not(.compact-layout) > .main-toolbar .toolbar-segment > button:hover:not(:disabled),
+.page:not(.compact-layout) > .main-toolbar .dropdown-menu > .dropdown-trigger:hover:not(:disabled) {
+  border-color: #94a3b8;
+}
+
+/* Undo / Redo: icon + word. */
+.undo-trigger,
+.redo-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.page:not(.compact-layout) .undo-redo-icon {
+  width: 1.05em;
+  height: 1.05em;
+}
+
+/* Clear grid wipes the puzzle: an ordinary button that turns a warning red
+   on hover. */
+.page:not(.compact-layout) > .main-toolbar .toolbar-group > .clear-grid-trigger:hover:not(:disabled) {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+/* Learn techniques + ? are the two "learn" buttons: one blue pair. The ?
+   stops being a circle here - it is the pair's right-hand end. */
+.page:not(.compact-layout) .how-it-works-trigger,
+.page:not(.compact-layout) .toolbar-segment > .help-button {
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.page:not(.compact-layout) .toolbar-segment > .help-button {
+  /* height: auto so the segment (align-items: stretch) sizes it to match
+     Learn techniques; a percentage height has nothing to resolve against. */
+  width: auto;
+  height: auto;
+  padding: 0 0.8rem;
+}
+
+.page:not(.compact-layout) > .main-toolbar .how-it-works-trigger:hover,
+.page:not(.compact-layout) > .main-toolbar .toolbar-segment > .help-button:hover {
+  border-color: #1d4ed8;
+}
+
+/* Menu icons, drawn here rather than written into the labels: the usage
+   analytics names a button by its visible text, which must not change. */
+.page:not(.compact-layout) .how-it-works-trigger::before,
+.page:not(.compact-layout) .dragon-config-trigger::before {
+  margin-right: 0.35rem;
+}
+
+/* Technique Selections' Medusa head (MedusaIcon in App.tsx) - an SVG, so it
+   needs no ::before. */
+.medusa-icon {
+  display: inline-block;
+  vertical-align: middle;
+  /* Taller than the text, so pull it back in: it must not grow the line (and
+     with it the button) past the other menu buttons beside it. */
+  margin-block: -0.3em;
+}
+
+/* A joined menu button fills its segment's height whatever its label holds. */
+.page:not(.compact-layout) .toolbar-segment > .dropdown-menu {
+  display: flex;
+}
+
+.page:not(.compact-layout) .medusa-icon {
+  margin-right: 0.2rem;
+}
+
+.page:not(.compact-layout) .how-it-works-trigger::before {
+  content: '📖';
+}
+
+.page:not(.compact-layout) .dragon-config-trigger::before {
+  content: '🐉';
+}
+
+@media (prefers-color-scheme: dark) {
+  .page:not(.compact-layout) > .main-toolbar {
+    background: #1e293b;
+    border-color: #334155;
+  }
+
+  /* Only the toolbar's own buttons - the dropdown panels are inside
+     .main-toolbar too, and their buttons keep the panel styling. */
+  .page:not(.compact-layout) > .main-toolbar .toolbar-group > button,
+  .page:not(.compact-layout) > .main-toolbar .toolbar-segment > button,
+  .page:not(.compact-layout) > .main-toolbar .dropdown-menu > .dropdown-trigger {
+    background: #0f172a;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .toolbar-group > button:hover:not(:disabled),
+  .page:not(.compact-layout) > .main-toolbar .toolbar-segment > button:hover:not(:disabled),
+  .page:not(.compact-layout) > .main-toolbar .dropdown-menu > .dropdown-trigger:hover:not(:disabled) {
+    border-color: #64748b;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .toolbar-group > .clear-grid-trigger:hover:not(:disabled) {
+    border-color: #7f1d1d;
+    background: #2a1215;
+    color: #fca5a5;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .how-it-works-trigger,
+  .page:not(.compact-layout) > .main-toolbar .toolbar-segment > .help-button {
+    color: #93c5fd;
+    border-color: #1e3a5f;
+    background: #16233a;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .how-it-works-trigger:hover,
+  .page:not(.compact-layout) > .main-toolbar .toolbar-segment > .help-button:hover {
+    border-color: #60a5fa;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .generate-puzzle-trigger {
+    background: #0f1f13;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .generate-puzzle-trigger.active {
+    background: #0f2d18;
+  }
+
+  .page:not(.compact-layout) > .main-toolbar .dropdown-trigger.active:not(.generate-puzzle-trigger) {
+    background: #16233a;
+  }
 }
 
 .dropdown-menu {
@@ -394,6 +589,97 @@ html.app-busy .busy-cancel,
    widens to fit, up to its max-width). */
 .dropdown-section-title-nowrap {
   white-space: nowrap;
+}
+
+/* Technique Selections -> Basic / Colouring Techniques: a collapsible section
+   title (styled like the plain titles) with its ? help button beside it -
+   outside the toggle, since a button can't hold another button. */
+.menu-section-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.menu-section-toggle-row:has(.menu-section-toggle[aria-expanded='true']) {
+  margin-bottom: 0.4rem;
+}
+
+.menu-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0;
+  font: inherit;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.menu-section-toggle .dropdown-section-title {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.menu-section-chevron {
+  font-size: 1.25rem;
+  line-height: 1;
+  color: #64748b;
+}
+
+/* Dragon Configuration -> Select Dynamic Dragon Colouring techniques: its
+   collapsible sections, and the warning after a section's name (shown whether
+   or not the section is open, so it is read before opening it). */
+.rule3-technique-group {
+  margin-top: 0.55rem;
+}
+
+.rule3-technique-group .menu-section-toggle-row:has(.menu-section-toggle[aria-expanded='true']) {
+  margin-bottom: 0.2rem;
+}
+
+.menu-section-warning {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin: 0.25rem 0 0.3rem;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #92400e;
+  background: #fffbeb;
+  border-left: 3px solid #f59e0b;
+  border-radius: 0.25rem;
+}
+
+/* Two loudnesses, by request: Extreme gets a quiet "!" in a ring on the amber
+   note; Unfair gets the warning triangle on a red, bolder one. */
+.menu-section-warning-caution .menu-section-warning-icon {
+  flex: none;
+  align-self: flex-start;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin-top: 0.05rem;
+  border: 1.5px solid #d97706;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: calc(0.95rem - 3px);
+  text-align: center;
+  color: #b45309;
+}
+
+.menu-section-warning-danger {
+  font-weight: 600;
+  color: #991b1b;
+  background: #fef2f2;
+  border-left-color: #dc2626;
+}
+
+.menu-section-warning-danger .menu-section-warning-icon {
+  font-size: 0.95rem;
+  line-height: 1;
 }
 
 .dropdown-divider {
@@ -802,7 +1088,7 @@ html.app-busy .busy-cancel,
   line-height: 1.5;
 }
 
-/* One tab per settings menu - same look as the Techniques overview's tabs. */
+/* One tab per settings menu - same look as the Learn techniques's tabs. */
 .help-tabs {
   /* Stays in view while the tab's content scrolls under it. */
   position: sticky;
@@ -2697,6 +2983,23 @@ button.primary {
     color: #94a3b8;
   }
 
+  .menu-section-warning {
+    color: #fde68a;
+    background: #422006;
+    border-left-color: #d97706;
+  }
+
+  .menu-section-warning-caution .menu-section-warning-icon {
+    border-color: #fbbf24;
+    color: #fde68a;
+  }
+
+  .menu-section-warning-danger {
+    color: #fecaca;
+    background: #450a0a;
+    border-left-color: #ef4444;
+  }
+
   .help-button {
     color: #93c5fd;
     border-color: #1e3a5f;
@@ -3066,9 +3369,28 @@ button.primary {
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
-  /* Seven icon buttons (Undo, Redo, Hint, Generate, Dragon, Settings, more)
-     just fit a 360px screen with these gaps. */
+  /* Eight icon buttons (Undo, Redo, Hint, Generate, Dragon, Technique
+     Selections, Settings, more) share the row. Each is a finger-sized
+     square when there's room; on a narrower row (a 320-360px phone, or the
+     toolbar column beside the board in landscape) they all shrink by the
+     same share instead of the last ones scrolling out of view - see the
+     min-width: 0 rules below. */
   gap: 0.25rem;
+}
+
+.compact-phone .main-toolbar > *,
+.compact-phone .main-toolbar .toolbar-group > *,
+.compact-phone .main-toolbar .toolbar-segment > * {
+  min-width: 0;
+}
+
+/* A dropdown's wrapper is the flex item; its trigger fills it. */
+.compact-phone .main-toolbar .dropdown-menu {
+  width: var(--compact-touch);
+}
+
+.compact-phone .main-toolbar .dropdown-menu > .dropdown-trigger {
+  width: 100%;
 }
 
 .compact-phone .main-toolbar::-webkit-scrollbar {
@@ -3086,9 +3408,10 @@ button.primary {
 
 .compact-phone .main-toolbar .settings-trigger,
 .compact-phone .main-toolbar .dragon-config-trigger,
+.compact-phone .main-toolbar .technique-selections-trigger,
 .compact-phone .main-toolbar .more-trigger {
-  min-width: var(--compact-touch);
-  padding: 0.5rem;
+  min-width: 0;
+  padding: 0.5rem 0.15rem;
   font-size: 1.1rem;
 }
 
@@ -3534,8 +3857,11 @@ button.primary {
 .compact-phone .main-toolbar .generate-puzzle-trigger,
 .compact-phone .main-toolbar .undo-trigger,
 .compact-phone .main-toolbar .redo-trigger {
-  min-width: var(--compact-touch);
-  padding: 0.5rem;
+  /* Shrinkable, unlike the tablet's flex: none Hint above. */
+  flex: 0 1 auto;
+  width: var(--compact-touch);
+  min-width: 0;
+  padding: 0.5rem 0.15rem;
   font-size: 1.1rem;
 }
 

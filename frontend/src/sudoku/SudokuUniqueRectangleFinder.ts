@@ -86,7 +86,7 @@ export interface UniqueRectangleInstance {
   solvedCandidates: CandidateElimination[]
 }
 
-function sameUnit(a: readonly [number, number], b: readonly [number, number]): boolean {
+export function sameUnit(a: readonly [number, number], b: readonly [number, number]): boolean {
   const [ar, ac] = a
   const [br, bc] = b
   if (ar === br || ac === bc) {
@@ -109,7 +109,7 @@ function sharedUnitsOf(a: Cell, b: Cell): Cell[][] {
  * `a` and `b` in some unit they share - i.e. within that unit, no other
  * cell has `digit` marked. Checks every shared unit (a row-and-box-adjacent
  * pair might be linked via either, or both). */
-function hasStrongLink(board: Board, candidates: CandidateGrid, a: Cell, b: Cell, digit: number): boolean {
+export function hasStrongLink(board: Board, candidates: CandidateGrid, a: Cell, b: Cell, digit: number): boolean {
   if (!candidates[a[0]][a[1]][digit - 1] || !candidates[b[0]][b[1]][digit - 1]) {
     return false
   }

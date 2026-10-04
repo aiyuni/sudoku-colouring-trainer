@@ -6,6 +6,7 @@ import {
   buildBugPlusNLesson,
   buildDoubleDragonLesson,
   buildDragonLesson,
+  buildExtendedUrLesson,
   buildHiddenSingleLesson,
   buildLockedCandidatesLesson,
   buildMedusaLesson,
@@ -104,8 +105,12 @@ export function buildBasicsGroups(): LessonGroup[] {
  * mined from real solves as the first stuck point after the Basics, and need
  * no pencil marks removed - a plain autofill of the board shows them. UR
  * Types 2, 3 and 5 are mid-solve positions (from Sudoku.Coach states), so
- * they list the marks already removed. */
-export function buildUniquenessGroups(): LessonGroup[] {
+ * they list the marks already removed.
+ *
+ * `extendedUr`: the Extended UR setting. Its sub-tab is only there while the
+ * technique is enabled, by request - it is an Extreme Technique, off by
+ * default, and the page shouldn't teach what the solver won't show. */
+export function buildUniquenessGroups(options: { extendedUr?: boolean } = {}): LessonGroup[] {
   return [
     {
       title: 'UR Type 1',
@@ -359,7 +364,67 @@ export function buildUniquenessGroups(): LessonGroup[] {
         ),
       ],
     },
+    ...(options.extendedUr ? [extendedUrGroup()] : []),
   ]
+}
+
+/** Extended UR (Type 1): one lesson per 6-cell deadly pattern. Mid-solve
+ * positions mined by dragon-research/extended-ur/sweep.ts, each one a state
+ * where an Extended UR is the easiest technique left (default techniques). */
+function extendedUrGroup(): LessonGroup {
+  return {
+    title: 'Extended UR',
+    blurb:
+      "A Unique Rectangle grown to six cells: when five of them hold only the pattern's two or three digits, the sixth must be something else.",
+    lessons: [
+      ...safely(() =>
+        buildExtendedUrLesson({
+          id: 'extended-ur-three-box',
+          title: 'Rectangle, three boxes',
+          hint: 'Three digits in a 2-by-3 block that spans three boxes.',
+          state: decodePuzzleState('807410532000800491400300867050100370170503620300700145506200984780900256942658713', 'r3c3-9 r6c2-9'),
+          cell: [3, 4],
+        }),
+      ),
+      ...safely(() =>
+        buildExtendedUrLesson({
+          id: 'extended-ur-two-box',
+          title: 'Rectangle, two boxes',
+          hint: 'Three digits in a 2-by-3 block that spans two boxes.',
+          state: decodePuzzleState(
+            '031800200026195703057030106000008930003010020700350400200900370070523800300000002',
+            'r1c5-4 r1c6-4 r3c1-4 r3c8-4 r4c1-4 r4c3-5 r5c1-4 r5c1-8 r5c1-9 r5c2-6 r5c4-6 r5c6-6 r5c9-5 r6c8-8 r8c1-4 r8c1-9',
+          ),
+          cell: [0, 7],
+        }),
+      ),
+      ...safely(() =>
+        buildExtendedUrLesson({
+          id: 'extended-ur-loop',
+          title: 'Loop, three boxes',
+          hint: 'Two digits in six cells of one band, two in each row, column and box.',
+          state: decodePuzzleState(
+            '800103000007050600009406080001280097280000006790600800000060000103092068070040005',
+            'r1c3-4 r1c3-5 r1c7-2 r2c9-9 r4c1-4 r4c1-5 r4c2-4 r4c2-5 r4c7-3 r5c4-3 r5c4-5 r5c5-7 r5c6-1 r5c6-4 r5c6-5 r6c6-1 ' +
+              'r6c8-4 r6c8-5 r6c9-4 r7c3-4 r7c3-5 r7c6-5',
+          ),
+          cell: [4, 6],
+        }),
+      ),
+      ...safely(() =>
+        buildExtendedUrLesson({
+          id: 'extended-ur-bent-loop',
+          title: 'Bent loop',
+          hint: 'Two digits in six cells that turn a corner, two in each row, column and box.',
+          state: decodePuzzleState(
+            '800316504560840230304000000946281753230460800180093426400008000650904100790000040',
+            'r1c3-7 r2c3-7 r3c2-2 r3c5-7 r3c8-9 r3c9-9 r7c4-5 r7c4-7 r9c4-5 r9c5-2',
+          ),
+          cell: [2, 5],
+        }),
+      ),
+    ],
+  }
 }
 
 /** Double Dragons: one sub-tab each for the plain and the Dynamic version.

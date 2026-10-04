@@ -12,6 +12,7 @@ import {
   type DragonMove,
   type Rule3Technique,
 } from '../sudoku/SudokuDragonFinder'
+import { SudokuExtendedUniqueRectangleFinder } from '../sudoku/SudokuExtendedUniqueRectangleFinder'
 import { SudokuLockedCandidateFinder } from '../sudoku/SudokuLockedCandidateFinder'
 import { SudokuMedusaFinder, type ColoredCandidate, type MedusaChain } from '../sudoku/SudokuMedusaFinder'
 import { SudokuPairFinder } from '../sudoku/SudokuPairFinder'
@@ -47,6 +48,7 @@ const urFinder = new SudokuUniqueRectangleFinder()
 const bugFinder = new SudokuBugPlusNFinder()
 const oddagonFinder = new SudokuBivalueOddagonFinder()
 const avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
+const extendedUrFinder = new SudokuExtendedUniqueRectangleFinder()
 
 // ---------------------------------------------------------------- helpers
 
@@ -796,9 +798,13 @@ const TECHNIQUE_PHRASE: Record<string, string> = {
   'BUG+N': 'a BUG (Bivalue Universal Grave) pattern',
   'avoidable rectangle': 'an Avoidable Rectangle',
   'short single-digit aic': 'a single-digit AIC',
+  'extended ur': 'an Extended UR',
   'short aic': 'a short AIC',
   'generic aic': 'a generic AIC',
+  'grouped aic': 'a grouped AIC',
   'als-xz': 'an ALS-xz',
+  'ur-aic': 'a UR-AIC',
+  'als-aic': 'an ALS-AIC',
 }
 
 function joinPhrases(items: string[]): string {
@@ -1843,5 +1849,118 @@ export function buildBivalueOddagonLesson(options: OddagonOptions): TutorialLess
       { badge: 'Result', caption: `${x} is removed from ${cellList(eliminated.map((e) => [e.row, e.col] as const))}.`, outlineCells: loop, eliminated, spotlight, applied: true },
     )
   }
+  return { id, title, hint, state, frames }
+}
+
+interface ExtendedUrOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  /** The odd cell (the one with other candidates), in case the position has
+   * more than one Extended UR. */
+  cell: TutorialCell
+}
+
+/** Two ways of filling the six cells with the pattern's digits alone that
+ * differ in every cell - what makes the pattern deadly - or null if the
+ * candidates left don't allow a pair (then the lesson just says so in words).
+ * The odd cell takes part with the pattern digits it holds. */
+function deadlyFillings(state: PuzzleState, cells: readonly TutorialCell[], digits: readonly number[]): [number[], number[]] | null {
+  const options = cells.map(([r, c]) => digits.filter((d) => state.candidates[r][c][d - 1]))
+  const fillings: number[][] = []
+  const fill = (chosen: number[]) => {
+    const i = chosen.length
+    if (i === cells.length) {
+      fillings.push([...chosen])
+      return
+    }
+    for (const digit of options[i]) {
+      if (!chosen.some((d, k) => d === digit && sees(cells[k], cells[i]))) {
+        fill([...chosen, digit])
+      }
+    }
+  }
+  fill([])
+  for (const first of fillings) {
+    const second = fillings.find((other) => other.every((d, i) => d !== first[i]))
+    if (second) {
+      return [first, second]
+    }
+  }
+  return null
+}
+
+/**
+ * Extended UR (Type 1): the six cells, the two ways they could be filled if
+ * they held only the pattern's digits (one in blue, one in yellow), then the
+ * odd cell as the only way out. Everything comes from the finder's instance.
+ */
+export function buildExtendedUrLesson(options: ExtendedUrOptions): TutorialLesson {
+  const { id, title, hint, state, cell } = options
+  const instance = extendedUrFinder.find(state.board, state.candidates).find((candidate) => sameCell(candidate.oddCell, cell))
+  if (!instance) {
+    throw new Error(`No Extended UR whose odd cell is ${cellName(cell[0], cell[1])} in this example.`)
+  }
+  const cells = instance.cells.map(([r, c]) => [r, c] as const)
+  const odd = [instance.oddCell[0], instance.oddCell[1]] as const
+  const oddName = cellName(odd[0], odd[1])
+  const digits = instance.digits
+  const digitsText = joinPhrases(digits.map(String))
+  const extrasText = joinPhrases(instance.extraDigits.map(String))
+  const spotlight = { digits: [...digits, ...instance.extraDigits] }
+  const patternPips = cells.flatMap(([r, c]) => digits.filter((d) => state.candidates[r][c][d - 1]).map((d) => ref(r, c, d)))
+  const boxCount = new Set(cells.map(([r, c]) => boxOf(r, c))).size
+  const rectangle = digits.length === 3
+  const fillings = deadlyFillings(state, cells, digits)
+  const eliminated = digits.filter((d) => state.candidates[odd[0]][odd[1]][d - 1]).map((d) => ref(odd[0], odd[1], d))
+  const solved = instance.solved ? [ref(instance.solved.row, instance.solved.col, instance.solved.digit)] : []
+  // The lesson always shows the pattern digits leaving the odd cell; a lone
+  // extra candidate is then also its answer.
+  const conclusion = instance.solved ? `${oddName} is ${instance.solved.digit}` : `${oddName} can't be ${joinPhrases(eliminated.map((e) => String(e.digit))).replace(' and ', ' or ')}`
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Look',
+      caption: rectangle
+        ? `${cellList(cells)} make a 2-by-3 block over ${boxCount} boxes, and five of them hold nothing but ${digitsText}.`
+        : `${cellList(cells)}: every row, column and box they touch holds exactly two of them, and five of them hold nothing but ${digitsText}.`,
+      outlineCells: cells,
+      basis: patternPips,
+      spotlight,
+    },
+    {
+      badge: 'Deadly',
+      caption: fillings
+        ? `If all six held only ${digitsText}, they could be filled the blue way or the yellow way and nothing else on the grid would notice: two solutions. A proper puzzle has exactly one.`
+        : `If all six held only ${digitsText}, they could be filled in more than one way and nothing else on the grid would notice. A proper puzzle has exactly one solution.`,
+      outlineCells: cells,
+      coloured: fillings
+        ? cells.flatMap(([r, c], i): ColouredCand[] => [
+            { ...ref(r, c, fillings[0][i]), color: 'blue' },
+            { ...ref(r, c, fillings[1][i]), color: 'yellow' },
+          ])
+        : undefined,
+      basis: fillings ? undefined : patternPips,
+      spotlight,
+    },
+    {
+      badge: 'Spot it',
+      caption: `Only ${oddName} has anything else (${extrasText}), so it must be ${instance.extraDigits.length === 1 ? 'that' : 'one of those'}: ${conclusion}.`,
+      outlineCells: cells,
+      eliminated: instance.solved ? undefined : eliminated,
+      solved,
+      spotlight,
+    },
+    {
+      badge: 'Result',
+      caption: `So ${conclusion}.`,
+      outlineCells: cells,
+      eliminated: instance.solved ? undefined : eliminated,
+      solved,
+      spotlight,
+      applied: true,
+    },
+  ]
   return { id, title, hint, state, frames }
 }

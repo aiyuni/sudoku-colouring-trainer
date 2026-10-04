@@ -10,9 +10,11 @@ export interface AicCandidate {
   row: number
   col: number
   digit: number
-  /** A grouped node (only Empty Rectangle makes these): every cell of the
-   * group, 2 or more, all holding `digit` and all in one row or column
-   * inside one box - "digit is in one of these cells". `row`/`col` are the
+  /** A grouped node (Empty Rectangle, UR-AIC and ALS-AIC make these): every
+   * cell of the group, 2 or more, all holding `digit` - "digit is in one of
+   * these cells". Normally all in one row or column inside one box; an
+   * ALS-AIC's ALS node is any of its ALS's cells, all in one house but
+   * possibly in several boxes, or in a box but several lines. `row`/`col` are the
    * first of them, so code that only wants a representative cell still
    * works; anything that lists or draws the chain should use aicNodeCells. */
   cells?: ReadonlyArray<readonly [number, number]>
@@ -65,10 +67,30 @@ export function aicChainView(aic: ShortAicInstance): {
   }
 }
 
+/** UR-AIC only (see SudokuUrAicFinder): the Unique Rectangle a link rests on
+ * - its four cells, in the UR finder's canonical order, and its two digits. */
+export interface AicUrBasis {
+  cells: ReadonlyArray<readonly [number, number]>
+  digits: readonly [number, number]
+}
+
+/** ALS-AIC only (see SudokuAlsAicFinder): the Almost Locked Set a link rests
+ * on - N unsolved cells of one house, row-major, and their N+1 digits. */
+export interface AicAlsBasis {
+  cells: ReadonlyArray<readonly [number, number]>
+  digits: readonly number[]
+}
+
 export interface AicLink {
   from: AicCandidate
   to: AicCandidate
   kind: AicLinkKind
+  /** UR-AIC only: present on a link that holds only because of a Unique
+   * Rectangle, not because of one row/column/box or cell. */
+  ur?: AicUrBasis
+  /** ALS-AIC only: present on a (strong) link between two digits of one
+   * Almost Locked Set. */
+  als?: AicAlsBasis
 }
 
 /** Chain length 3 (4 nodes, strong-weak-strong) or chain length 5 (6 nodes,
@@ -117,6 +139,19 @@ export interface ShortAicInstance {
   patternText?: string
   /** W-Wings only: what the Techniques row's explanation is worded from. */
   wWing?: WWingDetails
+  /** Y-Wings only: the pivot and wing cells, which the Techniques row's
+   * explanation names after the chain. */
+  yWing?: YWingDetails
+}
+
+/** A Y-Wing's cells (sudokuwiki.org/Y_Wing_Strategy): a pivot holding only
+ * {X,Y}, and two wings it sees holding only {X,Z} and {Y,Z} - whichever digit
+ * the pivot is, one wing is Z. */
+export interface YWingDetails {
+  pivot: readonly [number, number]
+  wings: readonly [readonly [number, number], readonly [number, number]]
+  /** Z, the digit eliminated from every cell seeing both wings. */
+  eliminatedDigit: number
 }
 
 /** A W-Wing's parts: two cells holding only the same two digits, and a unit
@@ -140,8 +175,8 @@ export interface WWingDetails {
 export type SingleDigitAicPattern = 'Skyscraper' | 'Two-String Kite' | 'Crane' | 'Empty Rectangle'
 
 /** Every named pattern an AIC row can carry: the single-digit ones, plus
- * W-Wing, a (general) Short AIC. */
-export type ShortAicPattern = SingleDigitAicPattern | 'W-Wing'
+ * W-Wing and Y-Wing, (general) Short AICs. */
+export type ShortAicPattern = SingleDigitAicPattern | 'W-Wing' | 'Y-Wing'
 
 /** Which chain explains an elimination set best when several do (see
  * pickBestPerEliminationSet): Sudoku.Coach's own order (it tries Skyscraper,
@@ -347,7 +382,9 @@ function eliminationSetKey(eliminations: readonly CandidateElimination[]): strin
 }
 
 function patternPreference(instance: ShortAicInstance): number {
-  return instance.pattern && instance.pattern !== 'W-Wing' ? PATTERN_PREFERENCE[instance.pattern] : UNNAMED_PREFERENCE
+  return instance.pattern && instance.pattern in PATTERN_PREFERENCE
+    ? PATTERN_PREFERENCE[instance.pattern as SingleDigitAicPattern]
+    : UNNAMED_PREFERENCE
 }
 
 /** When several chains reach the exact same elimination(s), keep only the
@@ -363,7 +400,9 @@ function patternPreference(instance: ShortAicInstance): number {
  * Likewise a W-Wing beats any other general Short AIC to the same
  * eliminations, whatever their lengths (by request: a W-Wing is always shown
  * as one) - but never a single-digit chain, which is a different, easier
- * technique and is always shorter. */
+ * technique and is always shorter. A Y-Wing then beats any other general
+ * chain except a W-Wing, the same way (by request: shown as one whenever the
+ * elimination is one). */
 export function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]): ShortAicInstance[] {
   const bestBySet = new Map<string, ShortAicInstance>()
   for (const instance of instances) {
@@ -380,6 +419,18 @@ export function pickBestPerEliminationSet(instances: readonly ShortAicInstance[]
       classifyShortAic(current) === 'general'
     ) {
       if (instanceIsWWing) {
+        bestBySet.set(key, instance)
+      }
+      continue
+    }
+    const instanceIsYWing = instance.pattern === 'Y-Wing'
+    if (
+      instanceIsYWing !== (current.pattern === 'Y-Wing') &&
+      current.pattern !== 'W-Wing' &&
+      classifyShortAic(instance) === 'general' &&
+      classifyShortAic(current) === 'general'
+    ) {
+      if (instanceIsYWing) {
         bestBySet.set(key, instance)
       }
       continue
@@ -750,6 +801,48 @@ export function findEmptyRectangles(
   return out
 }
 
+// ---- Y-Wing -----------------------------------------------------------------
+
+/**
+ * The Y-Wing a plain length-5 chain is, or null: Z(w1) = X(w1) - X(p) = Y(p)
+ * - Y(w2) = Z(w2), every strong link inside a cell holding only those two
+ * digits, X, Y and Z all different, three different cells (the weak links
+ * already make the pivot p see both wings). Naming never changes the chain's
+ * eliminations: Z from every cell seeing both wings.
+ */
+function classifyYWing(candidates: CandidateGrid, nodes: readonly AicCandidate[]): { details: YWingDetails; text: string } | null {
+  if (nodes.length !== 6 || nodes.some((n) => n.cells)) {
+    return null
+  }
+  const [a, b, c, d, e, f] = nodes
+  const sameCell = (p: AicCandidate, q: AicCandidate) => p.row === q.row && p.col === q.col
+  const bivalue = (n: AicCandidate) => markedCandidateDigits(candidates[n.row][n.col]).length === 2
+  if (!sameCell(a, b) || !sameCell(c, d) || !sameCell(e, f) || ![a, c, e].every(bivalue)) {
+    return null
+  }
+  if (sameCell(a, c) || sameCell(c, e) || sameCell(a, e)) {
+    return null
+  }
+  const [z, x, y] = [a.digit, b.digit, d.digit]
+  if (b.digit !== c.digit || d.digit !== e.digit || f.digit !== z || z === x || x === y || y === z) {
+    return null
+  }
+  const pair = (p: number, q: number) => `{${Math.min(p, q)},${Math.max(p, q)}}`
+  return {
+    details: {
+      pivot: [c.row, c.col],
+      wings: [
+        [a.row, a.col],
+        [e.row, e.col],
+      ],
+      eliminatedDigit: z,
+    },
+    text:
+      `${cellText(c.row, c.col)} holds only ${pair(x, y)}, and it sees ` +
+      `${cellText(a.row, a.col)} holding only ${pair(x, z)} and ${cellText(e.row, e.col)} holding only ${pair(y, z)}`,
+  }
+}
+
 // ---- W-Wing -----------------------------------------------------------------
 
 /** "row 4", "column 3", "box 7" for an index into sudokuUnits(). */
@@ -1037,6 +1130,13 @@ export class SudokuShortAicFinder {
           instance.pattern = named.pattern
           instance.patternText = named.text
         }
+      } else {
+        const yWing = classifyYWing(candidates, nodes)
+        if (yWing) {
+          instance.pattern = 'Y-Wing'
+          instance.patternText = yWing.text
+          instance.yWing = yWing.details
+        }
       }
       instances.push(instance)
     }
@@ -1089,11 +1189,15 @@ export class SudokuShortAicFinder {
     // Bidirectional traversal already collapsed forward/backward duplicates
     // of the *same* chain (see chainDedupeKey); this collapses *different*
     // chains that happen to reach the same conclusion, keeping only the
-    // most elegant one per elimination set. W-Wings go first, by request -
-    // in the Techniques list and as Dynamic Dragon's first pick among
-    // Short AICs.
+    // most elegant one per elimination set. W-Wings go first, then Y-Wings,
+    // then every other chain, by request - in the Techniques list and as
+    // Dynamic Dragon's first pick among Short AICs.
     const best = pickBestPerEliminationSet(instances)
-    return [...best.filter((aic) => aic.pattern === 'W-Wing'), ...best.filter((aic) => aic.pattern !== 'W-Wing')]
+    return [
+      ...best.filter((aic) => aic.pattern === 'W-Wing'),
+      ...best.filter((aic) => aic.pattern === 'Y-Wing'),
+      ...best.filter((aic) => aic.pattern !== 'W-Wing' && aic.pattern !== 'Y-Wing'),
+    ]
   }
 
   findShortAicEliminations(board: Board, candidates: CandidateGrid): CandidateElimination[] {

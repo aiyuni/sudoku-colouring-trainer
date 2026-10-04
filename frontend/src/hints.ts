@@ -101,8 +101,12 @@ export function techniqueHintLabel(instance: TechniqueInstance): string {
   if (id.startsWith('ur-')) return 'Unique Rectangle'
   if (id.startsWith('bivalue-oddagon-')) return 'Bivalue Oddagon'
   if (id.startsWith('avoidable-rectangle-')) return 'Avoidable Rectangle'
+  if (id.startsWith('extended-ur-')) return 'Extended UR'
   if (id.startsWith('short-aic-')) return instance.aicPattern ?? 'Short AIC'
   if (id.startsWith('generic-aic-')) return 'generic AIC'
+  if (id.startsWith('grouped-aic-')) return 'Grouped AIC'
+  if (id.startsWith('uraic-')) return 'UR-AIC'
+  if (id.startsWith('alsaic-')) return 'ALS-AIC'
   return instance.name
 }
 
@@ -126,6 +130,8 @@ function techniqueBlurb(instance: TechniqueInstance): string {
   if (id.startsWith('bivalue-oddagon-')) return 'An odd loop of cells sharing the same two candidates can\'t be all those two digits.'
   if (id.startsWith('avoidable-rectangle-'))
     return 'Four cells in a rectangle over two boxes, some already solved (not givens), must not end up as two digits that could swap.'
+  if (id.startsWith('extended-ur-'))
+    return 'Six cells that, holding only two or three digits between them, could be filled in two ways.'
   if (id.startsWith('simple-color-')) return 'Look for a digit where its candidates can only be in X or Y cell.  Start colouring the candidates in two alternating colours.'
   if (id.startsWith('fish-')) return 'A digit confined to the same columns in several rows (or the same rows in several columns).'
   if (id.startsWith('short-single-digit-aic')) {
@@ -144,9 +150,17 @@ function techniqueBlurb(instance: TechniqueInstance): string {
   }
   if (id.startsWith('short-aic-') && instance.aicPattern === 'W-Wing')
     return 'Two cells that don\'t see each other hold only the same two digits, and some row, column or box would have no place left for one of those digits if both cells were it.'
+  if (id.startsWith('short-aic-') && instance.aicPattern === 'Y-Wing')
+    return 'A cell holding only two digits sees two other two-digit cells, each sharing one of its digits and both sharing a third digit - one of them must be that third digit.'
   if (id.startsWith('short-aic-') || id.startsWith('generic-aic-'))
     return 'A chain of alternating strong and weak links whose two ends can\'t both be false.'
+  if (id.startsWith('grouped-aic-'))
+    return 'A chain of alternating strong and weak links whose two ends can\'t both be false, where at least one node is a group: a digit\'s two or three candidates in one box and one row or column, taken together as "the digit is in one of these cells".'
   if (id.startsWith('als-xz-')) return 'Two almost locked sets linked by a restricted common digit.'
+  if (id.startsWith('uraic-'))
+    return 'A chain of alternating strong and weak links, where at least one link (or elimination) comes from a Unique Rectangle that must not become a deadly pattern.'
+  if (id.startsWith('alsaic-'))
+    return 'A chain of alternating strong and weak links, where at least one link (or elimination) comes from an almost locked set: N cells holding N+1 digits, so all but one of those digits must be in them.'
   if (id.startsWith('sue-de-coq-'))
     return 'Cells where a row or column crosses a box hold two more digits than cells; two two-digit cells, one in the line and one in the box, split those digits between them.'
   if (id.startsWith('medusa-')) return 'Colour a network of strong links across digits in two colours until something contradicts or sees both colours.'
@@ -289,6 +303,22 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
     ]
   }
 
+  if (id.startsWith('extended-ur-')) {
+    // usedCandidates are the pattern digits; the odd cell has the border.
+    const [odd] = instance.medusaHighlightCells ?? []
+    return [
+      {
+        text:
+          usedDigits.length === 2
+            ? `Look for five cells holding only ${listAnd(usedDigits)}, and a sixth that also has other candidates, where every row, column and box they touch holds exactly two of the six.`
+            : `Look for a 2-by-3 block of cells over two or three boxes: five of them hold only ${listAnd(usedDigits)}, and the sixth also has other candidates.`,
+      },
+      {
+        text: `The six cells are ${cellsText(usedCells)}. If ${cellRef(odd[0], odd[1])} were one of ${listAnd(usedDigits)} too, the six could be filled in two ways - a second solution.`,
+      },
+    ]
+  }
+
   if (id.startsWith('bivalue-oddagon-')) {
     const byCell = usedCells.map(([r, c]) =>
       new Set(instance.usedCandidates.filter((u) => u.row === r && u.col === c).map((u) => u.digit)),
@@ -314,11 +344,34 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
     return [{ text: `Look at digit ${usedDigits[0]}.` }, { text: `${reason}.` }]
   }
 
+  if (id.startsWith('uraic-')) {
+    const rectangles = uniqueCells(instance.usedCells.map(([row, col]) => ({ row, col, digit: 0 })))
+    const [chain, rest] = instance.notation.split(' states that ')
+    return [
+      { text: `Look at the Unique Rectangle${rectangles.length > 4 ? 's' : ''} at ${cellsText(rectangles)}.` },
+      { text: `The chain is ${chain}, where =UR= and -UR- mark links that come from a rectangle.` },
+      { text: `It states that ${rest}` },
+    ]
+  }
+
+  if (id.startsWith('alsaic-')) {
+    const alsCells = uniqueCells(instance.usedCells.map(([row, col]) => ({ row, col, digit: 0 })))
+    const [chain, rest] = instance.notation.split(' states that ')
+    return [
+      { text: `Look for almost locked sets among ${cellsText(alsCells)}.` },
+      { text: `The chain is ${chain}, where =ALS= marks a link between two digits of one almost locked set.` },
+      { text: `It states that ${rest}` },
+    ]
+  }
+
   if (id.includes('aic-')) {
     const links = instance.aicLinks ?? []
     const digits = uniqueSorted((instance.aicCandidates ?? []).map((n) => n.digit))
     if (instance.aicPattern === 'W-Wing' && instance.aicPatternText) {
       return [{ text: `Look for two cells holding only {${digits.join(',')}}.` }, { text: `${instance.aicPatternText}.` }]
+    }
+    if (instance.aicPattern === 'Y-Wing' && instance.aicPatternText) {
+      return [{ text: 'Look for a cell holding only two digits, and two cells it sees holding only two digits each.' }, { text: `${instance.aicPatternText}.` }]
     }
     if (instance.aicPattern && instance.aicPatternText) {
       return [{ text: `Look at digit ${digits[0]}.` }, { text: `${instance.aicPatternText}.` }]

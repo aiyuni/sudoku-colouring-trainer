@@ -26,6 +26,9 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, givens: boolea
     options.doubleDynamicDragonEnabled,
     givens,
     new Set(options.enabledExotic),
+    options.urAicEnabled,
+    options.alsAicEnabled,
+    options.groupedAicEnabled,
   )
 }
 

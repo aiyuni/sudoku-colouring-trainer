@@ -18,3 +18,17 @@ Thumbs.db
 !.vscode/launch.json
 !.vscode/tasks.json
 !.vscode/extensions.json
+
+## Not needed to build or serve the web app (kept locally only)
+# Claude Code notes and handoff documents
+CLAUDE.md
+DOUBLE_DRAGON_HANDOFF.md
+DRAGON_COLOURING_HANDOFF.md
+.claude/
+# Research harnesses, stock-generation scripts and ad-hoc scratch files
+frontend/dragon-research/
+frontend/dragon-stock-pending/
+frontend/dragon-stock-rejected.txt
+frontend/scratch-*.ts
+# OCR regression fixtures (npm run test:ocr)
+frontend/ocr-fixtures/

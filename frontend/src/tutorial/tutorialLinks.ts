@@ -34,6 +34,8 @@ export function tutorialTargetFor(instanceId: string): TutorialTarget | null {
   if (id.startsWith('bug-plus-n-')) return { tab: 'uniqueness', group: `BUG+${id.split('-')[3]}` }
   if (id.startsWith('bivalue-oddagon-')) return { tab: 'uniqueness', group: 'Bivalue Oddagon' }
   if (id.startsWith('avoidable-rectangle-')) return { tab: 'uniqueness', group: 'Avoidable Rectangle' }
+  // Its sub-tab only exists while the technique is enabled - as do its rows.
+  if (id.startsWith('extended-ur-')) return { tab: 'uniqueness', group: 'Extended UR' }
   if (id.startsWith('simple-color-')) return { tab: 'simple' }
   if (id.startsWith('medusa-')) return { tab: 'medusa' }
   if (id.startsWith('double-dynamic-dragon-')) return { tab: 'double', group: 'Double Dynamic Dragon Colouring example 1' }

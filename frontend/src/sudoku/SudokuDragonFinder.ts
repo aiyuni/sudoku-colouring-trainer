@@ -31,6 +31,10 @@ import {
 } from './SudokuShortAicFinder'
 import { sudokuUnits } from './SudokuUnits'
 import { SudokuUniqueRectangleFinder, type UniqueRectangleInstance } from './SudokuUniqueRectangleFinder'
+import { SudokuExtendedUniqueRectangleFinder } from './SudokuExtendedUniqueRectangleFinder'
+import { SudokuGroupedAicFinder } from './SudokuGroupedAicFinder'
+import { SudokuUrAicFinder, urAicBasisCells, urAicChainText, type UrAicInstance } from './SudokuUrAicFinder'
+import { alsAicAlsUseText, alsAicBasisCells, alsAicChainText, SudokuAlsAicFinder, type AlsAicInstance } from './SudokuAlsAicFinder'
 import type { Board, CandidateGrid } from './types'
 
 export type PrimaryColor = 'blue' | 'yellow'
@@ -379,15 +383,154 @@ function cellKey(row: number, col: number): string {
   return `${row},${col}`
 }
 
-/** Deduplicated (row, col) cells a set of candidate eliminations touched -
- * used to check whether one Extension Rule 3 step's application narrowed a
- * cell that a later step's basis depends on. */
-function uniqueCells(eliminations: { row: number; col: number }[]): readonly (readonly [number, number])[] {
-  const seen = new Map<string, readonly [number, number]>()
-  for (const { row, col } of eliminations) {
-    seen.set(cellKey(row, col), [row, col])
+/** What one Extension Rule 3 step's reasoning rests on, for tracing which
+ * earlier steps it needed (see selectRelevantChainSteps): `digits` null is a
+ * cell's whole candidate set (a naked subset's cells, a bivalue cell), else
+ * just those digits there - a step relies on those candidates being *gone*.
+ *
+ * This is deliberately more than the basis cells. A Locked Candidate
+ * (Pointing) for 6 in {r4c5, r6c5} only holds because 6 is gone from the
+ * rest of box 5: an earlier naked triple that removed 6r5c6 is part of the
+ * proof even though r5c6 is no basis cell. Tracing basis cells alone left
+ * that triple out of the explanation (user report, 2026-10-03), so the step
+ * read as if the box still had a third 6. The same holds for a hidden pair or
+ * single (the rest of its unit), a fish (the rest of its lines) and every
+ * strong link of an AIC or UR (the rest of the unit that makes it strong). */
+interface Rule3Dependency {
+  cells: readonly (readonly [number, number])[]
+  digits: readonly number[] | null
+}
+
+/** Index ranges into sudokuUnits(): rows, then columns, then boxes. */
+const LINE_UNITS = [0, 2 * BOARD_SIZE] as const
+const BOX_UNITS = [2 * BOARD_SIZE, 3 * BOARD_SIZE] as const
+const ALL_UNITS = [0, 3 * BOARD_SIZE] as const
+
+/** The cells of the first unit (within `range` of sudokuUnits()) that holds
+ * every one of `cells` and in which each of `digits` is a candidate only
+ * within `cells` - the unit a "these digits are confined to these cells"
+ * argument (a locked candidate, a hidden pair, a strong link) is using, on
+ * the grid the step was found on. Should none qualify, every unit holding
+ * them all is returned, so a dependency is over-reported rather than missed. */
+function confiningUnitCells(
+  candidates: CandidateGrid,
+  cells: readonly (readonly [number, number])[],
+  digits: readonly number[],
+  range: readonly [number, number] = ALL_UNITS,
+): readonly (readonly [number, number])[] {
+  const units = sudokuUnits()
+  const inCells = (r: number, c: number) => cells.some(([cr, cc]) => cr === r && cc === c)
+  const holding: (readonly (readonly [number, number])[])[] = []
+  for (let u = range[0]; u < range[1]; u++) {
+    const unit = units[u]
+    if (!cells.every(([r, c]) => unit.some(([ur, uc]) => ur === r && uc === c))) {
+      continue
+    }
+    if (unit.every(([r, c]) => inCells(r, c) || digits.every((d) => !candidates[r][c][d - 1]))) {
+      return unit
+    }
+    holding.push(unit)
   }
-  return Array.from(seen.values())
+  return holding.length > 0 ? holding.flat() : cells
+}
+
+/** An AIC's dependencies: each strong link inside one cell needs that cell
+ * bivalue; each strong link between cells needs its digit confined to the two
+ * ends in some unit (a W-Wing's grouped link included). Weak links hold
+ * whatever else is eliminated. */
+function aicDependencies(aic: ShortAicInstance, candidates: CandidateGrid): Rule3Dependency[] {
+  const dependencies: Rule3Dependency[] = []
+  for (const link of aic.links) {
+    if (link.kind !== 'strong') {
+      continue
+    }
+    const fromCells = aicNodeCells(link.from)
+    if (link.from.digit !== link.to.digit) {
+      dependencies.push({ cells: fromCells, digits: null })
+    } else {
+      const ends = [...fromCells, ...aicNodeCells(link.to)]
+      dependencies.push({ cells: confiningUnitCells(candidates, ends, [link.from.digit]), digits: [link.from.digit] })
+    }
+  }
+  return dependencies
+}
+
+/** A step that only rests on its own cells' contents (a naked subset, an
+ * ALS, an oddagon loop, ...). */
+function wholeCells(cells: readonly (readonly [number, number])[]): Rule3Dependency[] {
+  return [{ cells, digits: null }]
+}
+
+/** A Unique Rectangle rests on its corners' (and Type 3's subset cells')
+ * contents; Types 4 and 7a-7d also on a strong link of a rectangle digit
+ * along a row, column or box two corners share - so on the rectangle digits
+ * being gone from the rest of every such unit (over-reporting the units the
+ * link doesn't use, rather than re-deriving which one it was). */
+function uniqueRectangleDependencies(ur: UniqueRectangleInstance): Rule3Dependency[] {
+  return [
+    ...wholeCells(ur.subsetCells ?? []),
+    ...rectangleDependencies(ur.cells, ur.urDigits, /\b[47]/.test(ur.type)),
+  ]
+}
+
+/** A rectangle's own corners, and - when its reasoning uses a strong link of
+ * a rectangle digit between two corners - every unit two corners share, for
+ * those digits (see uniqueRectangleDependencies). */
+function rectangleDependencies(
+  cells: readonly (readonly [number, number])[],
+  digits: readonly number[],
+  usesStrongLinks: boolean,
+): Rule3Dependency[] {
+  const dependencies = wholeCells(cells)
+  if (usesStrongLinks) {
+    for (const unit of sudokuUnits()) {
+      if (cells.filter(([r, c]) => unit.some(([ur2, uc]) => ur2 === r && uc === c)).length >= 2) {
+        dependencies.push({ cells: unit, digits })
+      }
+    }
+  }
+  return dependencies
+}
+
+/** A UR-AIC's dependencies: its ordinary links' (see aicDependencies), plus
+ * each rectangle it uses - an extras link rests on the corners' contents, a
+ * deadly pair also on the strong links along the rectangle's sides. */
+function urAicDependencies(aic: UrAicInstance, candidates: CandidateGrid): Rule3Dependency[] {
+  return [
+    ...aicDependencies({ ...aic, links: aic.links.filter((link) => !link.ur) }, candidates),
+    ...aic.rectangleUses.flatMap((use) => rectangleDependencies(use.ur.cells, use.ur.digits, use.kind === 'deadly pair')),
+  ]
+}
+
+/** An ALS-AIC's dependencies: its ordinary (and grouped) links' (see
+ * aicDependencies), plus every ALS it uses, which rests on its cells'
+ * contents. */
+function alsAicDependencies(aic: AlsAicInstance, candidates: CandidateGrid): Rule3Dependency[] {
+  return [
+    ...aicDependencies({ ...aic, links: aic.links.filter((link) => !link.als) }, candidates),
+    ...aic.alsUses.flatMap((use) => wholeCells(use.als.cells)),
+  ]
+}
+
+/** BUG+N needs every unsolved cell exactly as it is: one stray candidate
+ * anywhere and the grid is no longer a BUG. */
+function bugDependencies(board: Board): Rule3Dependency[] {
+  const cells: (readonly [number, number])[] = []
+  for (let row = 0; row < BOARD_SIZE; row++) {
+    for (let col = 0; col < BOARD_SIZE; col++) {
+      if (board[row][col] === 0) {
+        cells.push([row, col])
+      }
+    }
+  }
+  return wholeCells(cells)
+}
+
+/** Every cell of a fish's defining rows (or columns). */
+function fishLineCells(fish: FishInstance): (readonly [number, number])[] {
+  return fish.lines.flatMap((line) =>
+    Array.from({ length: BOARD_SIZE }, (_, i): readonly [number, number] => (fish.lineKind === 'row' ? [line, i] : [i, line])),
+  )
 }
 
 /** One successful technique application inside Extension Rule 3's
@@ -411,9 +554,13 @@ export type Rule3Technique =
   | 'BUG+N'
   | 'avoidable rectangle'
   | 'short single-digit aic'
+  | 'extended ur'
   | 'short aic'
   | 'generic aic'
+  | 'grouped aic'
   | 'als-xz'
+  | 'ur-aic'
+  | 'als-aic'
 
 /** The Rule3Techniques that are AIC chains (each one's own kind of chain). */
 export type AicTechnique = 'short single-digit aic' | 'short aic' | 'generic aic'
@@ -436,30 +583,39 @@ export const ALL_RULE3_TECHNIQUES: readonly Rule3Technique[] = [
   'avoidable rectangle',
   'x-wing',
   'short single-digit aic',
+  'extended ur',
   'finned x-wing',
   'short aic',
   'swordfish',
   'finned swordfish',
   'generic aic',
+  'grouped aic',
   'als-xz',
+  'ur-aic',
+  'als-aic',
 ]
 
 /** The late part of findExtensionRule3Move's simulation, after every
  * technique above: fish and AIC kinds interleaved in the app's difficulty
- * order, each one tried in full before the next - then ALS-xz, the one
- * technique ranked above Generic AIC. */
-const FISH_AND_AIC_RULE3_ORDER: readonly (FishTechnique | AicTechnique | 'als-xz')[] = [
+ * order, each one tried in full before the next - then Grouped AIC, ALS-xz,
+ * UR-AIC and ALS-AIC, the techniques ranked above Generic AIC. */
+const FISH_AND_AIC_RULE3_ORDER: readonly (FishTechnique | AicTechnique | 'extended ur' | 'grouped aic' | 'als-xz' | 'ur-aic' | 'als-aic')[] = [
   'x-wing',
   'short single-digit aic',
+  // Its place in the difficulty order, by request (see RANK_EXTENDED_UR).
+  'extended ur',
   'finned x-wing',
   'short aic',
   'swordfish',
   'finned swordfish',
   'generic aic',
+  'grouped aic',
   'als-xz',
+  'ur-aic',
+  'als-aic',
 ]
 
-/** ALL_RULE3_TECHNIQUES minus every AIC kind, every fish, ALS-xz and Avoidable
+/** ALL_RULE3_TECHNIQUES minus every AIC kind (Grouped AIC included), every fish, Extended UR, ALS-xz, UR-AIC, ALS-AIC and Avoidable
  * Rectangle (opt-in by request, though always on as a standalone technique) - the default
  * allowed set for both extend()'s own fallback and the app's initial
  * settings state, since the AIC kinds, fish and ALS-xz are all opt-in for
@@ -471,7 +627,11 @@ export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TEC
     t !== 'short aic' &&
     t !== 'short single-digit aic' &&
     t !== 'generic aic' &&
+    t !== 'grouped aic' &&
+    t !== 'extended ur' &&
     t !== 'als-xz' &&
+    t !== 'ur-aic' &&
+    t !== 'als-aic' &&
     t !== 'avoidable rectangle' &&
     !(ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(t),
 )
@@ -479,11 +639,11 @@ export const DEFAULT_RULE3_TECHNIQUES: readonly Rule3Technique[] = ALL_RULE3_TEC
 interface Rule3ChainStep {
   technique: Rule3Technique
   basisCells: readonly (readonly [number, number])[]
-  affectedCells: readonly (readonly [number, number])[]
-  /** The exact candidates (with digit) this step eliminates - the same
-   * information `affectedCells` gives as bare cells, kept alongside it
-   * because the resulting DragonMove.substeps entry (and the antecedent
-   * clause's own "which eliminates ..." wording) needs the digit too. */
+  /** What this step's reasoning rests on - see Rule3Dependency. An earlier
+   * step is part of this one's explanation when it eliminated one of these. */
+  dependencies: readonly Rule3Dependency[]
+  /** The exact candidates this step eliminates - its DragonMove.substeps
+   * entry, and what a later step's dependencies are checked against. */
   eliminatedCandidates: readonly DragonCandidateRef[]
   /** This step's own detailed "a naked pair of {1,2} in {...}, which
    * eliminates ..." explanation - its DragonMove.substeps entry. The same
@@ -882,7 +1042,11 @@ export class SudokuDragonFinder {
   private readonly fishFinder = new SudokuFishFinder()
   private readonly shortAicFinder = new SudokuShortAicFinder()
   private readonly genericAicFinder = new SudokuGenericAicFinder()
+  private readonly groupedAicFinder = new SudokuGroupedAicFinder()
   private readonly alsXzFinder = new SudokuAlsXzFinder()
+  private readonly extendedUrFinder = new SudokuExtendedUniqueRectangleFinder()
+  private readonly urAicFinder = new SudokuUrAicFinder()
+  private readonly alsAicFinder = new SudokuAlsAicFinder()
   private readonly uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
   private readonly bugPlusNFinder = new SudokuBugPlusNFinder()
   private readonly avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
@@ -2478,14 +2642,14 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             {
               technique: 'hidden single',
               basisCells: [[hiddenSingle.row, hiddenSingle.col]],
-              affectedCells: [],
+              // The digit gone from the rest of its unit.
+              dependencies: [{ cells: hiddenSingle.unit, digits: [hiddenSingle.digit] }],
               eliminatedCandidates: [],
               clause: '',
               summaryName: '',
             },
             { row: hiddenSingle.row, col: hiddenSingle.col, digit: hiddenSingle.digit, color: secondary },
             { kind: 'hidden single', unitKind: hiddenSingle.unitKind },
-            hiddenSingle.unit,
           )
           if (emit(move)) {
             return true
@@ -2498,13 +2662,16 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           if (locked.eliminations.length === 0) {
             continue
           }
+          // Pointing: the digit is gone from the rest of the box; Claiming:
+          // from the rest of the row/column.
+          const sourceUnit = confiningUnitCells(hypCandidates, locked.basisCells, [locked.digit], locked.type === 'pointing' ? BOX_UNITS : LINE_UNITS)
           for (const { row, col, digit } of locked.eliminations) {
             hypCandidates[row][col][digit - 1] = false
           }
           const chainStep: Rule3ChainStep = {
             technique: 'locked candidate',
             basisCells: locked.basisCells,
-            affectedCells: uniqueCells(locked.eliminations),
+            dependencies: [{ cells: sourceUnit, digits: [locked.digit] }],
             eliminatedCandidates: locked.eliminations,
             clause: this.lockedCandidateClause(locked),
             summaryName: `a Locked Candidate (${locked.type === 'pointing' ? 'Pointing' : 'Claiming'})`,
@@ -2537,7 +2704,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
         const chainStep: Rule3ChainStep = {
           technique: 'naked pair',
           basisCells: pair.cells,
-          affectedCells: uniqueCells(pair.eliminations),
+          dependencies: wholeCells(pair.cells),
           eliminatedCandidates: pair.eliminations,
           clause: this.nakedPairClause(pair),
           summaryName: 'a naked pair',
@@ -2582,7 +2749,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const chainStep: Rule3ChainStep = {
             technique,
             basisCells: subset.cells,
-            affectedCells: uniqueCells(subset.eliminations),
+            dependencies: wholeCells(subset.cells),
             eliminatedCandidates: subset.eliminations,
             clause: this.nakedSubsetClause(subset),
             summaryName: technique === 'naked triple' ? 'a naked triple' : 'a naked quad',
@@ -2611,13 +2778,15 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           if (pair.eliminations.length === 0) {
             continue
           }
+          // Both digits gone from the rest of the unit.
+          const pairUnit = confiningUnitCells(hypCandidates, pair.cells, pair.digits)
           for (const { row, col, digit } of pair.eliminations) {
             hypCandidates[row][col][digit - 1] = false
           }
           const chainStep: Rule3ChainStep = {
             technique: 'hidden pair',
             basisCells: pair.cells,
-            affectedCells: uniqueCells(pair.eliminations),
+            dependencies: [{ cells: pairUnit, digits: pair.digits }],
             eliminatedCandidates: pair.eliminations,
             clause: this.hiddenPairClause(pair),
             summaryName: 'a hidden pair',
@@ -2652,7 +2821,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               {
                 technique: 'UR',
                 basisCells: ur.cells,
-                affectedCells: [],
+                dependencies: uniqueRectangleDependencies(ur),
                 eliminatedCandidates: [],
                 clause: ur.reasonText,
                 summaryName,
@@ -2666,6 +2835,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             continue
           }
           if (ur.eliminatedCandidates.length > 0) {
+            const dependencies = uniqueRectangleDependencies(ur)
             for (const { row, col, digit } of ur.eliminatedCandidates) {
               hypCandidates[row][col][digit - 1] = false
             }
@@ -2673,7 +2843,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               technique: 'UR',
               // Type 3 also rests on the naked-subset cells outside the rectangle.
               basisCells: [...ur.cells, ...(ur.subsetCells ?? [])],
-              affectedCells: uniqueCells(ur.eliminatedCandidates),
+              dependencies,
               eliminatedCandidates: ur.eliminatedCandidates,
               clause: this.uniqueRectangleClause(ur),
               summaryName,
@@ -2708,7 +2878,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             {
               technique: 'BUG+N',
               basisCells: [bug.cells[0].cell],
-              affectedCells: [],
+              dependencies: bugDependencies(hypBoard),
               eliminatedCandidates: [],
               clause: this.bugPlusNClause(bug),
               summaryName: `a ${bugPlusNName(bug)}`,
@@ -2727,7 +2897,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const chainStep: Rule3ChainStep = {
             technique: 'BUG+N',
             basisCells: bug.cells.map(({ cell }) => cell),
-            affectedCells: uniqueCells([...bug.eliminations]),
+            dependencies: bugDependencies(hypBoard),
             eliminatedCandidates: bug.eliminations,
             clause: this.bugPlusNClause(bug),
             summaryName: `a ${bugPlusNName(bug)}`,
@@ -2758,7 +2928,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const chainStep: Rule3ChainStep = {
             technique: 'avoidable rectangle',
             basisCells: ar.cells,
-            affectedCells: uniqueCells(ar.eliminations),
+            dependencies: wholeCells(ar.cells),
             eliminatedCandidates: ar.eliminations,
             clause: this.avoidableRectangleClause(ar),
             summaryName: `an Avoidable Rectangle (Type ${ar.type})`,
@@ -2789,7 +2959,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
               {
                 technique: 'bivalue oddagon',
                 basisCells: oddagon.cells,
-                affectedCells: [],
+                dependencies: wholeCells(oddagon.cells),
                 eliminatedCandidates: [],
                 clause: this.bivalueOddagonSolveClause(oddagon),
                 summaryName,
@@ -2809,7 +2979,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             const chainStep: Rule3ChainStep = {
               technique: 'bivalue oddagon',
               basisCells: oddagon.cells,
-              affectedCells: uniqueCells(oddagon.eliminations),
+              dependencies: wholeCells(oddagon.cells),
               eliminatedCandidates: oddagon.eliminations,
               clause: this.bivalueOddagonEliminationClause(oddagon),
               summaryName,
@@ -2835,8 +3005,8 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
       // (FISH_AND_AIC_RULE3_ORDER): each kind gets first refusal before the
       // next, and the first one found is applied. A fish is only ever allowed
       // when enabled in Settings (App's effectiveAllowedRule3Techniques drops
-      // it otherwise), so by default the fish search never runs; ALS-xz,
-      // tried last, is gated the same way. The AIC
+      // it otherwise), so by default the fish search never runs; ALS-xz and
+      // UR-AIC and ALS-AIC, tried last, are gated the same way. The AIC
       // searches don't run once the per-step AIC limit is used up, and the
       // generic one only when nothing before it applied.
       //
@@ -2869,7 +3039,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           const toStep = (aic: ShortAicInstance): Rule3ChainStep => ({
             technique,
             basisCells: aic.nodes.flatMap((n) => aicNodeCells(n)),
-            affectedCells: uniqueCells(aic.eliminations),
+            dependencies: aicDependencies(aic, hypCandidates),
             eliminatedCandidates: aic.eliminations,
             clause: this.aicClause(aic, technique),
             summaryName: this.aicSummaryName(aic, technique),
@@ -2895,6 +3065,52 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
             continue
           }
           chainStep = toStep(aic)
+        } else if (technique === 'grouped aic') {
+          if (!allowedTechniques.has(technique)) {
+            continue
+          }
+          // Like UR-AIC and ALS-AIC: only the simplest (shortest) one is
+          // ever used, it isn't one of the AIC kinds the per-step AIC limit
+          // counts, and it carries `aic` so the substep player draws its
+          // chain. A grouped chain a plain one replaces is never returned
+          // (see SudokuGroupedAicFinder).
+          const aic = this.memoFind('groupedAic', grid, () => this.groupedAicFinder.find(hypBoard, hypCandidates, graph())[0] ?? null)
+          if (!aic) {
+            continue
+          }
+          chainStep = {
+            technique,
+            basisCells: aic.nodes.flatMap((n) => aicNodeCells(n)),
+            dependencies: aicDependencies(aic, hypCandidates),
+            eliminatedCandidates: aic.eliminations,
+            clause: `a Grouped AIC of ${aicChainText(aic.nodes)}, which eliminates ${this.formatCandidateGroups(aic.eliminations)}`,
+            summaryName: 'a Grouped AIC',
+            aic,
+          }
+        } else if (technique === 'extended ur') {
+          if (!allowedTechniques.has(technique)) {
+            continue
+          }
+          // Only the first one is ever used, so only it is cached.
+          const eur = this.memoFind('extendedUr', grid, () => this.extendedUrFinder.find(hypBoard, hypCandidates)[0] ?? null)
+          if (!eur) {
+            continue
+          }
+          // The odd cell loses its pattern digits either way. With a single
+          // extra candidate (the finder's `solved`) that leaves one mark, and
+          // the forced-cell check below colours it like any other.
+          const [oddRow, oddCol] = eur.oddCell
+          const eliminatedCandidates = eur.digits
+            .filter((digit) => hypCandidates[oddRow][oddCol][digit - 1])
+            .map((digit) => ({ row: oddRow, col: oddCol, digit }))
+          chainStep = {
+            technique,
+            basisCells: eur.cells,
+            dependencies: wholeCells(eur.cells),
+            eliminatedCandidates,
+            clause: `${eur.reasonText}, which eliminates ${this.formatCandidateGroups(eliminatedCandidates)}`,
+            summaryName: 'an Extended UR (Type 1)',
+          }
         } else if (technique === 'als-xz') {
           if (!allowedTechniques.has(technique)) {
             continue
@@ -2908,10 +3124,50 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           chainStep = {
             technique,
             basisCells: [...als.alsA.cells, ...als.alsB.cells],
-            affectedCells: uniqueCells(als.eliminations),
+            dependencies: wholeCells([...als.alsA.cells, ...als.alsB.cells]),
             eliminatedCandidates: als.eliminations,
             clause: this.alsXzClause(als),
             summaryName: 'an ALS-xz',
+          }
+        } else if (technique === 'ur-aic') {
+          if (!allowedTechniques.has(technique)) {
+            continue
+          }
+          // Like ALS-xz: only the simplest (shortest) one is ever used, and
+          // it isn't one of the AIC kinds the per-step AIC limit counts. It
+          // carries `aic` so the substep player draws its chain.
+          const aic = this.memoFind('urAic', grid, () => this.urAicFinder.find(hypBoard, hypCandidates, graph())[0] ?? null)
+          if (!aic) {
+            continue
+          }
+          chainStep = {
+            technique,
+            basisCells: urAicBasisCells(aic),
+            dependencies: urAicDependencies(aic, hypCandidates),
+            eliminatedCandidates: aic.eliminations,
+            clause: this.urAicClause(aic),
+            summaryName: 'a UR-AIC',
+            aic,
+          }
+        } else if (technique === 'als-aic') {
+          if (!allowedTechniques.has(technique)) {
+            continue
+          }
+          // Like UR-AIC: only the simplest (shortest) one is ever used, it
+          // isn't counted by the per-step AIC limit, and it carries `aic` so
+          // the substep player draws its chain.
+          const aic = this.memoFind('alsAic', grid, () => this.alsAicFinder.find(hypBoard, hypCandidates, graph())[0] ?? null)
+          if (!aic) {
+            continue
+          }
+          chainStep = {
+            technique,
+            basisCells: alsAicBasisCells(aic),
+            dependencies: alsAicDependencies(aic, hypCandidates),
+            eliminatedCandidates: aic.eliminations,
+            clause: this.alsAicClause(aic),
+            summaryName: 'an ALS-AIC',
+            aic,
           }
         } else {
           if (!allowedTechniques.has(technique)) {
@@ -2926,7 +3182,8 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
           chainStep = {
             technique,
             basisCells: fish.cells,
-            affectedCells: uniqueCells(fish.eliminations),
+            // The digit gone from its lines outside the covering lines and fins.
+            dependencies: [{ cells: fishLineCells(fish), digits: [fish.digit] }],
             eliminatedCandidates: fish.eliminations,
             clause: this.fishClause(fish),
             summaryName: `a ${FISH_TECHNIQUE_NAMES[technique]}`,
@@ -2988,48 +3245,61 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
   }
 
   /** Walks `steps` (in the order they were applied) backward from the
-   * final technique's own basis cells, keeping only the ones that actually
-   * narrowed a cell the final technique - or an already-kept earlier step -
-   * depends on. Growing the dependency set as it walks backward is what
-   * catches transitive chains (an antecedent's antecedent). The result
-   * keeps the original chronological order, since that's the order the
-   * reasoning actually happened in. */
-  private selectRelevantChainSteps(
-    steps: Rule3ChainStep[],
-    finalBasisCells: readonly (readonly [number, number])[],
-  ): Rule3ChainStep[] {
-    const dependsOn = new Set(finalBasisCells.map(([r, c]) => cellKey(r, c)))
+   * final technique's dependencies (see Rule3Dependency), keeping only the
+   * ones that eliminated a candidate the final technique - or an
+   * already-kept earlier step - depends on. Growing the dependency set as it
+   * walks backward is what catches transitive chains (an antecedent's
+   * antecedent). The result keeps the original chronological order, since
+   * that's the order the reasoning actually happened in. */
+  private selectRelevantChainSteps(steps: Rule3ChainStep[], finalDependencies: readonly Rule3Dependency[]): Rule3ChainStep[] {
+    const wholeCellKeys = new Set<string>()
+    const candidateKeys = new Set<string>()
+    const dependOn = (dependencies: readonly Rule3Dependency[]) => {
+      for (const { cells, digits } of dependencies) {
+        for (const [r, c] of cells) {
+          if (digits === null) {
+            wholeCellKeys.add(cellKey(r, c))
+          } else {
+            for (const d of digits) {
+              candidateKeys.add(nodeKey(r, c, d))
+            }
+          }
+        }
+      }
+    }
+    dependOn(finalDependencies)
     const relevant: Rule3ChainStep[] = []
     for (let i = steps.length - 1; i >= 0; i--) {
       const step = steps[i]
-      const touchesDependency = step.affectedCells.some(([r, c]) => dependsOn.has(cellKey(r, c)))
+      const touchesDependency = step.eliminatedCandidates.some(
+        ({ row, col, digit }) => wholeCellKeys.has(cellKey(row, col)) || candidateKeys.has(nodeKey(row, col, digit)),
+      )
       if (!touchesDependency) {
         continue
       }
       relevant.unshift(step)
-      for (const [r, c] of step.basisCells) {
-        dependsOn.add(cellKey(r, c))
-      }
+      dependOn(step.dependencies)
     }
     return relevant
   }
 
   /** `final` is the technique that forced `colored`, in the same shape an
-   * antecedent is recorded in. `dependencyCells` is what dependency-
-   * tracking checks prior steps against - defaults to `final.basisCells`,
-   * but a hidden single's real dependency is its whole unit (see
-   * findNewlyHiddenSingleCells), not just the one cell it resolves, so that
-   * case passes the unit's 9 cells here instead while still highlighting
-   * only the resolved cell. */
+   * antecedent is recorded in. A 'single candidate' conclusion also rests on
+   * every other candidate of the coloured cell being gone - an earlier step
+   * may have removed some of them - so that cell is a dependency too. */
   private buildRule3CombinedMove(
     primary: PrimaryColor,
     steps: Rule3ChainStep[],
     final: Rule3ChainStep,
     colored: DragonNode,
     conclusion: Rule3Conclusion,
-    dependencyCells: readonly (readonly [number, number])[] = final.basisCells,
   ): DragonMove {
-    const antecedents = this.selectRelevantChainSteps(steps, dependencyCells)
+    const antecedents = this.selectRelevantChainSteps(
+      steps,
+      conclusion.kind === 'single candidate'
+        ? [...final.dependencies, { cells: [[colored.row, colored.col]], digits: null }]
+        : final.dependencies,
+    )
     // 'hidden single' is never labeled - see the dynamicTechniques doc
     // comment on DragonMove. It can still show up as the final technique
     // here (a hidden single that only emerged mid-chain, after some
@@ -3229,6 +3499,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
   private alsXzClause(als: AlsXzInstance): string {
     const eliminationsLabel = this.formatCandidateGroups(als.eliminations)
     return `an ALS-xz (${als.reasonText}), which eliminates ${eliminationsLabel}`
+  }
+
+  private urAicClause(aic: UrAicInstance): string {
+    return `a UR-AIC of ${urAicChainText(aic)}, which eliminates ${this.formatCandidateGroups(aic.eliminations)}`
+  }
+
+  /** The chain marks its own ALS links (=ALS=); a closure (see
+   * SudokuAlsAicFinder) is spelled out, or a chain that is otherwise plain
+   * wouldn't say where its ALS is. */
+  private alsAicClause(aic: AlsAicInstance): string {
+    const closures = aic.alsUses.filter((use) => use.kind === 'closure').map((use) => alsAicAlsUseText(use, aic))
+    return (
+      `an ALS-AIC of ${alsAicChainText(aic)}${closures.length > 0 ? ` (${closures.join('; ')})` : ''}, ` +
+      `which eliminates ${this.formatCandidateGroups(aic.eliminations)}`
+    )
   }
 
   private uniqueRectangleClause(ur: UniqueRectangleInstance): string {

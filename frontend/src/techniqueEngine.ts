@@ -48,8 +48,18 @@ import {
   type ShortAicPattern,
 } from './sudoku/SudokuShortAicFinder'
 import { SudokuSingleFinder } from './sudoku/SudokuSingleFinder'
+import { SudokuExtendedUniqueRectangleFinder, type ExtendedUrInstance } from './sudoku/SudokuExtendedUniqueRectangleFinder'
+import { SudokuGroupedAicFinder } from './sudoku/SudokuGroupedAicFinder'
+import { alsAicAlsUseText, alsAicChainText, SudokuAlsAicFinder, type AlsAicInstance } from './sudoku/SudokuAlsAicFinder'
 import { SudokuSueDeCoqFinder, type SueDeCoqInstance } from './sudoku/SudokuSueDeCoqFinder'
 import { explainUniqueRectangle, SudokuUniqueRectangleFinder } from './sudoku/SudokuUniqueRectangleFinder'
+import {
+  SudokuUrAicFinder,
+  urAicChainText,
+  urAicRectangleUseText,
+  urBasisText,
+  type UrAicInstance,
+} from './sudoku/SudokuUrAicFinder'
 import type { Board, CandidateGrid } from './sudoku/types'
 
 
@@ -61,8 +71,12 @@ export const hiddenPairFinder = new SudokuHiddenPairFinder()
 export const fishFinder = new SudokuFishFinder()
 export const shortAicFinder = new SudokuShortAicFinder()
 export const genericAicFinder = new SudokuGenericAicFinder()
+export const groupedAicFinder = new SudokuGroupedAicFinder()
 export const alsXzFinder = new SudokuAlsXzFinder()
+export const urAicFinder = new SudokuUrAicFinder()
+export const alsAicFinder = new SudokuAlsAicFinder()
 export const sueDeCoqFinder = new SudokuSueDeCoqFinder()
+export const extendedUrFinder = new SudokuExtendedUniqueRectangleFinder()
 export const uniqueRectangleFinder = new SudokuUniqueRectangleFinder()
 export const bugPlusNFinder = new SudokuBugPlusNFinder()
 export const avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
@@ -131,10 +145,12 @@ export interface TechniqueInstance {
  * documented difficulty order: Single -> LockedCandidate ->
  * Pair/NakedSubset/HiddenPair -> UniqueRectangle -> BUG+N -> AvoidableRectangle
  * -> BivalueOddagon
- * -> Color -> X-Wing -> Short Single-Digit AIC -> Finned X-Wing -> Medusa
+ * -> Color -> X-Wing -> Short Single-Digit AIC -> Extended UR (exotic)
+ * -> Finned X-Wing -> Medusa
  * -> Short AIC -> Swordfish -> Finned Swordfish -> Sue-de-Coq (exotic)
- * -> Generic AIC -> ALS-xz -> Dragon -> Double Dragon -> Dynamic Dragon
- * -> Double Dynamic Dragon).
+ * -> Generic AIC -> Dragon -> Double Dragon -> Grouped AIC -> ALS-xz -> UR-AIC
+ * -> ALS-AIC
+ * -> Dynamic Dragon -> Double Dynamic Dragon).
  * Techniques sharing a tier are equally "simple" as far as this goes - a
  * naked pair is no simpler than a naked quad here, since a solver who can
  * spot one can spot the other; what matters is the category, not which
@@ -154,36 +170,51 @@ export const RANK_SIMPLE_COLOR = 7
 // X-Wing, and a fin harder again.
 export const RANK_X_WING = 8
 export const RANK_SHORT_SINGLE_DIGIT_AIC = 9
-export const RANK_FINNED_X_WING = 10
+// Exotic (off by default), ranked just after the Short Single-Digit AICs, by
+// request: a Unique Rectangle on a 6-cell deadly pattern (see
+// SudokuExtendedUniqueRectangleFinder).
+export const RANK_EXTENDED_UR = 10
+export const RANK_FINNED_X_WING = 11
 // 3D Medusa before Short AIC (and so before Swordfish), by request.
-export const RANK_MEDUSA = 11
-export const RANK_SHORT_AIC = 12
-export const RANK_SWORDFISH = 13
-export const RANK_FINNED_SWORDFISH = 14
-// Exotic (Settings -> Exotic Techniques, off by default), but ranked before
+export const RANK_MEDUSA = 12
+export const RANK_SHORT_AIC = 13
+export const RANK_SWORDFISH = 14
+export const RANK_FINNED_SWORDFISH = 15
+// Exotic (Technique Selections -> Exotic Techniques, off by default), but ranked before
 // Generic AIC, ALS-xz and every Dragon, by request.
-export const RANK_SUE_DE_COQ = 15
+export const RANK_SUE_DE_COQ = 16
 // Harder than 3D Medusa: a long chain is harder to find than a colouring.
-export const RANK_GENERIC_AIC = 16
-export const RANK_DRAGON = 17
+export const RANK_GENERIC_AIC = 17
+export const RANK_DRAGON = 18
 // Two plain Dragons linked together - no Dynamic Dragon techniques.
-export const RANK_DOUBLE_DRAGON = 18
-// The one non-colouring technique ranked above Generic AIC - and above plain
-// and Double plain Dragon too (only Dynamic Dragons rank higher), by request.
-export const RANK_ALS_XZ = 19
-export const RANK_DYNAMIC_DRAGON = 20
+export const RANK_DOUBLE_DRAGON = 19
+// Just before ALS-xz, by request: a Generic AIC whose nodes may be groups
+// (see SudokuGroupedAicFinder).
+export const RANK_GROUPED_AIC = 20
+// Ranked above Generic AIC - and above plain and Double plain Dragon too
+// (only Dynamic Dragons rank higher), by request.
+export const RANK_ALS_XZ = 21
+// Just above ALS-xz, by request: an AIC that may link through a Unique
+// Rectangle (see SudokuUrAicFinder).
+export const RANK_UR_AIC = 22
+// Just above UR-AIC, by request: an AIC that may link through an Almost
+// Locked Set (see SudokuAlsAicFinder).
+export const RANK_ALS_AIC = 23
+export const RANK_DYNAMIC_DRAGON = 24
 // Two Dragons linked, at least one of them Dynamic - only where single
 // Dynamic Dragon is stuck, so the hardest tier.
-export const RANK_DOUBLE_DYNAMIC_DRAGON = 21
+export const RANK_DOUBLE_DYNAMIC_DRAGON = 25
 
-/** Settings -> Exotic Techniques: advanced techniques the solver only looks
- * for when enabled there (all off by default), each at its own rank. Never used inside Dynamic
- * Dragon and never by the puzzle generator (so the stocks needn't be checked
- * against them). */
-export type ExoticTechnique = 'sue de coq'
-export const ALL_EXOTIC_TECHNIQUES: readonly ExoticTechnique[] = ['sue de coq']
+/** Technique Selections -> Exotic Techniques: advanced techniques the solver only looks
+ * for when enabled there (all off by default), each at its own rank. Never used by the puzzle
+ * generator (so the stocks needn't be checked against them), and never inside Dynamic Dragon -
+ * except Extended UR, which by request is also a Rule3Technique ('extended ur', its own
+ * Dynamic Dragon checkbox, off by default and master-switched by this setting). */
+export type ExoticTechnique = 'sue de coq' | 'extended ur'
+export const ALL_EXOTIC_TECHNIQUES: readonly ExoticTechnique[] = ['sue de coq', 'extended ur']
 export const EXOTIC_TECHNIQUE_NAMES: Record<ExoticTechnique, string> = {
   'sue de coq': 'Sue-de-Coq',
+  'extended ur': 'Extended UR',
 }
 
 const FISH_RANKS: Record<FishTechnique, number> = {
@@ -594,7 +625,9 @@ export function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: 
       ? RANK_SHORT_SINGLE_DIGIT_AIC
       : idPrefix === 'short-aic'
         ? RANK_SHORT_AIC
-        : RANK_GENERIC_AIC
+        : idPrefix === 'grouped-aic'
+          ? RANK_GROUPED_AIC
+          : RANK_GENERIC_AIC
   // A grouped end reads "2 in (r8c3, r9c3)": one of those cells is the digit.
   const endText = (n: typeof x) => (n.cells ? `${n.digit} in (${n.cells.map(([r, c]) => cellRef(r, c)).join(', ')})` : aicNodeText(n))
   const view = aicChainView(aic)
@@ -605,7 +638,11 @@ export function buildAicInstance(aic: ShortAicInstance, idPrefix: string, name: 
     ? `If any of these eliminated candidates (${aic.eliminations.map((e) => `${e.digit}${cellRef(e.row, e.col)}`).join(', ')}) were true, ` +
       `then it would force the remote pair {${wWing.digits.join(',')}} in ${wWing.cells.map(([r, c]) => cellRef(r, c)).join(', ')} to both be ${wWing.linkDigit}. ` +
       `This would mean there are no places for ${wWing.linkDigit} in ${wWing.unitName}, which is impossible!`
-    : `${aicChainText(aic.nodes)} states that either ${endText(x)} or ${endText(y)} must be true, so ${eliminationText}.`
+    : `${aicChainText(aic.nodes)} states that either ${endText(x)} or ${endText(y)} must be true, so ${eliminationText}.` +
+      // A Y-Wing reads like any chain, then names its cells.
+      (aic.yWing
+        ? ` Pivot cell is ${cellRef(...aic.yWing.pivot)}; wing cells are ${aic.yWing.wings.map(([r, c]) => cellRef(r, c)).join(', ')}.`
+        : '')
   return {
     id: `${idPrefix}-${aic.eliminationType}-${view.candidates.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
     name,
@@ -808,8 +845,17 @@ export function buildTechniqueInstances(
   // skipped (here and inside Dynamic Dragon) without one.
   givens: GivenMask | null = null,
   enabledExotic: ReadonlySet<ExoticTechnique> = new Set(),
+  urAicEnabled = false,
+  alsAicEnabled = false,
+  groupedAicEnabled = false,
+  // The "All Possible Techniques" setting (Techniques list only - the solve
+  // path never passes it): a row is no longer hidden because easier rows
+  // already make its eliminations, unless those are Basic Techniques rows.
+  allPossibleTechniques = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
+  const pushUnlessCovered = (rows: TechniqueInstance[], coveringRows: readonly TechniqueInstance[] = instances) =>
+    pushUnlessCoveredByEasier(instances, rows, coveringRows, allPossibleTechniques)
 
   for (const { row, col, digit } of singleFinder.findNakedSingles(board, candidates)) {
     instances.push({
@@ -1200,19 +1246,26 @@ export function buildTechniqueInstances(
         buildAicInstance(
           aic,
           isSingleDigit ? 'short-single-digit-aic' : 'short-aic',
-          // A named pattern (Skyscraper, Empty Rectangle, W-Wing, ...) is
+          // A named pattern (Skyscraper, Empty Rectangle, W-Wing, Y-Wing, ...) is
           // shown by its name; it is still this one technique.
           aic.pattern ?? (isSingleDigit ? 'Short Single-Digit AIC' : `Short AIC (Type ${aic.eliminationType})`),
         ),
       )
     }
   }
+  // Extended UR (exotic, off by default) ranks inside this tier, just after
+  // the Short Single-Digit AICs. Its 3-digit rectangles are quite often a
+  // naked subset seen the long way round, which the tier's own "already made
+  // by easier rows" filter drops.
+  if (enabledExotic.has('extended ur')) {
+    middleTier.push(...extendedUrFinder.find(board, candidates).map((eur) => buildExtendedUrInstance(eur, candidates)))
+  }
   // Stable, so each technique keeps the finder's own order. 3D Medusa ranks
   // inside this tier (after Finned X-Wing, before Short AIC), so the tier is
   // pushed in two halves around it - Medusa rows themselves are never hidden
   // (see below), but they do hide the harder half's redundant rows.
   middleTier.sort((a, b) => a.techniqueRank - b.techniqueRank)
-  pushUnlessCoveredByEasier(instances, middleTier.filter((instance) => instance.techniqueRank < RANK_MEDUSA))
+  pushUnlessCovered(middleTier.filter((instance) => instance.techniqueRank < RANK_MEDUSA))
 
   // 3D Medusa: one row per chain, listing everything that chain proves -
   // its mass elimination (rules 1-2, if any) and every rule 3/4/5
@@ -1238,14 +1291,14 @@ export function buildTechniqueInstances(
 
   instances.push(...massMedusaInstances, ...otherMedusaInstances)
 
-  pushUnlessCoveredByEasier(instances, middleTier.filter((instance) => instance.techniqueRank > RANK_MEDUSA))
+  pushUnlessCovered(middleTier.filter((instance) => instance.techniqueRank > RANK_MEDUSA))
 
-  // Exotic techniques (Settings -> Exotic Techniques), each at its own rank.
+  // Exotic techniques (Technique Selections -> Exotic Techniques), each at its own rank.
   // Sue-de-Coq: after Finned Swordfish, before Generic AIC. A small one is
   // often a naked/hidden subset or locked candidate in disguise, so a row an
   // easier one already makes in full isn't listed.
   if (enabledExotic.has('sue de coq')) {
-    pushUnlessCoveredByEasier(instances, sueDeCoqFinder.find(board, candidates).map(buildSueDeCoqInstance))
+    pushUnlessCovered(sueDeCoqFinder.find(board, candidates).map(buildSueDeCoqInstance))
   }
 
   // Generic AIC (chains longer than Short AIC's, up to GENERIC_AIC_MAX_LENGTH
@@ -1253,8 +1306,7 @@ export function buildTechniqueInstances(
   // easier row already does - a Short AIC, a fish, a Medusa rule - isn't
   // listed.
   if (genericAicEnabled) {
-    pushUnlessCoveredByEasier(
-      instances,
+    pushUnlessCovered(
       genericAicFinder
         .findGenericAics(board, candidates)
         .map((aic) => buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}; ${aic.length} links)`)),
@@ -1293,6 +1345,17 @@ export function buildTechniqueInstances(
       instances.push(buildDragonInstance(board, candidates, 'double-dragon', 'Double Dragon Colouring', chainKey, moves))
     }
   }
+  // Grouped AIC (off by default) ranks just before ALS-xz. A grouped chain
+  // very often only reaches what a plain chain, a fish or a locked candidate
+  // already does (an Empty Rectangle is one), so a row an easier technique
+  // already makes in full isn't listed - Generic AIC included, by request;
+  // as for ALS-xz, a Dragon or Double Dragon row doesn't hide it.
+  if (groupedAicEnabled) {
+    pushUnlessCovered(
+      groupedAicFinder.find(board, candidates).map((aic) => buildAicInstance(aic, 'grouped-aic', 'Grouped AIC')),
+      instances.filter((instance) => instance.techniqueRank < RANK_DRAGON),
+    )
+  }
   // ALS-xz (singly linked only) ranks after Generic AIC,
   // plain Dragon and Double Dragon, before Dynamic Dragon. Every ALS-xz is an
   // AIC with ALS nodes, and the short ones are often a naked pair, a Short
@@ -1301,10 +1364,39 @@ export function buildTechniqueInstances(
   // eliminations doesn't hide it, by request (only the non-Dragon rows
   // count).
   if (alsXzEnabled) {
-    pushUnlessCoveredByEasier(
-      instances,
+    pushUnlessCovered(
       alsXzFinder.find(board, candidates).map(buildAlsXzInstance),
-      instances.filter((instance) => instance.techniqueRank < RANK_DRAGON),
+      // Grouped AIC ranks between the Dragons and ALS-xz, and is not a Dragon.
+      instances.filter((instance) => instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_GROUPED_AIC),
+    )
+  }
+  // UR-AIC (off by default) ranks just above ALS-xz. A row an easier
+  // technique (ALS-xz included) already makes in full isn't listed - except
+  // that neither a Dragon row nor an easier AIC row (Short Single-Digit,
+  // Short or Generic AIC) hides it, by request: a UR-AIC is shown even when
+  // a plain chain or a Dragon reaches the same eliminations.
+  if (urAicEnabled) {
+    const aicRanks = new Set([RANK_SHORT_SINGLE_DIGIT_AIC, RANK_SHORT_AIC, RANK_GENERIC_AIC])
+    pushUnlessCovered(
+      urAicFinder.find(board, candidates).map(buildUrAicInstance),
+      instances.filter(
+        (instance) =>
+          (instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_ALS_XZ) && !aicRanks.has(instance.techniqueRank),
+      ),
+    )
+  }
+  // ALS-AIC (off by default) ranks just above UR-AIC, and is hidden the
+  // same way: by an easier row that makes all its eliminations and is
+  // neither a Dragon nor an AIC (Short Single-Digit, Short, Generic AIC or
+  // UR-AIC) - so ALS-xz, itself the shortest ALS chain, does hide it.
+  if (alsAicEnabled) {
+    const aicRanks = new Set([RANK_SHORT_SINGLE_DIGIT_AIC, RANK_SHORT_AIC, RANK_GENERIC_AIC, RANK_UR_AIC])
+    pushUnlessCovered(
+      alsAicFinder.find(board, candidates).map(buildAlsAicInstance),
+      instances.filter(
+        (instance) =>
+          (instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_ALS_XZ) && !aicRanks.has(instance.techniqueRank),
+      ),
     )
   }
 
@@ -1358,19 +1450,29 @@ export function buildTechniqueInstances(
  * whose eliminations rows of a strictly lower rank - everything already in
  * `instances` (or just the `coveringRows` given), plus lower tiers of
  * `candidates` itself - already make in full. Only elimination-only rows can
- * be hidden this way; one that solves a cell is always kept. */
+ * be hidden this way; one that solves a cell is always kept.
+ *
+ * `basicOnly` (the "All Possible Techniques" setting): only Basic Techniques
+ * rows (the always-on ones in Technique Selections: locked candidates, naked
+ * pairs/triples/quads, hidden pairs - singles eliminate nothing) can hide a
+ * row, so every other technique's rows are all listed. */
 function pushUnlessCoveredByEasier(
   instances: TechniqueInstance[],
   candidates: TechniqueInstance[],
   coveringRows: readonly TechniqueInstance[] = instances,
+  basicOnly = false,
 ): void {
   const keyOf = (e: TechniqueCandidateRef) => `${e.row},${e.col},${e.digit}`
-  const covered = new Set(coveringRows.flatMap((instance) => instance.eliminatedCandidates.map(keyOf)))
+  const covering = basicOnly ? coveringRows.filter((instance) => instance.techniqueRank <= RANK_SUBSET) : coveringRows
+  const covered = new Set(covering.flatMap((instance) => instance.eliminatedCandidates.map(keyOf)))
   let tierRank = -1
   let tierKeys: string[] = []
   for (const candidate of candidates) {
     if (candidate.techniqueRank !== tierRank) {
-      tierKeys.forEach((key) => covered.add(key))
+      // No candidate row is ever a Basic Technique.
+      if (!basicOnly) {
+        tierKeys.forEach((key) => covered.add(key))
+      }
       tierKeys = []
       tierRank = candidate.techniqueRank
     }
@@ -1430,6 +1532,83 @@ function buildAlsXzInstance(als: AlsXzInstance): TechniqueInstance {
   }
 }
 
+/** A Techniques-panel row for one UR-AIC: drawn like any AIC (a UR link as
+ * the strong or weak link it is), with every rectangle it uses outlined as
+ * the basis. The text is the chain, then each rectangle fact it rests on. */
+export function buildUrAicInstance(aic: UrAicInstance): TechniqueInstance {
+  const x = aic.nodes[0]
+  const y = aic.nodes[aic.nodes.length - 1]
+  const endText = (n: typeof x) => (n.cells ? `${n.digit} in (${n.cells.map(([r, c]) => cellRef(r, c)).join(', ')})` : aicNodeText(n))
+  const eliminationText = aic.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
+  const linkUses = aic.rectangleUses.filter((use) => use.inChain).map(urAicRectangleUseText)
+  const elimUses = aic.rectangleUses.filter((use) => !use.inChain).map(urAicRectangleUseText)
+  const sameCell = !x.cells && !y.cells && x.row === y.row && x.col === y.col
+  const notation =
+    `${urAicChainText(aic)} states that either ${endText(x)} or ${endText(y)} must be true` +
+    (linkUses.length > 0 ? ` (${linkUses.join('; ')})` : '') +
+    `, so ${eliminationText}` +
+    (sameCell ? ` (${cellRef(x.row, x.col)} must be ${x.digit} or ${y.digit})` : '') +
+    (elimUses.length > 0 ? `, since ${elimUses.join('; ')}` : '') +
+    '.'
+  const rectangles = new Map<string, UrAicInstance['rectangleUses'][number]['ur']>()
+  for (const { ur } of aic.rectangleUses) {
+    rectangles.set(urBasisText(ur), ur)
+  }
+  const urCells = [...rectangles.values()].flatMap((ur) => ur.cells)
+  const view = aicChainView(aic)
+  return {
+    id: `uraic-${aic.eliminationType}-${view.candidates.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
+    name: `UR-AIC (Type ${aic.eliminationType}; ${aic.length} link${aic.length === 1 ? '' : 's'})`,
+    notation,
+    usedCells: urCells,
+    usedCandidates: [],
+    eliminatedCandidates: aic.eliminations,
+    solvedCandidates: [],
+    aicCandidates: view.candidates,
+    aicLinks: view.links,
+    techniqueRank: RANK_UR_AIC,
+  }
+}
+
+/** A Techniques-panel row for one ALS-AIC: drawn like any AIC (an ALS link
+ * as the strong link it is, its ends outlined as groups), with every ALS it
+ * uses as the basis. The text is the chain, then any closure it rests on.
+ * An ALS *link* is not explained in words, by request: the chain's own =ALS=
+ * and the outlined ALS cells already show it (a closure still is - it is
+ * off-chain, so nothing else says where those eliminations come from). */
+export function buildAlsAicInstance(aic: AlsAicInstance): TechniqueInstance {
+  const x = aic.nodes[0]
+  const y = aic.nodes[aic.nodes.length - 1]
+  const endText = (n: typeof x) => (n.cells ? `${n.digit} in (${n.cells.map(([r, c]) => cellRef(r, c)).join(', ')})` : aicNodeText(n))
+  const eliminationText = aic.eliminations.map((e) => `${cellRef(e.row, e.col)} cannot be ${e.digit}`).join(', ')
+  const closureUses = aic.alsUses.filter((use) => use.kind === 'closure').map((use) => alsAicAlsUseText(use, aic))
+  const sameCell = !x.cells && !y.cells && x.row === y.row && x.col === y.col
+  const notation =
+    `${alsAicChainText(aic)} states that either ${endText(x)} or ${endText(y)} must be true` +
+    (sameCell ? ` (${cellRef(x.row, x.col)} must be ${x.digit} or ${y.digit})` : '') +
+    (closureUses.length > 0 ? `; ${closureUses.join('; ')}` : '') +
+    `, so ${eliminationText}.`
+  const alsCells = new Map<string, readonly [number, number]>()
+  for (const { als } of aic.alsUses) {
+    for (const cell of als.cells) {
+      alsCells.set(cellRef(cell[0], cell[1]), cell)
+    }
+  }
+  const view = aicChainView(aic)
+  return {
+    id: `alsaic-${aic.eliminationType}-${view.candidates.map((n) => `${n.row}.${n.col}.${n.digit}`).join('-')}`,
+    name: `ALS-AIC (Type ${aic.eliminationType}; ${aic.length} link${aic.length === 1 ? '' : 's'})`,
+    notation,
+    usedCells: [...alsCells.values()],
+    usedCandidates: [],
+    eliminatedCandidates: aic.eliminations,
+    solvedCandidates: [],
+    aicCandidates: view.candidates,
+    aicLinks: view.links,
+    techniqueRank: RANK_ALS_AIC,
+  }
+}
+
 /** A Techniques-panel row for one Sue-de-Coq. The intersection cells and the
  * two bivalue cells are the basis (the bivalue cells also get the distinct
  * border); the line's digits are blue and the box's yellow, in all the cells
@@ -1457,6 +1636,36 @@ function buildSueDeCoqInstance(s: SueDeCoqInstance): TechniqueInstance {
     medusaHighlightCells: [s.lineCell, s.boxCell],
     techniqueRank: RANK_SUE_DE_COQ,
   }
+}
+
+/** A Techniques-panel row for one Extended UR (Type 1): the six pattern cells
+ * and their pattern digits are the basis, and the odd cell - the one that
+ * keeps the pattern from being deadly - gets the distinct border. */
+function buildExtendedUrInstance(eur: ExtendedUrInstance, candidates: CandidateGrid): TechniqueInstance {
+  const odd = cellRef(eur.oddCell[0], eur.oddCell[1])
+  const conclusion = eur.solved
+    ? `${odd} is ${eur.solved.digit}`
+    : `${odd} cannot be ${eur.eliminations.map((e) => e.digit).join('')}`
+  return {
+    id: `extended-ur-1-${eur.cells.map(([r, c]) => `${r}${c}`).join('.')}-${eur.digits.join('')}`,
+    name: 'Extended UR (Type 1)',
+    notation:
+      `${eur.reasonText.replace(/^an /, '')}. If ${odd} were ${joinDigits(eur.digits)}, the six cells would hold only ` +
+      `{${eur.digits.join(',')}} and could be filled in two ways, so ${conclusion}.`,
+    usedCells: [...eur.cells],
+    usedCandidates: eur.cells.flatMap(([row, col]) =>
+      eur.digits.filter((digit) => candidates[row][col][digit - 1]).map((digit) => ({ row, col, digit })),
+    ),
+    eliminatedCandidates: eur.eliminations,
+    solvedCandidates: eur.solved ? [eur.solved] : [],
+    medusaHighlightCells: [eur.oddCell],
+    techniqueRank: RANK_EXTENDED_UR,
+  }
+}
+
+/** "1, 3 or 5". */
+function joinDigits(digits: readonly number[]): string {
+  return digits.length === 1 ? String(digits[0]) : `${digits.slice(0, -1).join(', ')} or ${digits[digits.length - 1]}`
 }
 
 export function buildDragonInstance(
@@ -1546,12 +1755,16 @@ export function dynamicDragonLabel(moves: DragonMove[]): string {
       'bivalue oddagon',
       'x-wing',
       'short single-digit aic',
+      'extended ur',
       'finned x-wing',
       'short aic',
       'swordfish',
       'finned swordfish',
       'generic aic',
+      'grouped aic',
       'als-xz',
+      'ur-aic',
+      'als-aic',
     ] as const
   ).filter((t) => techniquesUsed.has(t))
   // A short AIC is listed by the pattern(s) it was (a Skyscraper, an Empty
@@ -1813,6 +2026,9 @@ export function buildSolvePath(
   doubleDynamicDragonEnabled = false,
   givens: GivenMask | null = null,
   enabledExotic: ReadonlySet<ExoticTechnique> = new Set(),
+  urAicEnabled = false,
+  alsAicEnabled = false,
+  groupedAicEnabled = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
@@ -1864,6 +2080,9 @@ export function buildSolvePath(
       doubleDynamicDragonEnabled,
       givens,
       enabledExotic,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart

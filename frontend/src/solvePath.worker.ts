@@ -32,6 +32,12 @@ export interface SolvePathOptions {
   doubleDynamicDragonEnabled: boolean
   /** The exotic techniques enabled in Settings (none by default). */
   enabledExotic: ExoticTechnique[]
+  /** UR-AIC enabled in Settings (off by default). */
+  urAicEnabled: boolean
+  /** ALS-AIC enabled in Settings (off by default). */
+  alsAicEnabled: boolean
+  /** Grouped AIC enabled in Settings (off by default). */
+  groupedAicEnabled: boolean
 }
 
 export interface SolvePathWorkerRequest {
@@ -74,6 +80,9 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.doubleDynamicDragonEnabled,
         givens,
         new Set(options.enabledExotic),
+        options.urAicEnabled,
+        options.alsAicEnabled,
+        options.groupedAicEnabled,
       ),
     }
   } catch (error) {

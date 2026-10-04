@@ -29,7 +29,6 @@ import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
 import {
-  ALL_RULE3_TECHNIQUES,
   type DragonColor,
   type DragonExtendOptions,
   type DragonMove,
@@ -98,13 +97,14 @@ import {
   SOLVE_PATH_TIMEOUT_OPTIONS,
   MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS,
   MIN_BASE_MEDUSA_CANDIDATES,
+  RULE3_TECHNIQUE_GROUPS,
   RULE3_TECHNIQUE_LABELS,
   type AppSettings,
 } from './settingsDefaults'
 import { loadSavedGrid, loadSavedSettings, saveGrid, saveSettings } from './persistedState'
 import { isNativePasteHotkey, keyNameOf, matchHotkey, type HotkeyBindings } from './hotkeys'
 import HotkeySettings from './HotkeySettings'
-import { layoutAicOverlay } from './aicLinkLayout'
+import { isContiguousGroup, layoutAicOverlay } from './aicLinkLayout'
 import {
   singleFinder,
   lockedCandidateFinder,
@@ -165,7 +165,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.8.3-beta'
+const APP_VERSION = 'v0.8.5-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -221,10 +221,10 @@ const DEFAULT_CANDIDATE_COLOR_SWATCHES: Array<{ id: CandidateColor; label: strin
   { id: 'lightPink', label: 'Light pink', hex: '#e6a3e6' },
   { id: 'blue', label: 'Dark blue', hex: '#2563eb' },
   { id: 'rust', label: 'Orange', hex: '#fb923c' },
-  { id: 'limeGreen', label: 'Lime green', hex: '#7bc82c' },
   { id: 'purple', label: 'Purple', hex: '#9313b5' },
+  { id: 'limeGreen', label: 'Lime green', hex: '#7bc82c' },
   { id: 'darkGreen', label: 'Dark green', hex: '#3d5c0e' },
-  { id: 'tan', label: 'Tan', hex: '#f2c48a' },
+  { id: 'tan', label: 'Red', hex: '#ef4444' },
 ]
 
 const CANDIDATE_SWATCH_COLORS_STORAGE_KEY = 'sudoku-solver-candidate-swatch-colors'
@@ -763,6 +763,37 @@ function UndoRedoIcon({ direction }: { direction: 'undo' | 'redo' }) {
   )
 }
 
+/** The Technique Selections menu's icon: a Medusa head (the 3D Medusa
+ * technique's namesake) - a face with snakes for hair. An SVG rather than an
+ * emoji because there is no Medusa emoji, and it adds no text to the button,
+ * so the usage analytics still names the button by its words alone. */
+function MedusaIcon() {
+  return (
+    <svg className="medusa-icon" viewBox="0 0 24 24" width="1.25em" height="1.25em" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="#16a34a" strokeWidth="1.8" strokeLinecap="round">
+        <path d="M7.5 13.5C4 14 2 11.5 3.5 9" />
+        <path d="M8 10.5C4.5 9.5 4.5 5.5 7 4.5" />
+        <path d="M10.5 9C9 6.5 10.5 4 9.5 2" />
+        <path d="M13.5 9C15 6.5 13.5 4 14.5 2" />
+        <path d="M16 10.5C19.5 9.5 19.5 5.5 17 4.5" />
+        <path d="M16.5 13.5C20 14 22 11.5 20.5 9" />
+      </g>
+      <g fill="#15803d">
+        <circle cx="3.5" cy="9" r="1.3" />
+        <circle cx="7" cy="4.5" r="1.3" />
+        <circle cx="9.5" cy="2" r="1.3" />
+        <circle cx="14.5" cy="2" r="1.3" />
+        <circle cx="17" cy="4.5" r="1.3" />
+        <circle cx="20.5" cy="9" r="1.3" />
+      </g>
+      <ellipse cx="12" cy="15.5" rx="5" ry="6" fill="#bbf7d0" stroke="#15803d" strokeWidth="1.2" />
+      <circle cx="10" cy="14.8" r="1" fill="#b91c1c" />
+      <circle cx="14" cy="14.8" r="1" fill="#b91c1c" />
+      <path d="M10.2 18.2Q12 19.4 13.8 18.2" fill="none" stroke="#15803d" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 /** Touch layout only: the selected Techniques-list row, alone, filling the
  * dock. In the list the row's step player sits below its (often long)
  * notation, and a Dynamic Dragon's substep player below that, so stepping
@@ -999,6 +1030,12 @@ type AutocompleteResult =
       dragon?: { checkedMoves: number; rolePaint: Record<DragonColor, CandidatePaintLayer>; dynamic: boolean }
       boardBefore: Board
       candidatesBefore: CandidateGrid
+      /** The grid's colouring right after autocompleting (JSON of the
+       * candidate colours). The result is stale once the colouring differs -
+       * clearing colours or removing one must take the result's colours off
+       * the grid too, and Autocomplete Dragon draws its colouring from the
+       * result rather than from the grid's own colours. */
+      coloursKey: string
     }
 
 /** What checkPaintedDragon (in App) makes of the painted colouring - the
@@ -1180,7 +1217,7 @@ function AutocompletePanel({
 
       <p className="autocomplete-heading">Dragon (Plain)</p>
       <p className="technique-empty">
-        Start a plain Dragon by colouring the Medusa set and its dragon colours (dragons colours are dark blue and orange by default). Then click the button to checks your colouring, continues your Dragon extensions, and shows the end result, step-by-step.
+        Start a plain Dragon by colouring the Medusa set and its dragon colours (dragons colours are dark blue and orange by default). Then click the button to checks your colouring, continues your Dragon extensions, and shows the end result, step-by-step.  This feature does not support Double Dragons.
       </p>
       {medusaColours && dragonColours.length > 0 && dragonColours.length <= 2 && (
         <p className="technique-empty">
@@ -1212,7 +1249,7 @@ function AutocompletePanel({
 
       <p className="autocomplete-heading">Dynamic Dragon</p>
       <p className="technique-empty">
-        Start a Dynamic Dragon by colouring the Medusa set and its dragon colours. Then click the button to checks your colouring, continues your Dynamic Dragon extensions (based on the Dynamic Dragon configurations), and shows the end result, step-by-step.
+        Start a Dynamic Dragon by colouring the Medusa set and its dragon colours. Then click the button to checks your colouring, continues your Dynamic Dragon extensions (based on the Dynamic Dragon configurations), and shows the end result, step-by-step.  This feature does not support Double Dynamic Dragons.
       </p>
       <div className="find-form">
         <button
@@ -1256,7 +1293,7 @@ function TechniqueLearnButton({
     <button
       type="button"
       className="menu-help-button technique-learn-button"
-      aria-label={`Learn ${instance.name} in the Techniques overview`}
+      aria-label={`Learn ${instance.name} in the Learn techniques`}
       title="Learn this technique"
       onClick={() => onLearn(target)}
     >
@@ -1999,9 +2036,30 @@ export default function App() {
   const [showBivalueCells, setShowBivalueCells] = useState(initialSettings.showBivalueCells)
   const [gridWhiteMode, setGridWhiteMode] = useState(initialSettings.gridWhiteMode)
   const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(initialSettings.minBaseMedusaFilter)
+  const [allPossibleTechniques, setAllPossibleTechniques] = useState(initialSettings.allPossibleTechniques)
   const [dynamicDragonDisabled, setDynamicDragonDisabled] = useState(initialSettings.dynamicDragonDisabled)
   const [doubleDragonEnabled, setDoubleDragonEnabled] = useState(initialSettings.doubleDragonEnabled)
-  const [doubleDynamicDragonEnabled, setDoubleDynamicDragonEnabled] = useState(initialSettings.doubleDynamicDragonEnabled)
+  // Double Dynamic Dragon Colouring can only be on while both Double Dragon and
+  // Dynamic Dragon Colouring are: turning either off turns it off too (not just
+  // greys it out), and a saved state that breaks this is corrected on load.
+  const [doubleDynamicDragonEnabled, setDoubleDynamicDragonEnabled] = useState(
+    initialSettings.doubleDynamicDragonEnabled &&
+      initialSettings.doubleDragonEnabled &&
+      !initialSettings.dynamicDragonDisabled,
+  )
+  const doubleDynamicDragonUnavailableReason = dynamicDragonDisabled
+    ? 'Dynamic Dragons are disabled - turn on Dynamic Dragon Colouring first'
+    : !doubleDragonEnabled
+      ? 'Double Dragons are disabled - turn on Double Dragon Colouring first'
+      : null
+  const toggleDoubleDragonEnabled = () => {
+    if (doubleDragonEnabled) setDoubleDynamicDragonEnabled(false)
+    setDoubleDragonEnabled(!doubleDragonEnabled)
+  }
+  const toggleDynamicDragonDisabled = () => {
+    if (!dynamicDragonDisabled) setDoubleDynamicDragonEnabled(false)
+    setDynamicDragonDisabled(!dynamicDragonDisabled)
+  }
   const [allowedRule3Techniques, setAllowedRule3Techniques] = useState<Set<Rule3Technique>>(
     () => new Set(initialSettings.allowedRule3Techniques),
   )
@@ -2015,16 +2073,38 @@ export default function App() {
   const [swordfishEnabled, setSwordfishEnabled] = useState(initialSettings.swordfishEnabled)
   const [finnedSwordfishEnabled, setFinnedSwordfishEnabled] = useState(initialSettings.finnedSwordfishEnabled)
   const [alsXzEnabled, setAlsXzEnabled] = useState(initialSettings.alsXzEnabled)
+  const [urAicEnabled, setUrAicEnabled] = useState(initialSettings.urAicEnabled)
+  const [alsAicEnabled, setAlsAicEnabled] = useState(initialSettings.alsAicEnabled)
+  const [groupedAicEnabled, setGroupedAicEnabled] = useState(initialSettings.groupedAicEnabled)
   const [sueDeCoqEnabled, setSueDeCoqEnabled] = useState(initialSettings.sueDeCoqEnabled)
-  // Settings -> Exotic Techniques starts collapsed every session: it's for
-  // advanced users only, so it stays out of the way until asked for.
+  const [extendedUrEnabled, setExtendedUrEnabled] = useState(initialSettings.extendedUrEnabled)
+  // Technique Selections -> Extreme Techniques starts collapsed every session: it's for
+  // advanced users only, so it stays out of the way until asked for. (Internally the
+  // section's own non-Dynamic-Dragon techniques are still "exotic", see enabledExotic.)
   const [exoticTechniquesShown, setExoticTechniquesShown] = useState(false)
+  // Technique Selections -> Basic / Colouring Techniques: view state only, not saved.
+  // Basics start collapsed (they are always on, nothing to change), Colouring open.
+  const [basicTechniquesShown, setBasicTechniquesShown] = useState(false)
+  const [colouringTechniquesShown, setColouringTechniquesShown] = useState(true)
+  // Dragon Configuration -> Select Dynamic Dragon Colouring techniques: which of
+  // its sections (by title) are collapsed. View state only, not saved - Extreme
+  // and Unfair start collapsed every session.
+  const [collapsedRule3Groups, setCollapsedRule3Groups] = useState<ReadonlySet<string>>(
+    () => new Set(RULE3_TECHNIQUE_GROUPS.filter((group) => group.collapsedByDefault).map((group) => group.title)),
+  )
+  const toggleRule3Group = (title: string) =>
+    setCollapsedRule3Groups((current) => {
+      const next = new Set(current)
+      if (!next.delete(title)) next.add(title)
+      return next
+    })
   // The exotic technique toggles as the one set the engine takes.
   const enabledExotic = useMemo(() => {
     const enabled = new Set<ExoticTechnique>()
     if (sueDeCoqEnabled) enabled.add('sue de coq')
+    if (extendedUrEnabled) enabled.add('extended ur')
     return enabled
-  }, [sueDeCoqEnabled])
+  }, [sueDeCoqEnabled, extendedUrEnabled])
   // The four fish toggles as the one set the engine takes.
   const enabledFish = useMemo(() => {
     const enabled = new Set<FishTechnique>()
@@ -2080,6 +2160,7 @@ export default function App() {
    * same technique keeps what was already revealed (see onOpenHint). */
   const lastHintRef = useRef<{ hint: TechniqueHint; revealed: number } | null>(null)
   const [confirmOptimizeDynamicOpen, setConfirmOptimizeDynamicOpen] = useState(false)
+  const [confirmAllPossibleTechniquesOpen, setConfirmAllPossibleTechniquesOpen] = useState(false)
   // Where How It Works is open (null: closed) - a hint's "Learn this
   // technique" link opens it on that technique's tab/sub-tab.
   const [tutorialTarget, setTutorialTarget] = useState<TutorialTarget | null>(null)
@@ -2260,14 +2341,18 @@ export default function App() {
   // per-technique checkbox in the Dynamic Dragon Colouring list - turning
   // it off excludes 'short aic' regardless of that checkbox's own state,
   // rather than needing every Dynamic Dragon call site to check both.
-  // Each fish toggle, and ALS-xz's, is the same kind of master switch over
-  // its own Dynamic Dragon checkbox.
+  // Each fish toggle, and Extended UR's, Grouped AIC's, ALS-xz's, UR-AIC's and ALS-AIC's, is the same kind of master
+  // switch over its own Dynamic Dragon checkbox.
   const effectiveAllowedRule3Techniques = useMemo(() => {
     if (
       shortAicEnabled &&
       shortSingleDigitAicEnabled &&
       genericAicEnabled &&
       alsXzEnabled &&
+      urAicEnabled &&
+      alsAicEnabled &&
+      groupedAicEnabled &&
+      extendedUrEnabled &&
       enabledFish.size === ALL_FISH_TECHNIQUES.length
     ) {
       return allowedRule3Techniques
@@ -2290,8 +2375,20 @@ export default function App() {
     if (!alsXzEnabled) {
       next.delete('als-xz')
     }
+    if (!urAicEnabled) {
+      next.delete('ur-aic')
+    }
+    if (!alsAicEnabled) {
+      next.delete('als-aic')
+    }
+    if (!groupedAicEnabled) {
+      next.delete('grouped aic')
+    }
+    if (!extendedUrEnabled) {
+      next.delete('extended ur')
+    }
     return next
-  }, [allowedRule3Techniques, shortAicEnabled, shortSingleDigitAicEnabled, genericAicEnabled, alsXzEnabled, enabledFish])
+  }, [allowedRule3Techniques, shortAicEnabled, shortSingleDigitAicEnabled, genericAicEnabled, alsXzEnabled, urAicEnabled, alsAicEnabled, groupedAicEnabled, extendedUrEnabled, enabledFish])
 
   // The "solvable / solvable with brute force / unsolvable" status below
   // the grid, split into three memos so the expensive part (a fresh-
@@ -2343,6 +2440,7 @@ export default function App() {
       candidates,
       givens,
       minBaseMedusaFilter,
+      allPossibleTechniques,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -2355,6 +2453,9 @@ export default function App() {
       dynamicDragonDisabled,
       enabledFish,
       alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
       enabledExotic,
@@ -2364,6 +2465,7 @@ export default function App() {
       candidates,
       givens,
       minBaseMedusaFilter,
+      allPossibleTechniques,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -2376,6 +2478,9 @@ export default function App() {
       dynamicDragonDisabled,
       enabledFish,
       alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
       enabledExotic,
@@ -2433,13 +2538,21 @@ export default function App() {
         analysis.doubleDynamicDragonEnabled,
         analysis.givens,
         analysis.enabledExotic,
+        analysis.urAicEnabled,
+        analysis.alsAicEnabled,
+        analysis.groupedAicEnabled,
+        analysis.allPossibleTechniques,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
+      analysis.allPossibleTechniques,
       analysis.enabledFish,
       analysis.enabledExotic,
       analysis.alsXzEnabled,
+      analysis.urAicEnabled,
+      analysis.alsAicEnabled,
+      analysis.groupedAicEnabled,
       analysis.doubleDragonEnabled,
       analysis.doubleDynamicDragonEnabled,
       analysis.board,
@@ -2490,6 +2603,9 @@ export default function App() {
             analysis.doubleDynamicDragonEnabled,
             analysis.givens,
             analysis.enabledExotic,
+            analysis.urAicEnabled,
+            analysis.alsAicEnabled,
+            analysis.groupedAicEnabled,
           ).length,
     // Same inputs as techniqueInstances (which it also reads).
     [
@@ -2497,6 +2613,9 @@ export default function App() {
       analysis.enabledFish,
       analysis.enabledExotic,
       analysis.alsXzEnabled,
+      analysis.urAicEnabled,
+      analysis.alsAicEnabled,
+      analysis.groupedAicEnabled,
       analysis.doubleDragonEnabled,
       analysis.doubleDynamicDragonEnabled,
       analysis.board,
@@ -2533,10 +2652,12 @@ export default function App() {
     boardsEqual(board, findResult.boardBefore) &&
     candidatesEqual(candidates, findResult.candidatesBefore)
   const findInstance = findResult?.kind === 'found' && findResultIsCurrent ? findResult.instance : null
+  const candidateColorsKey = useMemo(() => JSON.stringify(candidateColors), [candidateColors])
   const autocompleteResultIsCurrent =
     autocompleteResult?.kind === 'found' &&
     boardsEqual(board, autocompleteResult.boardBefore) &&
-    candidatesEqual(candidates, autocompleteResult.candidatesBefore)
+    candidatesEqual(candidates, autocompleteResult.candidatesBefore) &&
+    candidateColorsKey === autocompleteResult.coloursKey
   const autocompleteInstance =
     autocompleteResult?.kind === 'found' && autocompleteResultIsCurrent ? autocompleteResult.instance : null
   const autocompleteChainKeys = useMemo(
@@ -2580,6 +2701,7 @@ export default function App() {
       showBivalueCells,
       gridWhiteMode,
       minBaseMedusaFilter,
+      allPossibleTechniques,
       shortSingleDigitAicEnabled,
       shortAicEnabled,
       genericAicEnabled,
@@ -2588,7 +2710,11 @@ export default function App() {
       swordfishEnabled,
       finnedSwordfishEnabled,
       alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
       sueDeCoqEnabled,
+      extendedUrEnabled,
       dynamicDragonDisabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
@@ -2616,6 +2742,7 @@ export default function App() {
       showBivalueCells,
       gridWhiteMode,
       minBaseMedusaFilter,
+      allPossibleTechniques,
       shortSingleDigitAicEnabled,
       shortAicEnabled,
       genericAicEnabled,
@@ -2624,7 +2751,11 @@ export default function App() {
       swordfishEnabled,
       finnedSwordfishEnabled,
       alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
       sueDeCoqEnabled,
+      extendedUrEnabled,
       dynamicDragonDisabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
@@ -2815,11 +2946,17 @@ export default function App() {
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
       enabledExotic: [...enabledExotic],
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
     }),
     [
       enabledFish,
       enabledExotic,
       alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
       doubleDragonEnabled,
       doubleDynamicDragonEnabled,
       effectiveAllowedRule3Techniques,
@@ -3474,7 +3611,7 @@ export default function App() {
 
   function onShortSingleDigitAic() {
     if (!shortSingleDigitAicEnabled) {
-      setStatus('Short Single-Digit AIC is turned off in Settings.')
+      setStatus('Short Single-Digit AIC is turned off in Technique Selections.')
       return
     }
     if (!pairFinder.hasFullCandidates(board, candidates)) {
@@ -3501,7 +3638,7 @@ export default function App() {
 
   function onShortAic() {
     if (!shortAicEnabled) {
-      setStatus('Short AIC is turned off in Settings.')
+      setStatus('Short AIC is turned off in Technique Selections.')
       return
     }
     if (!pairFinder.hasFullCandidates(board, candidates)) {
@@ -3528,7 +3665,7 @@ export default function App() {
 
   function onGenericAic() {
     if (!genericAicEnabled) {
-      setStatus('Generic AIC is turned off in Settings.')
+      setStatus('Generic AIC is turned off in Technique Selections.')
       return
     }
     if (!pairFinder.hasFullCandidates(board, candidates)) {
@@ -3708,10 +3845,11 @@ export default function App() {
           maxTechniquesPerDragonStep,
           givens,
         )
-        // ALS-xz is never auto-solved, not even inside a Dynamic Dragon
-        // chain - no setting opts back in.
+        // Grouped AIC, ALS-xz, UR-AIC and ALS-AIC are never auto-solved, not even inside
+        // a Dynamic Dragon chain - no setting opts back in.
         const withoutAlsXz = results.filter(
-          ({ moves }) => !moves.some((move) => (move.dynamicTechniques ?? []).includes('als-xz')),
+          ({ moves }) =>
+            !moves.some((move) => (move.dynamicTechniques ?? []).some((t) => t === 'grouped aic' || t === 'als-xz' || t === 'ur-aic' || t === 'als-aic')),
         )
         if (dynamicDragonAutoSolveIncludesAics) {
           return withoutAlsXz
@@ -3910,6 +4048,7 @@ export default function App() {
     setShowBivalueCells(DEFAULT_SETTINGS.showBivalueCells)
     setGridWhiteMode(DEFAULT_SETTINGS.gridWhiteMode)
     setMinBaseMedusaFilter(DEFAULT_SETTINGS.minBaseMedusaFilter)
+    setAllPossibleTechniques(DEFAULT_SETTINGS.allPossibleTechniques)
     setShortSingleDigitAicEnabled(DEFAULT_SETTINGS.shortSingleDigitAicEnabled)
     setShortAicEnabled(DEFAULT_SETTINGS.shortAicEnabled)
     setGenericAicEnabled(DEFAULT_SETTINGS.genericAicEnabled)
@@ -3918,7 +4057,11 @@ export default function App() {
     setSwordfishEnabled(DEFAULT_SETTINGS.swordfishEnabled)
     setFinnedSwordfishEnabled(DEFAULT_SETTINGS.finnedSwordfishEnabled)
     setAlsXzEnabled(DEFAULT_SETTINGS.alsXzEnabled)
+    setUrAicEnabled(DEFAULT_SETTINGS.urAicEnabled)
+    setAlsAicEnabled(DEFAULT_SETTINGS.alsAicEnabled)
+    setGroupedAicEnabled(DEFAULT_SETTINGS.groupedAicEnabled)
     setSueDeCoqEnabled(DEFAULT_SETTINGS.sueDeCoqEnabled)
+    setExtendedUrEnabled(DEFAULT_SETTINGS.extendedUrEnabled)
     setDynamicDragonDisabled(DEFAULT_SETTINGS.dynamicDragonDisabled)
     setDoubleDragonEnabled(DEFAULT_SETTINGS.doubleDragonEnabled)
     setDoubleDynamicDragonEnabled(DEFAULT_SETTINGS.doubleDynamicDragonEnabled)
@@ -4199,7 +4342,7 @@ export default function App() {
       } else {
         lines.push('No Dragon reaches it - it probably needs a different technique.')
       }
-      lines.push('Only the techniques enabled in Settings are used.')
+      lines.push('Only the techniques enabled in Technique Selections are used.')
       if (note) lines.push(note)
       say(
         'info',
@@ -4277,8 +4420,8 @@ export default function App() {
       return
     }
 
+    const nextColors = cloneCandidateColors(candidateColors)
     if (outcome.added.length > 0) {
-      const nextColors = cloneCandidateColors(candidateColors)
       for (const node of outcome.added) {
         const swatch = node.color === 'blue' ? first : second
         const layer = { color: swatch.id, shape: swatchShapes[swatch.id] }
@@ -4312,6 +4455,7 @@ export default function App() {
       chainKeys: outcome.chain.candidates.map((c) => `${c.row},${c.col},${c.digit}`),
       boardBefore: board,
       candidatesBefore: candidates,
+      coloursKey: JSON.stringify(sanitizeCandidateColors(nextColors, board, candidates)),
     })
     setStatus(`Autocompleted the Medusa: ${built.instance.name}.`)
   }
@@ -4429,6 +4573,7 @@ export default function App() {
       dragon: { checkedMoves: outcome.checkedMoves, rolePaint, dynamic },
       boardBefore: board,
       candidatesBefore: candidates,
+      coloursKey: JSON.stringify(sanitizeCandidateColors(nextColors, board, candidates)),
     })
     // Open the step player where the user left off.
     setDragonStepIndex(outcome.checkedMoves - 1)
@@ -5428,12 +5573,19 @@ export default function App() {
         Sudoku Colouring Solver/Trainer <span className="app-version">{APP_VERSION}</span>
       </h1>
       <p>
-        Advanced Sudoku solver and trainer emphasizing Colouring techniques, such as Dragon Colouring. <div></div>
-        For the Colouring enthusiasts, click{' '}
+        Advanced Sudoku solver and trainer emphasizing Colouring techniques, such as Dragon Colouring. <br/> <div></div> <br/>
+        For beginners or Colouring enthusiasts, use the default settings and click{' '}
         <button type="button" className="header-link" onClick={() => setTutorialTarget({ tab: 'basics' })}>
-          Techniques overview
+          Learn techniques
         </button>{' '}
-        for a quick overview.
+        for a quick overview.  <br/>
+        For advanced Colourists and solvers, learn how to configure your { ' '}
+        <button type="button" className="header-link" onClick={() => setHelpOpen({tab: "Dragon Configuration"})}>
+           Dragon settings
+        </button>{' '} and enable your preferred { ' '}
+        <button type="button" className="header-link" onClick={() => setHelpOpen({tab: "Technique Selections"})}>
+           techniques
+        </button>{' '}
       </p>
     </header>
   )
@@ -5441,7 +5593,9 @@ export default function App() {
   const toolbar = (
     <div className="main-toolbar">
       <div className="toolbar-group">
-        {/* Icons on a phone, so the one-row toolbar still fits the 💡 Hint. */}
+        {/* Icons on a phone, so the one-row toolbar still fits the 💡 Hint.
+            Desktop: Undo and Redo are one joined pair (.toolbar-segment). */}
+        <div className="toolbar-segment">
         <button
           type="button"
           className="undo-trigger"
@@ -5450,7 +5604,8 @@ export default function App() {
           aria-label={phone ? 'Undo' : undefined}
           title={phone ? 'Undo' : undefined}
         >
-          {phone ? <UndoRedoIcon direction="undo" /> : 'Undo'}
+          <UndoRedoIcon direction="undo" />
+          {!phone && <span>Undo</span>}
         </button>
         <button
           type="button"
@@ -5460,13 +5615,15 @@ export default function App() {
           aria-label={phone ? 'Redo' : undefined}
           title={phone ? 'Redo' : undefined}
         >
-          {phone ? <UndoRedoIcon direction="redo" /> : 'Redo'}
+          <UndoRedoIcon direction="redo" />
+          {!phone && <span>Redo</span>}
         </button>
-        {/* On a phone, Clear grid / Techniques overview / ? move into the
+        </div>
+        {/* On a phone, Clear grid / Learn techniques / ? move into the
             "⋯" menu at the end so the toolbar stays one row - every row
             above the grid comes out of the dock's height. */}
         {!phone && (
-          <button type="button" onClick={onClear} disabled={busy}>
+          <button type="button" className="clear-grid-trigger" onClick={onClear} disabled={busy}>
             Clear grid
           </button>
         )}
@@ -5492,14 +5649,14 @@ export default function App() {
 
       <div className="toolbar-group toolbar-group-end">
         {!phone && (
-          <>
+          <div className="toolbar-segment">
             <button
               type="button"
               className="how-it-works-trigger"
               title="Learn the colouring techniques, step by step"
               onClick={() => setTutorialTarget({ tab: 'basics' })}
             >
-              Techniques overview
+              Learn techniques
             </button>
             <button
               type="button"
@@ -5509,9 +5666,9 @@ export default function App() {
               title="What do the settings do?"
               onClick={() => setHelpOpen({})}
             >
-              ?
+              Quickstart
             </button>
-          </>
+          </div>
         )}
         <DropdownMenu
           trackingName="Generate Puzzle"
@@ -5616,10 +5773,10 @@ export default function App() {
               type="button"
               className="dropdown-item"
               onClick={onNewDoubleDynamicDragonPuzzle}
-              disabled={busy || !doubleDynamicDragonEnabled || dynamicDragonDisabled}
+              disabled={busy || !doubleDynamicDragonEnabled || doubleDynamicDragonUnavailableReason !== null}
               title={
-                dynamicDragonDisabled
-                  ? 'Dynamic Dragons are disabled in Dragon Configuration'
+                doubleDynamicDragonUnavailableReason !== null
+                  ? doubleDynamicDragonUnavailableReason
                   : doubleDynamicDragonEnabled
                     ? 'Picks a puzzle state that nothing else can progress - not even Dynamic Dragon or Double Dragon with every technique enabled and no limits - but Double Dynamic Dragon Colouring (with no AIC or technique limits) can'
                     : 'Turn on Double Dynamic Dragon Colouring in Dragon Configuration first'
@@ -5636,7 +5793,7 @@ export default function App() {
               title={
                 shortSingleDigitAicEnabled
                   ? 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Short Single-Digit AIC available. When off, generation rejects any state where one exists.'
-                  : 'Always on while Short Single-Digit AIC is disabled - enable it in Settings to turn this off.'
+                  : 'Always on while Short Single-Digit AIC is disabled - enable it in Technique Selections to turn this off.'
               }
             >
               <input
@@ -5651,7 +5808,7 @@ export default function App() {
               className="menu-checkbox"
               title={
                 !shortAicEnabled
-                  ? 'Always on while Short AIC is disabled - enable it in Settings to turn this off.'
+                  ? 'Always on while Short AIC is disabled - enable it in Technique Selections to turn this off.'
                   : dragonGenerationDisregardsSingleDigitAic
                     ? 'Always on while "Dragon Generation disregards single digit AIC" is on - turn that off first.'
                     : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Short AIC available. When off, generation rejects any state where one exists.'
@@ -5669,7 +5826,7 @@ export default function App() {
               className="menu-checkbox"
               title={
                 !genericAicEnabled
-                  ? 'Always on while Generic AIC is disabled - enable it in Settings to turn this off.'
+                  ? 'Always on while Generic AIC is disabled - enable it in Technique Selections to turn this off.'
                   : dragonGenerationDisregardsAic
                     ? 'Always on while "Dragon Generation disregards AIC" is on - turn that off first.'
                     : 'When on, a generated Dragon or Dynamic Dragon puzzle state may also have a Generic AIC available. When off, generation rejects any state where one exists.'
@@ -5743,6 +5900,8 @@ export default function App() {
           </div>
         </DropdownMenu>
 
+        {/* The three settings menus, joined into one group on the desktop. */}
+        <div className="toolbar-segment">
         <DropdownMenu
           trackingName="Dragon Configuration"
           label={
@@ -5796,7 +5955,7 @@ export default function App() {
               className="menu-checkbox"
               title="When on, the solver also looks for Double Dragons. Follows Exhaustive and Optimize Dragons. Ranked between Dragon and Dynamic Dragon. Also enables the Double Dragon practice puzzle."
             >
-              <input type="checkbox" checked={doubleDragonEnabled} onChange={() => setDoubleDragonEnabled((value) => !value)} />
+              <input type="checkbox" checked={doubleDragonEnabled} onChange={toggleDoubleDragonEnabled} />
               Enable Double Dragons
             </label>
           </div>
@@ -5859,15 +6018,14 @@ export default function App() {
            <label
               className="menu-checkbox"
               title={
-                dynamicDragonDisabled
-                  ? 'Dynamic Dragons are disabled, so this has no effect'
-                  : 'When on, the solver also looks for Double Dynamic Dragon Colouring: two linked Dragons, like Double Dragon Colouring, where at least one of them is Dynamic. Only chains single Dynamic Dragon is stuck on are used. Follows the Dynamic Dragon settings (techniques, AIC limit, max techniques per step), Exhaustive Dragon Colouring and Optimize Dynamic Dragons. Also enables the Double Dynamic Dragon practice puzzle.'
+                doubleDynamicDragonUnavailableReason ??
+                  'When on, the solver also looks for Double Dynamic Dragon Colouring: two linked Dragons, like Double Dragon Colouring, where at least one of them is Dynamic. Only chains single Dynamic Dragon is stuck on are used. Follows the Dynamic Dragon settings (techniques, AIC limit, max techniques per step), Exhaustive Dragon Colouring and Optimize Dynamic Dragons. Also enables the Double Dynamic Dragon practice puzzle.'
               }
             >
               <input
                 type="checkbox"
                 checked={doubleDynamicDragonEnabled}
-                disabled={dynamicDragonDisabled}
+                disabled={doubleDynamicDragonUnavailableReason !== null}
                 onChange={() => setDoubleDynamicDragonEnabled((value) => !value)}
               />
               Enable Double Dynamic Dragons
@@ -5877,7 +6035,7 @@ export default function App() {
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">Select Dynamic Dragon Colouring techniques</h3>
             <p className="dropdown-hint">
-              Which non-colouring techniques Dynamic Dragon Colouring may use to find extensions, for both puzzle generation and solving.
+              Determines the non-colouring techniques Dynamic Dragon Colouring may use to find extensions.
             </p>
             <label
               className="menu-checkbox"
@@ -5886,19 +6044,50 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={dynamicDragonDisabled}
-                onChange={() => setDynamicDragonDisabled((value) => !value)}
+                onChange={toggleDynamicDragonDisabled}
               />
               Disable Dynamic Dragons
             </label>
             {/* Hidden Single isn't listed: it's part of plain Dragon Colouring
                 too, so it isn't a Dynamic Dragon choice (always on, see extend()). */}
-            {ALL_RULE3_TECHNIQUES.filter((technique) => technique !== 'hidden single').map((technique) => {
+            {RULE3_TECHNIQUE_GROUPS.map((group) => {
+              const shown = !collapsedRule3Groups.has(group.title)
+              return (
+                <div key={group.title} className="rule3-technique-group">
+                  <div className="menu-section-toggle-row">
+                    <button
+                      type="button"
+                      className="menu-section-toggle"
+                      aria-expanded={shown}
+                      onClick={() => toggleRule3Group(group.title)}
+                    >
+                      <h4 className="dropdown-section-title">{group.title}</h4>
+                      <span className="menu-section-chevron" aria-hidden="true">
+                        {shown ? '▾' : '▸'}
+                      </span>
+                    </button>
+                  </div>
+                  {/* Below the title, not beside it: the panel is too narrow
+                      for both on one line (the text wrapped two words a line). */}
+                  {group.warning && (
+                    <p className={`menu-section-warning menu-section-warning-${group.warningLevel ?? 'caution'}`}>
+                      <span className="menu-section-warning-icon" aria-hidden="true">
+                        {group.warningLevel === 'danger' ? '⚠' : '!'}
+                      </span>
+                      {group.warning}
+                    </p>
+                  )}
+                  {shown && group.techniques.map((technique) => {
               const disabledByMasterSwitch =
                 ((ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(technique) &&
                   !enabledFish.has(technique as FishTechnique)) ||
                 (technique === 'short aic' && !shortAicEnabled) ||
                 (technique === 'generic aic' && !genericAicEnabled) ||
+                (technique === 'extended ur' && !extendedUrEnabled) ||
+                (technique === 'grouped aic' && !groupedAicEnabled) ||
                 (technique === 'als-xz' && !alsXzEnabled) ||
+                (technique === 'ur-aic' && !urAicEnabled) ||
+                (technique === 'als-aic' && !alsAicEnabled) ||
                 (technique === 'short single-digit aic' && !shortSingleDigitAicEnabled)
               return (
                 <label
@@ -5908,7 +6097,7 @@ export default function App() {
                     dynamicDragonDisabled
                       ? 'Dynamic Dragons are disabled, so this has no effect'
                       : disabledByMasterSwitch
-                        ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Settings, so this has no effect`
+                        ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Technique Selections, so this has no effect`
                         : undefined
                   }
                 >
@@ -5926,13 +6115,281 @@ export default function App() {
                   {RULE3_TECHNIQUE_LABELS[technique]}
                 </label>
               )
+                  })}
+                </div>
+              )
             })}
           </div>
         </DropdownMenu>
 
         <DropdownMenu
+          trackingName="Technique Selections"
+          label={
+            phone ? (
+              <MedusaIcon />
+            ) : (
+              <>
+                <MedusaIcon /> Technique Selections <span className="dropdown-caret">▾</span>
+              </>
+            )
+          }
+          ariaLabel={phone ? 'Technique Selections' : undefined}
+          buttonClassName="technique-selections-trigger"
+          align="right"
+        >
+          <div className="dropdown-section">
+            <div className="menu-section-toggle-row">
+              <button
+                type="button"
+                className="menu-section-toggle"
+                aria-expanded={basicTechniquesShown}
+                onClick={() => setBasicTechniquesShown((value) => !value)}
+              >
+                <h3 className="dropdown-section-title">Basic Techniques</h3>
+                <span className="menu-section-chevron" aria-hidden="true">
+                  {basicTechniquesShown ? '▾' : '▸'}
+                </span>
+              </button>
+              <MenuHelpButton topic="Basic Techniques" onClick={() => setHelpOpen({ tab: 'Technique Selections' })} />
+            </div>
+            {basicTechniquesShown &&
+              [
+                'Naked Singles',
+                'Hidden Singles',
+                'Naked Pairs',
+                'Locked Candidates',
+                'Naked Triples',
+                'Naked Quads',
+                'Hidden Pairs',
+              ].map((name) => (
+                <label key={name} className="menu-checkbox" title={`${name} are always used by the solver.`}>
+                  <input type="checkbox" checked disabled readOnly />
+                  {name}
+                </label>
+              ))}
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <div className="menu-section-toggle-row">
+              <button
+                type="button"
+                className="menu-section-toggle"
+                aria-expanded={colouringTechniquesShown}
+                onClick={() => setColouringTechniquesShown((value) => !value)}
+              >
+                <h3 className="dropdown-section-title">Colouring Techniques</h3>
+                <span className="menu-section-chevron" aria-hidden="true">
+                  {colouringTechniquesShown ? '▾' : '▸'}
+                </span>
+              </button>
+              <MenuHelpButton topic="Colouring Techniques" onClick={() => setHelpOpen({ tab: 'Technique Selections' })} />
+            </div>
+            {colouringTechniquesShown && (
+              <>
+                {['Simple Colouring', '3D Medusa', 'Dragon Colouring'].map((name) => (
+                  <label key={name} className="menu-checkbox" title={`${name} is always used by the solver.`}>
+                    <input type="checkbox" checked disabled readOnly />
+                    {name}
+                  </label>
+                ))}
+                {/* The same settings as the Dragon Configuration menu's own toggles. */}
+                <label
+                  className="menu-checkbox"
+                  title="When on, the solver also looks for Double Dragons. Same setting as Dragon Configuration -> Double Dragon Colouring."
+                >
+                  <input type="checkbox" checked={doubleDragonEnabled} onChange={toggleDoubleDragonEnabled} />
+                  Double Dragon Colouring
+                </label>
+                <label
+                  className="menu-checkbox"
+                  title='When off, Dynamic Dragon Colouring is not used anywhere. Same setting as Dragon Configuration -> "Disable Dynamic Dragons" (inverted).'
+                >
+                  <input
+                    type="checkbox"
+                    checked={!dynamicDragonDisabled}
+                    onChange={toggleDynamicDragonDisabled}
+                  />
+                  Dynamic Dragon Colouring
+                </label>
+                <label
+                  className="menu-checkbox"
+                  title={
+                    doubleDynamicDragonUnavailableReason ??
+                    'When on, the solver also looks for Double Dynamic Dragons. Same setting as Dragon Configuration -> Double Dynamic Dragon Colouring.'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={doubleDynamicDragonEnabled}
+                    disabled={doubleDynamicDragonUnavailableReason !== null}
+                    onChange={() => setDoubleDynamicDragonEnabled((value) => !value)}
+                  />
+                  Double Dynamic Dragon Colouring
+                </label>
+              </>
+            )}
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title dropdown-section-title-nowrap">
+              Techniques (Non-Colouring)
+              <MenuHelpButton topic="Techniques" onClick={() => setHelpOpen({ tab: 'Technique Selections' })} />
+            </h3>
+            {['Unique Rectangle', 'Bivalue Oddagon', 'BUG+1', 'Avoidable Rectangle'].map((name) => (
+              <label key={name} className="menu-checkbox" title={`${name} is always used by the solver.`}>
+                <input type="checkbox" checked disabled readOnly />
+                {name}
+              </label>
+            ))}
+            <label
+              className="menu-checkbox"
+              title="When off, the solver will not look for Short Single-Digit AIC chains at all. Disable this for a true Colouring experience."
+            >
+              <input
+                type="checkbox"
+                checked={shortSingleDigitAicEnabled}
+                onChange={toggleShortSingleDigitAicEnabled}
+              />
+              Enable Short Single-Digit AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                shortSingleDigitAicEnabled
+                  ? 'When off, the solver will not look for Short AIC chains at all. Disable this for a true Colouring experience.'
+                  : 'Turn on Enable Short Single-Digit AIC first - Short AIC can only be enabled with it.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={shortAicEnabled}
+                disabled={!shortSingleDigitAicEnabled}
+                onChange={toggleShortAicEnabled}
+              />
+              Enable Short AIC
+            </label>
+            <label
+              className="menu-checkbox"
+              title={
+                shortAicEnabled
+                  ? `When off, the solver will not look for Generic AIC chains (longer than Short AIC's, up to ${GENERIC_AIC_MAX_LENGTH} links) at all.`
+                  : 'Turn on Enable Short AIC first - Generic AIC can only be enabled with it.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={genericAicEnabled}
+                disabled={!shortAicEnabled}
+                onChange={toggleGenericAicEnabled}
+              />
+              Enable Generic AIC
+            </label>
+            {(
+              [
+                ['x-wing', xWingEnabled, setXWingEnabled],
+                ['finned x-wing', finnedXWingEnabled, setFinnedXWingEnabled],
+                ['swordfish', swordfishEnabled, setSwordfishEnabled],
+                ['finned swordfish', finnedSwordfishEnabled, setFinnedSwordfishEnabled],
+              ] as const
+            ).map(([fish, enabled, setEnabled]) => (
+              <label
+                key={fish}
+                className="menu-checkbox"
+                title={`When on, the solver looks for ${FISH_TECHNIQUE_NAMES[fish]} patterns. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).`}
+              >
+                <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
+                Enable {FISH_TECHNIQUE_NAMES[fish]}
+              </label>
+            ))}
+          </div>
+          <div className="dropdown-divider" />
+          <div className="dropdown-section">
+            <h3 className="dropdown-section-title">
+              Extreme Techniques
+              <MenuHelpButton topic="Extreme Techniques" onClick={() => setHelpOpen({ tab: 'Technique Selections' })} />
+            </h3>
+            {!exoticTechniquesShown ? (
+              <button
+                type="button"
+                className="dropdown-item"
+                title="Advanced techniques, for experienced solvers only."
+                onClick={() => setExoticTechniquesShown(true)}
+              >
+                Show extreme techniques (for -advanced solvers)
+                {(() => {
+                  const enabledCount =
+                    enabledExotic.size + Number(groupedAicEnabled) + Number(alsXzEnabled) + Number(urAicEnabled) + Number(alsAicEnabled)
+                  return enabledCount > 0 ? ` - ${enabledCount} enabled` : ''
+                })()}
+              </button>
+            ) : (
+              <>
+                {(
+                  [
+                    ['sue de coq', sueDeCoqEnabled, setSueDeCoqEnabled],
+                    ['extended ur', extendedUrEnabled, setExtendedUrEnabled],
+                  ] as const
+                ).map(([technique, enabled, setEnabled]) => (
+                  <label
+                    key={technique}
+                    className="menu-checkbox"
+                    title={
+                      technique === 'extended ur'
+                        ? "When on, the solver looks for Extended Unique Rectangles (Type 1): a Unique Rectangle on a 6-cell deadly pattern. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu), and gets its own lesson under Learn techniques. It doesn't affect puzzle generation."
+                        : `When on, the solver looks for ${EXOTIC_TECHNIQUE_NAMES[technique]}. It can't be used inside Dynamic Dragon Colouring and doesn't affect puzzle generation.`
+                    }
+                  >
+                    <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
+                    Enable {EXOTIC_TECHNIQUE_NAMES[technique]}
+                  </label>
+                ))}
+                <label
+                  className="menu-checkbox"
+                  title="When on, the solver looks for Grouped AICs: Generic AICs whose links may go through a group of a digit's candidates in one box and line. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
+                >
+                  <input type="checkbox" checked={groupedAicEnabled} onChange={() => setGroupedAicEnabled((value) => !value)} />
+                  Enable Grouped AIC
+                </label>
+                <label
+                  className="menu-checkbox"
+                  title="When on, the solver looks for ALS-xz. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
+                >
+                  <input type="checkbox" checked={alsXzEnabled} onChange={() => setAlsXzEnabled((value) => !value)} />
+                  Enable ALS-xz
+                </label>
+                <label
+                  className="menu-checkbox"
+                  title="When on, the solver looks for UR-AICs: chains that may link through a Unique Rectangle. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
+                >
+                  <input type="checkbox" checked={urAicEnabled} onChange={() => setUrAicEnabled((value) => !value)} />
+                  Enable UR-AIC
+                </label>
+                <label
+                  className="menu-checkbox"
+                  title="When on, the solver looks for ALS-AICs: chains that may link through an Almost Locked Set. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
+                >
+                  <input type="checkbox" checked={alsAicEnabled} onChange={() => setAlsAicEnabled((value) => !value)} />
+                  Enable ALS-AIC
+                </label>
+                <button type="button" className="dropdown-item" onClick={() => setExoticTechniquesShown(false)}>
+                  Hide extreme techniques
+                </button>
+              </>
+            )}
+          </div>
+        </DropdownMenu>
+
+        <DropdownMenu
           trackingName="Settings"
-          label={phone ? '⚙' : '⚙ Settings'}
+          label={
+            phone ? (
+              '⚙'
+            ) : (
+              <>
+                ⚙ Settings <span className="dropdown-caret">▾</span>
+              </>
+            )
+          }
           ariaLabel={phone ? 'Settings' : undefined}
           buttonClassName="settings-trigger"
           panelClassName="settings-panel"
@@ -5995,113 +6452,23 @@ export default function App() {
           </div>
           <div className="dropdown-divider" />
           <div className="dropdown-section">
-            <h3 className="dropdown-section-title dropdown-section-title-nowrap">
-              Techniques (Non-Colouring)
-              <MenuHelpButton topic="Techniques" onClick={() => setHelpOpen({ tab: 'Settings' })} />
-            </h3>
+            <h3 className="dropdown-section-title">Techniques list</h3>
             <label
               className="menu-checkbox"
-              title="When off, the solver will not look for Short Single-Digit AIC chains at all. Disable this for a true Colouring experience."
+              title="Lists every row of every enabled technique, even when an easier technique already finds the same eliminations (unless that easier technique is a Basic Technique). Only the Techniques list changes - the Solve Path is the same either way."
             >
               <input
                 type="checkbox"
-                checked={shortSingleDigitAicEnabled}
-                onChange={toggleShortSingleDigitAicEnabled}
+                checked={allPossibleTechniques}
+                // Turning it on asks first (the list gets much longer);
+                // cancelling leaves the (controlled) checkbox unchecked.
+                onChange={() => (allPossibleTechniques ? setAllPossibleTechniques(false) : setConfirmAllPossibleTechniquesOpen(true))}
               />
-              Enable Short Single-Digit AIC
+              All Possible Techniques
             </label>
-            <label
-              className="menu-checkbox"
-              title={
-                shortSingleDigitAicEnabled
-                  ? 'When off, the solver will not look for Short AIC chains at all. Disable this for a true Colouring experience.'
-                  : 'Turn on Enable Short Single-Digit AIC first - Short AIC can only be enabled with it.'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={shortAicEnabled}
-                disabled={!shortSingleDigitAicEnabled}
-                onChange={toggleShortAicEnabled}
-              />
-              Enable Short AIC
-            </label>
-            <label
-              className="menu-checkbox"
-              title={
-                shortAicEnabled
-                  ? `When off, the solver will not look for Generic AIC chains (longer than Short AIC's, up to ${GENERIC_AIC_MAX_LENGTH} links) at all.`
-                  : 'Turn on Enable Short AIC first - Generic AIC can only be enabled with it.'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={genericAicEnabled}
-                disabled={!shortAicEnabled}
-                onChange={toggleGenericAicEnabled}
-              />
-              Enable Generic AIC
-            </label>
-            {(
-              [
-                ['x-wing', xWingEnabled, setXWingEnabled],
-                ['finned x-wing', finnedXWingEnabled, setFinnedXWingEnabled],
-                ['swordfish', swordfishEnabled, setSwordfishEnabled],
-                ['finned swordfish', finnedSwordfishEnabled, setFinnedSwordfishEnabled],
-              ] as const
-            ).map(([fish, enabled, setEnabled]) => (
-              <label
-                key={fish}
-                className="menu-checkbox"
-                title={`When on, the solver looks for ${FISH_TECHNIQUE_NAMES[fish]} patterns. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).`}
-              >
-                <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
-                Enable {FISH_TECHNIQUE_NAMES[fish]}
-              </label>
-            ))}
-            <label
-              className="menu-checkbox"
-              title="When on, the solver looks for ALS-xz. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
-            >
-              <input type="checkbox" checked={alsXzEnabled} onChange={() => setAlsXzEnabled((value) => !value)} />
-              Enable ALS-xz
-            </label>
-          </div>
-          <div className="dropdown-section">
-            <h3 className="dropdown-section-title">
-              Exotic Techniques
-              <MenuHelpButton topic="Exotic Techniques" onClick={() => setHelpOpen({ tab: 'Settings' })} />
-            </h3>
-            {!exoticTechniquesShown ? (
-              <button
-                type="button"
-                className="dropdown-item"
-                title="Advanced techniques, for experienced solvers only."
-                onClick={() => setExoticTechniquesShown(true)}
-              >
-                Show exotic techniques (advanced){enabledExotic.size > 0 ? ` - ${enabledExotic.size} enabled` : ''}
-              </button>
-            ) : (
-              <>
-                {(
-                  [['sue de coq', sueDeCoqEnabled, setSueDeCoqEnabled]] as const
-                ).map(([technique, enabled, setEnabled]) => (
-                  <label
-                    key={technique}
-                    className="menu-checkbox"
-                    title={`When on, the solver looks for ${EXOTIC_TECHNIQUE_NAMES[technique]}. Exotic techniques can't be used inside Dynamic Dragon Colouring and don't affect puzzle generation.`}
-                  >
-                    <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
-                    Enable {EXOTIC_TECHNIQUE_NAMES[technique]}
-                  </label>
-                ))}
-                <button type="button" className="dropdown-item" onClick={() => setExoticTechniquesShown(false)}>
-                  Hide exotic techniques
-                </button>
-              </>
-            )}
           </div>
         </DropdownMenu>
+        </div>
         {phone && (
           <DropdownMenu
           trackingName="More"
@@ -6124,7 +6491,7 @@ export default function App() {
               title="Learn the colouring techniques, step by step"
               onClick={() => setTutorialTarget({ tab: 'basics' })}
             >
-              Techniques overview
+              Learn techniques
             </button>
             <button type="button" className="dropdown-item" onClick={() => setHelpOpen({})}>
               Settings guide (?)
@@ -6479,22 +6846,28 @@ export default function App() {
 
       {aicLinkOverlay && (
         <svg className="aic-links" viewBox="0 0 900 900" aria-hidden="true">
-          {aicLinkOverlay.groups.map(([key, group]) => {
-            const points = group.cells.map(([r, c]) => pipCenter(r, c, group.digit))
+          {aicLinkOverlay.groups.flatMap(([key, group]) => {
             const pad = PIP_SIZE / 2
-            const x = Math.min(...points.map((p) => p.x)) - pad
-            const y = Math.min(...points.map((p) => p.y)) - pad
-            return (
-              <rect
-                key={key}
-                className="aic-group"
-                x={x}
-                y={y}
-                width={Math.max(...points.map((p) => p.x)) + pad - x}
-                height={Math.max(...points.map((p) => p.y)) + pad - y}
-                rx={pad}
-              />
-            )
+            // One outline round a group whose cells sit side by side,
+            // otherwise one per cell, so the outline doesn't take in the
+            // cells between (see isContiguousGroup).
+            const outlines = isContiguousGroup(group.cells) ? [group.cells] : group.cells.map((cell) => [cell])
+            return outlines.map((cells, i) => {
+              const points = cells.map(([r, c]) => pipCenter(r, c, group.digit))
+              const x = Math.min(...points.map((p) => p.x)) - pad
+              const y = Math.min(...points.map((p) => p.y)) - pad
+              return (
+                <rect
+                  key={`${key}#${i}`}
+                  className="aic-group"
+                  x={x}
+                  y={y}
+                  width={Math.max(...points.map((p) => p.x)) + pad - x}
+                  height={Math.max(...points.map((p) => p.y)) + pad - y}
+                  rx={pad}
+                />
+              )
+            })
           })}
           {aicLinkOverlay.paths.map((path, index) => (
             <path key={index} className={path.kind === 'strong' ? 'aic-link-strong' : 'aic-link-weak'} d={path.d} />
@@ -6982,7 +7355,7 @@ export default function App() {
           </button>
         </div>
       </div>
-      {/* Only while at least one AIC technique is switched on in Settings,
+      {/* Only while at least one AIC technique is switched on in Technique Selections,
           and then only the buttons for the enabled ones - a row of
           permanently greyed-out AIC buttons was just clutter for the
           (default) AICs-off setup. Generic implies Short implies
@@ -7073,6 +7446,7 @@ export default function App() {
       {tutorialTarget && (
         <TutorialPage
           initialTab={tutorialTarget.tab}
+          extendedUrEnabled={extendedUrEnabled}
           initialGroup={tutorialTarget.group}
           onClose={() => setTutorialTarget(null)}
         />
@@ -7111,6 +7485,24 @@ export default function App() {
              If this is turned ON right now, expect slower performance and higher CPU usage.  This is because the Dynamic Dragon analysis will be optimized to find more solutions, which requires more CPU cycles. 
           </p>
           <p className="confirm-tip">Tip: turn Exhaustive Dragon Colouring ON first to keep things quick and minimize CPU usage.</p>
+        </ConfirmDialog>
+      )}
+      {confirmAllPossibleTechniquesOpen && (
+        <ConfirmDialog
+          title="Turn on All Possible Techniques?"
+          confirmLabel="Turn it on"
+          cancelLabel="Keep it off"
+          onConfirm={() => {
+            setConfirmAllPossibleTechniquesOpen(false)
+            setAllPossibleTechniques(true)
+          }}
+          onCancel={() => setConfirmAllPossibleTechniquesOpen(false)}
+        >
+          <p>
+            <b>Warning:</b> Enabling "All Possible Techniques" will bloat the Techniques list because every technique will be
+            included, even if an easier technique performs the same elims.
+          </p>
+          <p>Are you sure you want to enable this feature?</p>
         </ConfirmDialog>
       )}
     </>

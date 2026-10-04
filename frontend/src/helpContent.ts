@@ -21,7 +21,7 @@ import { DEFAULT_HOTKEYS, HOTKEY_LABELS, formatHotkey } from './hotkeys'
  *    settings, use `defaultText` instead to write the default yourself.
  *  - `description` is a plain-text paragraph. Use "\n\n" to start a new one.
  *  - Any text can hold a link: write [some text](how-it-works) and "some
- *    text" becomes a link that opens the Techniques overview page.
+ *    text" becomes a link that opens the Learn techniques page.
  *  - Write **some text** to show "some text" in bold.
  *  - To add a setting: add an item to a section. To add a section or tab:
  *    add an object to the list. To reorder: move things around.
@@ -57,10 +57,10 @@ export const HELP_TITLE = 'QuickStart / Settings explanation'
 export const HELP_QUICKSTART_HEADING = 'New to Colouring? Keep the default settings.'
 
 export const HELP_QUICKSTART =
-  "The defaults give the best Colouring and Sudoku solving experience. Leave them alone if you're learning Colouring or still learning what AICs are, " +
+  "The defaults give the best Colouring and Sudoku solving experience. Leave them alone if you're learning Colouring,  " +
   'and use "Reset to defaults" in Settings to get back to them at any time. \n\nTo start, generate or import a puzzle. ' +
-  '\n\n For how the techniques work, see the [Techniques overview](how-it-works).\n\n' +
-  'For advanced players, the tabs below explain the customizations for the solver.' 
+  '\n\n For how the techniques work, see the [Learn Techniques](how-it-works) section.\n\n' +
+  'For advanced solvers, the tabs below explain the customizations for the solver.' 
 
 export const HELP_TABS: HelpTab[] = [
   {
@@ -107,7 +107,7 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Enable Double Dragon',
             settingKey: 'doubleDragonEnabled',
             description:
-              'Enables the solver to find Double Plain Dragons, to solve puzzles that a single Plain Dragon cannot. Refer to "Techniques overview" for more details.\n\n' +
+              'Enables the solver to find Double Plain Dragons, to solve puzzles that a single Plain Dragon cannot. Refer to "Learn techniques" for more details.\n\n' +
               'Follows all Dragon settings. ON also enables "Generate Double Dragon colouring puzzle" in the Generate Puzzle menu.',
           },
         ],
@@ -128,8 +128,8 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Enable Double Dynamic Dragons',
             settingKey: 'doubleDynamicDragonEnabled',
             description:
-              'Enables the solver to find Double Dynamic Dragons.  A Double Dynamic Dragon can solve puzzles normal Dynamic Dragons cannot.  See "Techniques Overview" for an explanation.\n\n' +
-              'Follows all Dynamic Dragon settings. Has no effect while Dynamic Dragons are disabled.',
+              'Enables the solver to find Double Dynamic Dragons.  A Double Dynamic Dragon can solve puzzles normal Dynamic Dragons cannot.  See "Learn techniques" for an explanation.\n\n' +
+              'Follows all Dynamic Dragon settings. Can only be ON while both Double Dragons and Dynamic Dragons are enabled; turning either off turns it off too.',
           },
           {
             name: 'Limit to 1 AIC per step',
@@ -161,31 +161,57 @@ export const HELP_TABS: HelpTab[] = [
             //settingKey: 'allowedRule3Techniques',
             description:
               "The most important setting for Dynamic Dragons. Controls the non-colouring and non-singles techniques Dynamic Dragon may use to extend the Dragon colouring. " +
-              'Locked Candidates & Naked Pair are always ON.',
+              'Locked Candidates & Naked Pair are always ON.\n\n' +
+              'The techniques are grouped into four sections; click a section name to open or close it. ' +
+              'Defaults: up to Avoidable Rectangle. ' +
+              'Advanced Techniques: X-Wing, Short Single-Digit AIC, Finned X-Wing and Short AIC. ' +
+              'Extreme Techniques (closed at first): Swordfish, Finned Swordfish and Generic AIC - challenging to spot for a human within a Dragon. ' +
+              'Unfair Techniques (closed at first): Grouped AIC, ALS-xz, UR-AIC and ALS-AIC - inhumane to spot within a Dragon. ' +
+              'A closed section keeps its ticks; closing it does not turn its techniques off.',
           },
         ],
       },
     ],
   },
   {
-    label: 'Settings',
-    intro: 'The ⚙ Settings menu.  Controls the non-Dragon techniques the solver uses, and keyboard hotkeys.',
+    label: 'Technique Selections',
+    intro: 'The Technique Selections menu.  Controls the techniques the solver uses.',
     sections: [
-      // Keyboard input is no longer in Settings - it is the "Use as Keyboard
-      // Input" switch in the Solution / Candidates group headers.
-      // {
-      //   title: 'Keyboard input',
-      //   items: [
-      //     {
-      //       name: 'Toggle input',
-      //       settingKey: 'keyboardMode',
-      //       description: 'Whether typing a digit places a solution or toggles a candidate.',
-      //     },
-      //   ],
-      // },
+      {
+        title: 'Basic Techniques',
+        intro:
+          'Naked Singles, Hidden Singles, Naked Pairs, Locked Candidates, Naked Triples, Naked Quads and Hidden Pairs. ' +
+          'These are always used by the solver and cannot be turned off; the list is collapsed by default.',
+        items: [],
+      },
+      {
+        title: 'Colouring Techniques',
+        intro:
+          'Simple Colouring, 3D Medusa and Dragon Colouring are always used by the solver and cannot be turned off. ' +
+          'Double Dragon, Dynamic Dragon and Double Dynamic Dragon Colouring can be turned off here or in the Dragon Configuration menu - both places change the same setting.',
+        items: [
+          {
+            name: 'Double Dragon Colouring',
+            settingKey: 'doubleDragonEnabled',
+            description: 'Same as Dragon Configuration -> Enable Double Dragons.',
+          },
+          {
+            name: 'Dynamic Dragon Colouring',
+            defaultText: 'On',
+            description: 'Same as Dragon Configuration -> Disable Dynamic Dragons, the other way round: ticked here means Dynamic Dragons are on.',
+          },
+          {
+            name: 'Double Dynamic Dragon Colouring',
+            settingKey: 'doubleDynamicDragonEnabled',
+            description: 'Same as Dragon Configuration -> Enable Double Dynamic Dragons. Can only be ON while both Double Dragon Colouring and Dynamic Dragon Colouring are ON; turning either off turns it off too.',
+          },
+        ],
+      },
       {
         title: 'Techniques',
-        intro: 'Enables or disables certain techniques for the solver. Advanced players may want to enable AICs or fish.  Note that Plain Dragons will find all AICs eliminations.',
+        intro:
+          'Unique Rectangle, Bivalue Oddagon, BUG+1 and Avoidable Rectangle are always used by the solver and cannot be turned off. ' +
+          'The rest enables or disables certain techniques for the solver. Advanced players may want to enable AICs or fish.  Note that Plain Dragons will find all AICs eliminations.',
         items: [
           {
             name: 'Enable Short Single-Digit AIC',
@@ -197,7 +223,7 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Enable Short AIC',
             settingKey: 'shortAicEnabled',
             description:
-              'General AICs of length up to 5, including W-Wings, which are shown by that name and listed first. Needs Short Single-Digit AIC ON.',
+              'General AICs of length up to 5, including W-Wings (shown by that name and listed first) and Y-Wings (shown by that name, with their pivot and wing cells, listed next). Needs Short Single-Digit AIC ON.',
           },
           {
             name: 'Enable Generic AIC',
@@ -229,29 +255,78 @@ export const HELP_TABS: HelpTab[] = [
             description:
               'Enable Finned Swordfish to be found by the solver.',
           },
-          {
-            name: 'Enable ALS-xz',
-            settingKey: 'alsXzEnabled',
-            description:
-              'Enable ALS-xz to be found by the solver.',
-          },
         ],
       },
       {
-        title: 'Exotic Techniques',
+        title: 'Extreme Techniques',
         intro:
-          'Advanced techniques for experienced solvers, hidden until you click Show exotic techniques. ' +
-          'Once enabled, the solver finds them, each at its own place in the difficulty order (Sue-de-Coq: after Finned Swordfish, before Generic AIC). ' +
-          'They are never used inside Dynamic Dragon Colouring and do not affect puzzle generation.',
+          'Advanced techniques for experienced solvers, hidden by default.  ' +
+          'Dynamic Dragon Colouring becomes especially strong in combination with these techniques. \n\n' +
+          'If you are still reading this, then you know what you are doing - enable them at your own discretion.',
         items: [
           {
             name: 'Enable Sue-de-Coq',
             settingKey: 'sueDeCoqEnabled',
             description:
-              'Two or three cells where a row or column crosses a box hold two more digits than cells. A two-digit cell in the row/column and another in the box, each using digits from that set but none in common, lock those digits into the row/column and the box.',
+              'Enable Sue-de-Coq to be found by the solver.',
+          },
+          {
+            name: 'Enable Extended UR',
+            settingKey: 'extendedUrEnabled',
+            description:
+              'Enable Extended Unique Rectangles (Type 1) to be found by the solver: a Unique Rectangle on one of the four 6-cell deadly patterns ' +
+              "(two 2-by-3 rectangles of three digits, two loops of two digits). Five of the six cells hold only the pattern's digits, " +
+              'so the sixth must be one of its other candidates. Ranked just after the Short Single-Digit AICs. ' +
+              'It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu), and its lesson appears under ' +
+              "Learn techniques, Abusing Uniqueness. No auto-solve button, and it doesn't affect puzzle generation.",
+          },
+          {
+            name: 'Enable Grouped AIC',
+            settingKey: 'groupedAicEnabled',
+            description:
+              'Enable Grouped AIC to be found by the solver: a Generic AIC whose links may go through a group - a digit\'s two or three ' +
+              'candidates in one box and one row or column, read as "the digit is in one of these cells". ' +
+              'A grouped chain is only listed when no easier technique (a Generic AIC included) already makes its eliminations, ' +
+              'unless "All Possible Techniques" is on. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).',
+          },
+          {
+            name: 'Enable ALS-xz',
+            settingKey: 'alsXzEnabled',
+            description:
+              'Enable ALS-xz to be found by the solver. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)',
+          },
+          {
+            name: 'Enable UR-AIC',
+            settingKey: 'urAicEnabled',
+            description:
+              'Enable UR-AIC to be found by the solver.  It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).',
+          },
+          {
+            name: 'Enable ALS-AIC',
+            settingKey: 'alsAicEnabled',
+            description:
+              'Enable ALS-AIC to be found by the solver. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).',
           },
         ],
       },
+    ],
+  },
+  {
+    label: 'Settings',
+    intro: 'The ⚙ Settings menu.  Keyboard hotkeys and display options.',
+    sections: [
+      // Keyboard input is no longer in Settings - it is the "Use as Keyboard
+      // Input" switch in the Solution / Candidates group headers.
+      // {
+      //   title: 'Keyboard input',
+      //   items: [
+      //     {
+      //       name: 'Toggle input',
+      //       settingKey: 'keyboardMode',
+      //       description: 'Whether typing a digit places a solution or toggles a candidate.',
+      //     },
+      //   ],
+      // },
       {
         title: 'Keyboard shortcuts',
         intro:
@@ -315,7 +390,21 @@ export const HELP_TABS: HelpTab[] = [
             description: "Light or dark colour scheme for the grid.",
           },
         ],
-      }
+      },
+      {
+        title: 'Techniques list',
+        items: [
+          {
+            name: 'All Possible Techniques',
+            settingKey: 'allPossibleTechniques',
+            description:
+              'OFF: a row is left out of the Techniques list when easier techniques already make all of its eliminations.\n\n' +
+              'ON: every row of every enabled technique is listed, even when an easier technique finds the same eliminations - ' +
+              'unless the easier technique is one of the Basic Techniques (locked candidates, naked pairs/triples/quads, hidden pairs).\n\n' +
+              'Only the Techniques list changes: the Solve Path, the Solvable check and the Hint are the same either way.',
+          },
+        ],
+      },
     ],
   },
   {
@@ -352,7 +441,7 @@ export const HELP_TABS: HelpTab[] = [
     sections: [
       {
         title: 'Puzzle generation',
-        intro: 'Enabling an AIC in Settings unticks its matching "disregards" box.',
+        intro: 'Enabling an AIC in Technique Selections unticks its matching "disregards" box.',
         items: [
           {
             name: 'Dragon Generation disregards single digit AIC',

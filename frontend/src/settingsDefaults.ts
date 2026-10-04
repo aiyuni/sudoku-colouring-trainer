@@ -17,10 +17,14 @@ export interface AppSettings {
   showBivalueCells: boolean
   gridWhiteMode: boolean
   minBaseMedusaFilter: boolean
+  /** Settings -> "All Possible Techniques": the Techniques list keeps rows
+   * whose eliminations easier (non-basic) rows already make. List only -
+   * the solve path and solvability check are unaffected. */
+  allPossibleTechniques: boolean
   shortSingleDigitAicEnabled: boolean
   shortAicEnabled: boolean
   genericAicEnabled: boolean
-  /** The four fish (Settings -> Techniques), each off by default. Their
+  /** The four fish (Technique Selections -> Techniques), each off by default. Their
    * Dynamic Dragon checkboxes (allowedRule3Techniques) only count while the
    * fish itself is on - see App's effectiveAllowedRule3Techniques. */
   xWingEnabled: boolean
@@ -31,10 +35,29 @@ export interface AppSettings {
    * ('als-xz' in allowedRule3Techniques, also off by default) only counts
    * while this is on, like a fish. */
   alsXzEnabled: boolean
-  /** Settings -> Exotic Techniques (hidden behind a Show button), off by
+  /** UR-AIC (AICs that may link through a Unique Rectangle), off by default.
+   * Its Dynamic Dragon checkbox ('ur-aic' in allowedRule3Techniques, also off
+   * by default) only counts while this is on, like ALS-xz. */
+  urAicEnabled: boolean
+  /** ALS-AIC (AICs that may link through an Almost Locked Set), off by
+   * default. Its Dynamic Dragon checkbox ('als-aic' in
+   * allowedRule3Techniques, also off by default) only counts while this is
+   * on, like UR-AIC. */
+  alsAicEnabled: boolean
+  /** Grouped AIC (a Generic AIC whose nodes may be groups), off by default.
+   * Its Dynamic Dragon checkbox ('grouped aic' in allowedRule3Techniques,
+   * also off by default) only counts while this is on, like UR-AIC. */
+  groupedAicEnabled: boolean
+  /** Technique Selections -> Exotic Techniques (hidden behind a Show button), off by
    * default. Exotic techniques are never used inside Dynamic Dragon or by
    * the puzzle generator. */
   sueDeCoqEnabled: boolean
+  /** Extended UR (Type 1, the 6-cell deadly patterns), off by default: an
+   * exotic technique like Sue-de-Coq, except that it may be used inside
+   * Dynamic Dragon. Its checkbox there ('extended ur' in
+   * allowedRule3Techniques, also off by default) only counts while this is
+   * on. Also what shows its How It Works sub-tab. */
+  extendedUrEnabled: boolean
   /** ON = no Dynamic Dragon Colouring anywhere (Techniques list, solve
    * path, solvability check, Find by elims, auto-solve, generation), so plain
    * Dragon is the strongest technique. Named for what ON does, matching its
@@ -84,6 +107,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showBivalueCells: false,
   gridWhiteMode: true,
   minBaseMedusaFilter: false,
+  allPossibleTechniques: false,
   shortSingleDigitAicEnabled: false,
   shortAicEnabled: false,
   genericAicEnabled: false,
@@ -92,7 +116,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   swordfishEnabled: false,
   finnedSwordfishEnabled: false,
   alsXzEnabled: false,
+  urAicEnabled: false,
+  alsAicEnabled: false,
+  groupedAicEnabled: false,
   sueDeCoqEnabled: false,
+  extendedUrEnabled: false,
   dynamicDragonDisabled: false,
   doubleDragonEnabled: false,
   doubleDynamicDragonEnabled: false,
@@ -164,14 +192,70 @@ export const RULE3_TECHNIQUE_LABELS: Record<Rule3Technique, string> = {
   'avoidable rectangle': 'Avoidable Rectangle',
   'x-wing': 'X-Wing',
   'short single-digit aic': 'Short Single-Digit AIC',
+  'extended ur': 'Extended UR',
   'finned x-wing': 'Finned X-Wing',
   'short aic': 'Short AIC (links <= 5)',
   swordfish: 'Swordfish',
   'finned swordfish': 'Finned Swordfish',
   // The longest chain is set in one place - see GENERIC_AIC_MAX_LENGTH.
   'generic aic': `Generic AIC (links <= ${GENERIC_AIC_MAX_LENGTH})`,
+  'grouped aic': `Grouped AIC (links <= ${GENERIC_AIC_MAX_LENGTH})`,
   'als-xz': 'ALS-xz',
+  'ur-aic': 'UR-AIC',
+  'als-aic': 'ALS-AIC',
 }
+
+/** The collapsible sections of Dragon Configuration -> "Select Dynamic Dragon
+ * Colouring techniques", by request: every Rule3Technique but Hidden Single
+ * (never a choice, see extend()) in exactly one section, each section in
+ * ALL_RULE3_TECHNIQUES order. Display grouping only - "Defaults" is the
+ * section's name, not DEFAULT_RULE3_TECHNIQUES (Avoidable Rectangle is listed
+ * there but still starts unticked). `warning` is shown after the title,
+ * collapsed or not. */
+export const RULE3_TECHNIQUE_GROUPS: readonly {
+  title: string
+  warning?: string
+  /** How loud the warning is drawn: 'caution' (a quiet "!" note) or 'danger'
+   * (the red warning triangle) - Unfair is meant to read as the bigger one. */
+  warningLevel?: 'caution' | 'danger'
+  collapsedByDefault: boolean
+  techniques: readonly Rule3Technique[]
+}[] = [
+  {
+    title: 'Defaults',
+    collapsedByDefault: false,
+    techniques: [
+      'locked candidate',
+      'naked pair',
+      'naked triple',
+      'naked quad',
+      'hidden pair',
+      'UR',
+      'bivalue oddagon',
+      'BUG+N',
+      'avoidable rectangle',
+    ],
+  },
+  {
+    title: 'Advanced Techniques',
+    collapsedByDefault: false,
+    techniques: ['x-wing', 'short single-digit aic', 'extended ur', 'finned x-wing', 'short aic'],
+  },
+  {
+    title: 'Brutal Techniques',
+    warning: 'Spotting these techniques inside a Dragon is very challenging. Expand to see.',
+    warningLevel: 'caution',
+    collapsedByDefault: true,
+    techniques: ['swordfish', 'finned swordfish', 'generic aic'],
+  },
+  {
+    title: 'Unfair Techniques',
+    warning: 'Beware! These techniques within Dragons are usually inhumane to spot.  Expand to see.',
+    warningLevel: 'danger',
+    collapsedByDefault: true,
+    techniques: ['grouped aic', 'als-xz', 'ur-aic', 'als-aic'],
+  },
+]
 
 /** The "Max techniques per step" dropdown's choices (Dynamic Dragon). */
 export const MAX_TECHNIQUES_PER_DRAGON_STEP_OPTIONS: readonly number[] = [1, 2, 3, 4, 5, Infinity]

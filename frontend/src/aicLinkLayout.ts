@@ -99,7 +99,23 @@ export function layoutAicOverlay(
       }
     }
     chainPoints.push(...excluded)
-    return { from: end(link.from, link.fromCells), to: end(link.to, link.toCells), excluded }
+    let from = end(link.from, link.fromCells)
+    let to = end(link.to, link.toCells)
+    // A group whose cells aren't side by side (an ALS-AIC's ALS node) is
+    // outlined cell by cell, so its middle can be an empty cell between
+    // them: the link meets the group's cell nearest the other end instead,
+    // trimmed like a single candidate.
+    const nearest = (ref: { digit: number }, cells: ReadonlyArray<readonly [number, number]>, towards: Point): LinkEnd => {
+      const points = cells.map(([r, c]) => pipCenter(r, c, ref.digit))
+      return points.reduce((best, p) => (Math.hypot(p.x - towards.x, p.y - towards.y) < Math.hypot(best.x - towards.x, best.y - towards.y) ? p : best))
+    }
+    if (link.fromCells && !isContiguousGroup(link.fromCells)) {
+      from = nearest(link.from, link.fromCells, to)
+    }
+    if (link.toCells && !isContiguousGroup(link.toCells)) {
+      to = nearest(link.to, link.toCells, from)
+    }
+    return { from, to, excluded }
   })
   const hard = [...chainPoints, ...eliminations.map((e) => pipCenter(e.row, e.col, e.digit))]
   const others: Point[] = []
@@ -119,6 +135,18 @@ export function layoutAicOverlay(
     groups: [...groups.entries()],
     paths: links.map((link, index) => ({ kind: link.kind, d: laidOut[index].d })),
   }
+}
+
+/** Whether a grouped node's cells sit side by side in one row or column -
+ * outlined as one group, its links meeting its middle - or not (an ALS-AIC's
+ * ALS spread over a line or across a box's lines, a UR-AIC's corners apart),
+ * outlined cell by cell. */
+export function isContiguousGroup(cells: ReadonlyArray<readonly [number, number]>): boolean {
+  const sorted = [...cells].sort((p, q) => p[0] - q[0] || p[1] - q[1])
+  return sorted.every(
+    ([r, c], i) =>
+      i === 0 || (r === sorted[i - 1][0] && c === sorted[i - 1][1] + 1) || (c === sorted[i - 1][1] && r === sorted[i - 1][0] + 1),
+  )
 }
 
 export interface LinkEnd extends Point {
