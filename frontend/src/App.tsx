@@ -61,7 +61,7 @@ import { type SingleAssignment } from './sudoku/SudokuSingleFinder'
 import { SudokuSolver } from './sudoku/SudokuSolver'
 import { autocompleteMedusa, type MedusaSeed } from './sudoku/SudokuMedusaAutocompleter'
 import {
-  SAMPLE_PUZZLE,
+  DEFAULT_PUZZLE,
   type Board,
   type CandidateColor,
   type CandidateColorGrid,
@@ -71,6 +71,7 @@ import {
   type CandidatePaintShape,
 } from './sudoku/types'
 import HelpModal from './HelpModal'
+import WelcomeModal from './WelcomeModal'
 import HintModal from './HintModal'
 import {
   buildTechniqueHint,
@@ -91,6 +92,7 @@ import { BusyIndicator } from './BusyIndicator'
 import ConfirmDialog from './ConfirmDialog'
 import { afterPaint, useSettledValue, type BusyTask } from './busyTask'
 import { solvePathInWorker, type SolvePathOptions } from './solvePathInWorker'
+import { seRatingPosition, seRatingText, useSeRating } from './seRating'
 import {
   DEFAULT_SETTINGS,
   DRAGON_GENERATION_TIMEOUT_OPTIONS,
@@ -101,7 +103,14 @@ import {
   RULE3_TECHNIQUE_LABELS,
   type AppSettings,
 } from './settingsDefaults'
-import { loadSavedGrid, loadSavedSettings, saveGrid, saveSettings } from './persistedState'
+import {
+  loadSavedGrid,
+  loadSavedSettings,
+  loadWelcomeDismissed,
+  saveGrid,
+  saveSettings,
+  saveWelcomeDismissed,
+} from './persistedState'
 import { isNativePasteHotkey, keyNameOf, matchHotkey, type HotkeyBindings } from './hotkeys'
 import HotkeySettings from './HotkeySettings'
 import { isContiguousGroup, layoutAicOverlay } from './aicLinkLayout'
@@ -196,8 +205,8 @@ interface HistoryEntry {
 
 function createInitialGrid(): GridState {
   return {
-    board: cloneBoard(SAMPLE_PUZZLE),
-    givens: computeGivenMask(SAMPLE_PUZZLE),
+    board: cloneBoard(DEFAULT_PUZZLE),
+    givens: computeGivenMask(DEFAULT_PUZZLE),
     candidates: createEmptyCandidates(),
     candidateColors: createEmptyCandidateColors(),
   }
@@ -2154,6 +2163,9 @@ export default function App() {
   )
   // null = closed; otherwise the tab it opens on (undefined = the top).
   const [helpOpen, setHelpOpen] = useState<{ tab?: string } | null>(null)
+  // The welcome popup: open on every page load until its "Never show again"
+  // is ticked.
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !loadWelcomeDismissed())
   /** The Hint popup (Techniques tab): open while non-null. */
   const [hintView, setHintView] = useState<{ hint: TechniqueHint | null; revealed: number } | null>(null)
   /** The last hint shown, kept after the popup closes: reopening it for the
@@ -2407,6 +2419,21 @@ export default function App() {
     () => (filled < MIN_UNIQUE_SOLUTION_CLUES ? SolveResponse.multiple() : solver.solve(board)),
     [board, filled],
   )
+  // The puzzle the SE rating under the grid is for: the givens, so the
+  // rating is the loaded/generated puzzle's and stays put while it is being
+  // solved. A grid with no usable givens (digits typed in, or a screenshot
+  // still being proofread) is rated as it stands instead. Only a puzzle with
+  // exactly one solution is rated - SE's number means nothing otherwise. A
+  // string, so the rating is only redone when the puzzle itself changes.
+  const seRatedPuzzle = useMemo(() => {
+    if (givensSolveResult.status === 'solved') {
+      return board.map((row, r) => row.map((value, c) => (givens[r][c] ? value : 0)).join('')).join('')
+    }
+    return puzzleSolveResult.status === 'solved' && filled < 81 ? board.map((row) => row.join('')).join('') : null
+  }, [board, givens, givensSolveResult, puzzleSolveResult, filled])
+  const seRating = useSeRating(seRatedPuzzle)
+  const seRatingLine = seRating && seRatingText(seRating, 'puzzle')
+
   const candidatesAccurate = useMemo(() => {
     if (puzzleSolveResult.status !== 'solved' || !puzzleSolveResult.board) {
       return true
@@ -2428,6 +2455,24 @@ export default function App() {
     }
     return true
   }, [board, candidates, puzzleSolveResult])
+
+  // The "current" SE rating beside it: SE started from the position on the
+  // grid now - givens, solved cells and whatever candidates are left - so
+  // it drops as the hard steps get done. Needs a position SE can make
+  // sense of: digits that still solve, and no true candidate eliminated.
+  // Before the first move it is the puzzle itself, and nothing is rated
+  // twice (the string is then the same as seRatedPuzzle).
+  const seCurrentPosition = useMemo(
+    () =>
+      seRatedPuzzle && puzzleSolveResult.status === 'solved' && candidatesAccurate && filled < 81
+        ? seRatingPosition(board, candidates, freshAutofillCandidates(board))
+        : null,
+    [seRatedPuzzle, puzzleSolveResult, candidatesAccurate, filled, board, candidates],
+  )
+  const seCurrentIsPuzzle = seCurrentPosition === seRatedPuzzle
+  const seCurrentOwnRating = useSeRating(seCurrentIsPuzzle ? null : seCurrentPosition, false)
+  const seCurrentRating = seCurrentIsPuzzle ? seRating : seCurrentOwnRating
+  const seCurrentRatingLine = seCurrentRating && seRatingText(seCurrentRating, 'current')
 
   // Everything the Techniques list is computed from. It reads `analysis`
   // (one painted frame behind, see useSettledValue) rather than the live
@@ -6407,6 +6452,20 @@ export default function App() {
               </span>
               Reset to defaults
             </button>
+            {/* Dev server only (never in a build): forgets "Never show
+                again" and reopens the welcome popup, to test it. */}
+            {import.meta.env.DEV && (
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => {
+                  saveWelcomeDismissed(false)
+                  setWelcomeOpen(true)
+                }}
+              >
+                Reset welcome popup (dev only)
+              </button>
+            )}
           </div>
           <div className="dropdown-divider" />
           {/* Keyboard input moved out of Settings: it is now the "Use as
@@ -7419,6 +7478,25 @@ export default function App() {
     </>
   )
 
+  // The desktop layout shows this directly below the grid (by request); the
+  // touch layout has no room there - the grid and dock fill the screen - so
+  // it joins the status lines on the Solve tab.
+  const seRatingPart = (rating: typeof seRating, line: typeof seRatingLine) =>
+    line && (
+      <span
+        className={['se-rating-part', rating?.kind === 'calculating' ? 'se-rating-calculating' : ''].filter(Boolean).join(' ')}
+        title={line.title}
+      >
+        {line.text}
+      </span>
+    )
+  const seRatingElement = (seRatingLine || seCurrentRatingLine) && (
+    <p className="se-rating">
+      {seRatingPart(seRating, seRatingLine)}
+      {seRatingPart(seCurrentRating, seCurrentRatingLine)}
+    </p>
+  )
+
   const overlays = (
     <>
       {/* An explicitly started operation takes precedence; the newest one if
@@ -7432,6 +7510,23 @@ export default function App() {
         </div>
       )}
 
+      {welcomeOpen && (
+        <WelcomeModal
+          onDismiss={(neverShowAgain, link) => {
+            if (neverShowAgain) {
+              saveWelcomeDismissed(true)
+            }
+            setWelcomeOpen(false)
+            if (link === 'learn') {
+              setTutorialTarget({ tab: 'basics' })
+            } else if (link === 'dragon-settings') {
+              setHelpOpen({ tab: 'Dragon Configuration' })
+            } else if (link === 'techniques') {
+              setHelpOpen({ tab: 'Technique Selections' })
+            }
+          }}
+        />
+      )}
       {helpOpen && (
         <HelpModal
           onClose={() => setHelpOpen(null)}
@@ -7528,7 +7623,10 @@ export default function App() {
       ),
       solve: (
         <>
-          <div className="compact-status">{statusLines}</div>
+          <div className="compact-status">
+            {statusLines}
+            {seRatingElement}
+          </div>
           {autosolveGroup}
           {actionsRow}
         </>
@@ -7607,6 +7705,8 @@ export default function App() {
             whichever side column (techniques panel, controls) is tallest. */}
         <div className="grid-column" ref={gridColumnRef}>
           {gridElement}
+
+          {seRatingElement}
 
           {importRows}
 

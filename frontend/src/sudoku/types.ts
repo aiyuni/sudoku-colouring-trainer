@@ -58,6 +58,21 @@ export type CandidatePaint = readonly [CandidatePaintLayer] | readonly [Candidat
  * carry a colour. */
 export type CandidateColorGrid = (CandidatePaint | null)[][][]
 
+/** The puzzle a first visit opens on (givens drawn as a heart). Separate
+ * from SAMPLE_PUZZLE, which the How It Works Basics lessons are built on -
+ * changing that one would break them. */
+export const DEFAULT_PUZZLE: Board = [
+  [0, 2, 5, 0, 0, 0, 8, 6, 0],
+  [3, 6, 0, 2, 0, 8, 0, 1, 7],
+  [7, 0, 0, 0, 1, 0, 0, 0, 3],
+  [6, 0, 0, 0, 0, 0, 0, 0, 2],
+  [0, 4, 0, 0, 0, 0, 0, 9, 0],
+  [0, 3, 0, 0, 0, 0, 0, 7, 0],
+  [0, 0, 6, 0, 0, 0, 1, 0, 0],
+  [0, 0, 0, 5, 0, 7, 0, 0, 0],
+  [4, 9, 0, 0, 3, 0, 0, 5, 8],
+]
+
 export const SAMPLE_PUZZLE: Board = [
   [5, 3, 0, 0, 7, 0, 0, 0, 0],
   [6, 0, 0, 1, 9, 5, 0, 0, 0],

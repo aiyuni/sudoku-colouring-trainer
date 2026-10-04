@@ -26,6 +26,7 @@ import {
 
 const SETTINGS_STORAGE_KEY = 'sudoku-solver-settings'
 const GRID_STORAGE_KEY = 'sudoku-solver-grid'
+const WELCOME_DISMISSED_STORAGE_KEY = 'sudoku-solver-welcome-dismissed'
 
 export interface SavedGrid {
   board: Board
@@ -50,6 +51,16 @@ function writeJson(key: string, value: unknown): void {
     // Storage inaccessible or full - everything still works for this
     // session, it just won't be restored next time.
   }
+}
+
+/** Whether the welcome popup's "Never show again" was ticked. Its own key,
+ * not an AppSetting: "Reset to defaults" shouldn't bring the popup back. */
+export function loadWelcomeDismissed(): boolean {
+  return readJson(WELCOME_DISMISSED_STORAGE_KEY) === true
+}
+
+export function saveWelcomeDismissed(dismissed: boolean): void {
+  writeJson(WELCOME_DISMISSED_STORAGE_KEY, dismissed)
 }
 
 /** One saved value, or undefined if it isn't a value that setting can

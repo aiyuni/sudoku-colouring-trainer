@@ -2742,6 +2742,49 @@ button.primary {
   animation: busy-spin 0.8s linear infinite;
 }
 
+/* The Sudoku Explainer ratings under the grid: the puzzle's own, and beside
+   it the rating of what is left from the current position. Neutral (facts
+   about the puzzle, not a verdict), each with the solvability line's spinner
+   while SE is still working - its rating so far is shown meanwhile. */
+.se-rating {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 3.5rem;
+  margin: 0.3rem 0 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #334155;
+}
+
+.se-rating-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: help;
+}
+
+/* Directly under the grid in the desktop layout: centred on it. */
+.grid-column > .se-rating {
+  margin-top: 0.5rem;
+  justify-content: center;
+}
+
+.se-rating-calculating {
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.se-rating-calculating::before {
+  content: '';
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  border: 2px solid rgb(107 114 128 / 0.3);
+  border-top-color: #2563eb;
+  animation: busy-spin 0.8s linear infinite;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -2809,6 +2852,19 @@ button.primary {
   }
 
   .solvability-checking::before {
+    border-color: rgb(156 163 175 / 0.3);
+    border-top-color: #60a5fa;
+  }
+
+  .se-rating {
+    color: #cbd5e1;
+  }
+
+  .se-rating-calculating {
+    color: #9ca3af;
+  }
+
+  .se-rating-calculating::before {
     border-color: rgb(156 163 175 / 0.3);
     border-top-color: #60a5fa;
   }
@@ -3964,7 +4020,8 @@ button.primary {
 /* ---- Solve tab ---- */
 
 .compact-status .status,
-.compact-status .solvability {
+.compact-status .solvability,
+.compact-status .se-rating {
   font-size: 0.85rem;
 }
 
@@ -4249,6 +4306,26 @@ button.primary {
   .confirm-dialog {
     animation: none;
   }
+}
+
+/* ---- Welcome popup (WelcomeModal.tsx) ----
+   The confirm dialog's backdrop and card, a little wider; the "Never show
+   again" checkbox sits left of the button. */
+.welcome-dialog {
+  width: min(34rem, 100%);
+}
+
+.welcome-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.welcome-never {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.86rem;
+  cursor: pointer;
 }
 
 /* ---- Hint popup (HintModal.tsx) ----

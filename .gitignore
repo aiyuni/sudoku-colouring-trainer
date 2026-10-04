@@ -32,3 +32,7 @@ frontend/dragon-stock-rejected.txt
 frontend/scratch-*.ts
 # OCR regression fixtures (npm run test:ocr)
 frontend/ocr-fixtures/
+# Sudoku Explainer's Java sources and the Maven/TeaVM build that compiles
+# them. The app only needs the build output, which is committed in
+# frontend/src/se-rating/
+/se-rating/

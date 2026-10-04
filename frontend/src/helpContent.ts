@@ -165,8 +165,8 @@ export const HELP_TABS: HelpTab[] = [
               'The techniques are grouped into four sections; click a section name to open or close it. ' +
               'Defaults: up to Avoidable Rectangle. ' +
               'Advanced Techniques: X-Wing, Short Single-Digit AIC, Finned X-Wing and Short AIC. ' +
-              'Extreme Techniques (closed at first): Swordfish, Finned Swordfish and Generic AIC - challenging to spot for a human within a Dragon. ' +
-              'Unfair Techniques (closed at first): Grouped AIC, ALS-xz, UR-AIC and ALS-AIC - inhumane to spot within a Dragon. ' +
+              'Brutal Techniques (closed at first): Swordfish, Finned Swordfish and Generic AIC - challenging to spot for a human within a Dragon. ' +
+              'Unfair Techniques (closed at first): Extended UR, Grouped AIC, ALS-xz, UR-AIC and ALS-AIC - inhumane to spot within a Dragon. ' +
               'A closed section keeps its ticks; closing it does not turn its techniques off.',
           },
         ],

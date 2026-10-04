@@ -239,7 +239,7 @@ export const RULE3_TECHNIQUE_GROUPS: readonly {
   {
     title: 'Advanced Techniques',
     collapsedByDefault: false,
-    techniques: ['x-wing', 'short single-digit aic', 'extended ur', 'finned x-wing', 'short aic'],
+    techniques: ['x-wing', 'short single-digit aic', 'finned x-wing', 'short aic'],
   },
   {
     title: 'Brutal Techniques',
@@ -253,7 +253,7 @@ export const RULE3_TECHNIQUE_GROUPS: readonly {
     warning: 'Beware! These techniques within Dragons are usually inhumane to spot.  Expand to see.',
     warningLevel: 'danger',
     collapsedByDefault: true,
-    techniques: ['grouped aic', 'als-xz', 'ur-aic', 'als-aic'],
+    techniques: ['extended ur', 'grouped aic', 'als-xz', 'ur-aic', 'als-aic'],
   },
 ]
 
