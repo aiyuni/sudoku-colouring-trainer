@@ -1,4 +1,7 @@
 import {
+  createContext,
+  useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -38,6 +41,8 @@ import {
 } from './sudoku/SudokuDragonFinder'
 import { ALL_FISH_TECHNIQUES, FISH_TECHNIQUE_NAMES, type FishTechnique } from './sudoku/SudokuFishFinder'
 import { foldDragonMoves } from './sudoku/dragonReplay'
+import { dragonAicSummary, dragonAicText, isDragonEliminationMove, type DragonAicStatus, type DragonAicSummary } from './sudoku/SudokuDragonAicConverter'
+import { aicChainView } from './sudoku/SudokuShortAicFinder'
 import {
   SudokuDragonTargetFinder,
   checkEliminationTargets,
@@ -675,6 +680,77 @@ function capitalizeFirst(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
+/** A single plain or Dynamic Dragon's step read as an AIC through its own coloured
+ * candidates (SudokuDragonAicConverter) - what the step player says about the
+ * step on screen. Null outside a single Dragon (Double Dragons
+ * have no chain form). A context rather than props because every step player
+ * (Techniques list, Solve Path, Find by elims, Autocomplete, the touch
+ * layout's focus view) shows the one highlighted technique. */
+interface DragonAicView {
+  shown: boolean
+  onToggle: (shown: boolean) => void
+  /** The current step's line; null when it isn't an elimination step. */
+  text: string | null
+}
+/** `note`: the step player's box - null unless the highlighted technique is a
+ * single Dragon with an equivalent AIC at one of its steps at least.
+ * `statusOf`: what a row's badge says about its Dragon (by its move log);
+ * undefined while that isn't worked out yet. */
+interface DragonAicContextValue {
+  note: DragonAicView | null
+  statusOf: (moves: readonly DragonMove[]) => DragonAicStatus | undefined
+}
+const DragonAicContext = createContext<DragonAicContextValue | null>(null)
+/** Is `instance` a single plain or Dynamic Dragon (the only Dragons with a
+ * chain form - never a Double one)? */
+function isSingleDragon(instance: TechniqueInstance): boolean {
+  return !!instance.moves && (instance.id.startsWith('dragon-') || instance.id.startsWith('dynamic-dragon-'))
+}
+
+const DRAGON_AIC_BADGE_TEXT: Record<DragonAicStatus, string> = {
+  every: 'Has an equivalent AIC: every elimination step of this Dragon is also a chain through its coloured candidates',
+  some: "Partly an AIC: some of this Dragon's elimination steps are also a chain through its coloured candidates, others are not",
+  none: "No equivalent AIC: none of this Dragon's elimination steps is a chain through its coloured candidates",
+}
+
+/** A single Dragon row's "has an equivalent AIC" badge, just left of its ?.
+ * Nothing while the feature is off, for any other technique, or until the
+ * row's Dragon has been converted (App does that in the background). */
+function DragonAicBadge({ instance }: { instance: TechniqueInstance }) {
+  const context = useContext(DragonAicContext)
+  const status = context && instance.moves && isSingleDragon(instance) ? context.statusOf(instance.moves) : undefined
+  if (!status) {
+    return null
+  }
+  return (
+    <span className={`dragon-aic-badge dragon-aic-badge-${status}`} role="img" aria-label={DRAGON_AIC_BADGE_TEXT[status]} title={DRAGON_AIC_BADGE_TEXT[status]}>
+      AIC
+    </span>
+  )
+}
+/** localStorage: the dev-only switch for the feature (dev server only). */
+const DRAGON_AIC_DEV_KEY = 'sudoku-solver.dev.dragonAic'
+
+function DragonAicNote() {
+  const view = useContext(DragonAicContext)?.note
+  if (!view) {
+    return null
+  }
+  return (
+    <div className="dragon-aic-note">
+      <label className="dragon-aic-toggle">
+        <input type="checkbox" checked={view.shown} onChange={(event) => view.onToggle(event.target.checked)} />
+        Show equivalent AIC
+      </label>
+      {view.shown && (
+        <p className="dragon-aic-text">
+          {view.text ?? 'Go to a step that eliminates candidates to see it as a chain through the coloured candidates.'}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** The forward/rewind player under a Dragon Colouring row: steps through
  * the move log one move at a time, with that move's own explanation.
  *
@@ -725,6 +801,7 @@ function DragonStepper({
         </button>
       </div>
       <p className="dragon-player-description">{move.description}</p>
+      <DragonAicNote />
       {substeps && substeps.length > 1 && (
         <div className="dragon-substep-player">
           <div className="dragon-player-controls dragon-substep-controls">
@@ -851,6 +928,7 @@ function TechniqueFocusView({
           <span className="technique-focus-name">{instance.name}</span>
           {moves && <span className="technique-focus-summary">{instance.notation}</span>}
         </span>
+        <DragonAicBadge instance={instance} />
         <TechniqueLearnButton instance={instance} onLearn={onLearn} />
         <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
           Apply
@@ -860,6 +938,7 @@ function TechniqueFocusView({
       <div className="technique-focus-text" key={`${stepIndex}-${resolvedSubstepIndex}`}>
         {!moves && <p className="technique-notation">{instance.notation}</p>}
         {move && <p className="dragon-player-description">{move.description}</p>}
+        {move && <DragonAicNote />}
         {substeps && (
           <p className="dragon-substep-description technique-focus-substep">
             {capitalizeFirst(substeps[resolvedSubstepIndex].clause)}.
@@ -1347,6 +1426,8 @@ interface TechniquePanelProps {
   autocomplete: AutocompletePanelData
   easySolveEnabled: boolean
   onToggleEasySolve: () => void
+  preferEasierDoubleDragons: boolean
+  onTogglePreferEasierDoubleDragons: () => void
   solvePathTimeoutMs: number
   onSolvePathTimeoutChange: (event: ChangeEvent<HTMLSelectElement>) => void
   panelRef?: Ref<HTMLDivElement>
@@ -1410,6 +1491,8 @@ function TechniquePanel({
   autocomplete,
   easySolveEnabled,
   onToggleEasySolve,
+  preferEasierDoubleDragons,
+  onTogglePreferEasierDoubleDragons,
   solvePathTimeoutMs,
   onSolvePathTimeoutChange,
   panelRef,
@@ -1562,6 +1645,7 @@ function TechniquePanel({
                     <span className="technique-name">{instance.name}</span>
                     <span className="technique-notation">{instance.notation}</span>
                   </button>
+                  <DragonAicBadge instance={instance} />
                   <TechniqueLearnButton instance={instance} onLearn={onLearn} />
                   {isActive && moves && (
                     <DragonStepper
@@ -1601,6 +1685,21 @@ function TechniquePanel({
               {solvePath ? 'Regenerate' : 'Generate'}
             </button>
             <label
+              className="solve-path-timeout"
+              title="How long Generate keeps searching before it stops and shows the steps found so far. The Solvable check under the grid uses the same limit."
+            >
+              Time limit:
+              <select value={solvePathTimeoutMs} onChange={onSolvePathTimeoutChange}>
+                {SOLVE_PATH_TIMEOUT_OPTIONS.map(({ label, ms }) => (
+                  <option key={ms} value={ms}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {/* The two checkboxes get lines of their own, the second indented
+                under the first: it only exists while Easy Solve is on. */}
+            <label
               className="solve-path-easy-solve"
               title={
                 easySolveEnabled
@@ -1612,17 +1711,20 @@ function TechniquePanel({
               Easiest Path (Easy Solve)
             </label>
             <label
-              className="solve-path-timeout"
-              title="How long Generate keeps searching before it stops and shows the steps found so far. The Solvable check under the grid uses the same limit."
+              className={`solve-path-easy-solve solve-path-sub-option${easySolveEnabled ? '' : ' solve-path-option-disabled'}`}
+              title={
+                easySolveEnabled
+                  ? 'A Double Dynamic Dragon that uses easier techniques than every single Dynamic Dragon needs counts as easier than a single Dynamic Dragon.'
+                  : 'Needs Easiest Path (Easy Solve).'
+              }
             >
-              Calculation time limit:
-              <select value={solvePathTimeoutMs} onChange={onSolvePathTimeoutChange}>
-                {SOLVE_PATH_TIMEOUT_OPTIONS.map(({ label, ms }) => (
-                  <option key={ms} value={ms}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+              <input
+                type="checkbox"
+                checked={preferEasierDoubleDragons}
+                disabled={!easySolveEnabled}
+                onChange={onTogglePreferEasierDoubleDragons}
+              />
+              Prefer easier double dragons
             </label>
           </div>
           {showSolvePathLog && (
@@ -1687,6 +1789,7 @@ function TechniquePanel({
                         </span>
                         <span className="technique-notation">{step.instance.notation}</span>
                       </button>
+                      <DragonAicBadge instance={step.instance} />
                       <TechniqueLearnButton instance={step.instance} onLearn={onLearn} />
                       {isActive && moves && (
                         <DragonStepper
@@ -1994,6 +2097,33 @@ export default function App() {
   // Only becomes a concrete index once the substep player's forward/rewind
   // is used - see DragonStepper's own resolvedSubstepIndex.
   const [dragonSubstepIndex, setDragonSubstepIndex] = useState<number | null>(null)
+  // "Show equivalent AIC" in a single (plain or Dynamic) Dragon's step player - session-only
+  // view state, like the menus' collapse states.
+  const [dragonAicShown, setDragonAicShown] = useState(true)
+  // The whole equivalent-AIC feature is dev-only for now: off unless switched
+  // on with the Settings menu's dev button, which only the dev server renders
+  // (import.meta.env.DEV) - so a build can never turn it on. Remembered across
+  // reloads of the dev server only.
+  const [dragonAicDevEnabled, setDragonAicDevEnabled] = useState(() => {
+    if (!import.meta.env.DEV) {
+      return false
+    }
+    try {
+      return localStorage.getItem(DRAGON_AIC_DEV_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggleDragonAicDev = () => {
+    setDragonAicDevEnabled((enabled) => {
+      try {
+        localStorage.setItem(DRAGON_AIC_DEV_KEY, enabled ? '0' : '1')
+      } catch {
+        // Not remembered, that's all.
+      }
+      return !enabled
+    })
+  }
   const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
   // Techniques tab spoiler view: hidden by default, stays revealed until the
   // user hides it again (session only, not persisted).
@@ -2154,6 +2284,9 @@ export default function App() {
   const [optimizeDragons, setOptimizeDragons] = useState(initialSettings.optimizeDragons)
   const [optimizeDynamicDragons, setOptimizeDynamicDragons] = useState(initialSettings.optimizeDynamicDragons)
   const [easySolveEnabled, setEasySolveEnabled] = useState(initialSettings.easySolveEnabled)
+  const [preferEasierDoubleDragons, setPreferEasierDoubleDragons] = useState(
+    initialSettings.easySolveEnabled && initialSettings.preferEasierDoubleDragons,
+  )
   const [solvePathTimeoutMs, setSolvePathTimeoutMs] = useState(initialSettings.solvePathTimeoutMs)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
     initialSettings.dynamicDragonAutoSolveIncludesAics,
@@ -2778,6 +2911,7 @@ export default function App() {
       dynamicDragonPuzzleUsesDefaultsOnly,
       dragonGenerationTimeoutMs,
       easySolveEnabled,
+      preferEasierDoubleDragons,
       solvePathTimeoutMs,
       hotkeys,
     }),
@@ -2819,6 +2953,7 @@ export default function App() {
       dynamicDragonPuzzleUsesDefaultsOnly,
       dragonGenerationTimeoutMs,
       easySolveEnabled,
+      preferEasierDoubleDragons,
       solvePathTimeoutMs,
       hotkeys,
     ],
@@ -2943,18 +3078,112 @@ export default function App() {
     [visibleSubsteps],
   )
 
+  // A single plain or Dynamic Dragon's elimination step as an AIC (plain if
+  // there is one, else the easiest complex one) through the Dragon's own
+  // coloured candidates (see SudokuDragonAicConverter): drawn over the
+  // colouring, which stays. `undefined` = not a single Dragon (or one the grid
+  // has moved on from, e.g. an applied Solve Path step); `view: null` on an
+  // elimination step = no chain form (a forcing net).
+  // The box only appears for a Dragon with a chain at one step at least (by
+  // request); the rows' badges say which Dragons those are.
+  // Each Dragon is converted once, every elimination step together, and kept
+  // by its move log for as long as that log is on that grid: equally easy
+  // chains are picked between at random, and stepping away and back must not
+  // swap the chain under the reader.
+  const dragonAicSummaries = useRef(new WeakMap<readonly DragonMove[], { board: Board; candidates: CandidateGrid; summary: DragonAicSummary }>())
+  const summarizeDragonAic = useCallback((moves: readonly DragonMove[], onBoard: Board, onCandidates: CandidateGrid): DragonAicSummary => {
+    const known = dragonAicSummaries.current.get(moves)
+    if (known && known.board === onBoard && known.candidates === onCandidates) {
+      return known.summary
+    }
+    const summary = dragonAicSummary(onBoard, onCandidates, moves)
+    dragonAicSummaries.current.set(moves, { board: onBoard, candidates: onCandidates, summary })
+    return summary
+  }, [])
+  // The badges of every single Dragon listed (Techniques list on the current
+  // grid, Solve Path steps each on their own), worked out one Dragon per
+  // task after the list is on screen - a long Exhaustive log is tens of
+  // conversions at several ms each, and there can be dozens of rows.
+  const [dragonAicStatusVersion, setDragonAicStatusVersion] = useState(0)
+  const solvePathSteps = solvePath?.steps
+  useEffect(() => {
+    if (!dragonAicDevEnabled) {
+      return
+    }
+    const pending = [
+      ...techniqueInstances.filter(isSingleDragon).map((instance) => ({ moves: instance.moves!, board, candidates })),
+      ...(solvePathSteps ?? [])
+        .filter((step) => isSingleDragon(step.instance))
+        .map((step) => ({ moves: step.instance.moves!, board: step.boardBefore, candidates: step.candidatesBefore })),
+    ]
+    let cancelled = false
+    let timer = 0
+    const next = (at: number) => {
+      if (cancelled || at >= pending.length) {
+        return
+      }
+      const { moves, board: onBoard, candidates: onCandidates } = pending[at]
+      const known = dragonAicSummaries.current.get(moves)
+      if (!known || known.board !== onBoard || known.candidates !== onCandidates) {
+        summarizeDragonAic(moves, onBoard, onCandidates)
+        setDragonAicStatusVersion((version) => version + 1)
+      }
+      timer = window.setTimeout(() => next(at + 1), 0)
+    }
+    timer = window.setTimeout(() => next(0), 0)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [dragonAicDevEnabled, techniqueInstances, solvePathSteps, board, candidates, summarizeDragonAic])
+
+  const dragonAic = useMemo(() => {
+    const moves = highlightedTechnique?.moves
+    if (!dragonAicDevEnabled || !moves || !isSingleDragon(highlightedTechnique)) {
+      return undefined
+    }
+    if (!moves[0].colored.every((n) => board[n.row][n.col] === 0 && candidates[n.row][n.col][n.digit - 1])) {
+      return undefined
+    }
+    const summary = summarizeDragonAic(moves, board, candidates)
+    if (summary.status === 'none') {
+      return undefined
+    }
+    const index = Math.min(dragonStepIndex, moves.length - 1)
+    const move = moves[index]
+    if (!dragonAicShown || !isDragonEliminationMove(move)) {
+      return { text: null, view: null }
+    }
+    const equivalent = summary.byStep.get(index) ?? null
+    return {
+      text: dragonAicText(move, equivalent, highlightedTechnique.id.startsWith('dynamic-dragon-')),
+      view: equivalent ? aicChainView(equivalent.aic) : null,
+    }
+  }, [dragonAicDevEnabled, highlightedTechnique, dragonStepIndex, dragonAicShown, board, candidates, summarizeDragonAic])
+  const dragonAicView = useMemo<DragonAicContextValue | null>(() => {
+    if (!dragonAicDevEnabled) {
+      return null
+    }
+    // A new value per version, so the badges re-render as Dragons finish.
+    void dragonAicStatusVersion
+    return {
+      note: dragonAic ? { shown: dragonAicShown, onToggle: setDragonAicShown, text: dragonAic.text } : null,
+      statusOf: (moves) => dragonAicSummaries.current.get(moves)?.summary.status,
+    }
+  }, [dragonAicDevEnabled, dragonAic, dragonAicShown, dragonAicStatusVersion])
+
   // The AIC chain overlay: which links to draw, and where (straight or how
   // curved - see aicLinkLayout.ts). Memoized because the layout scores
   // several curves per link against the chain and every other link.
   const highlightedAicLinks = highlightedTechnique?.aicLinks
   const highlightedEliminations = highlightedTechnique?.eliminatedCandidates
   const aicLinkOverlay = useMemo(() => {
-    const links = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : highlightedAicLinks
+    const links = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.links) : (dragonAic?.view?.links ?? highlightedAicLinks)
     // What the chain eliminates - the hypothetical eliminations, inside a
     // Dynamic Dragon step - is kept clear of lines, like the chain itself.
     const eliminations = dragonAicChains ? dragonAicChains.flatMap((chain) => chain.hypotheticalEliminations) : (highlightedEliminations ?? [])
     return links && links.length > 0 ? layoutAicOverlay(links, eliminations, board, candidates) : null
-  }, [dragonAicChains, highlightedAicLinks, highlightedEliminations, board, candidates])
+  }, [dragonAicChains, dragonAic, highlightedAicLinks, highlightedEliminations, board, candidates])
 
   // True once the live board/candidates have drifted from what the cached
   // solve path's own next step expects (someone applied it out of order,
@@ -2994,8 +3223,10 @@ export default function App() {
       urAicEnabled,
       alsAicEnabled,
       groupedAicEnabled,
+      preferEasierDoubleDragons: easySolveEnabled && preferEasierDoubleDragons,
     }),
     [
+      preferEasierDoubleDragons,
       enabledFish,
       enabledExotic,
       alsXzEnabled,
@@ -4115,6 +4346,7 @@ export default function App() {
     setOptimizeDragons(DEFAULT_SETTINGS.optimizeDragons)
     setOptimizeDynamicDragons(DEFAULT_SETTINGS.optimizeDynamicDragons)
     setEasySolveEnabled(DEFAULT_SETTINGS.easySolveEnabled)
+    setPreferEasierDoubleDragons(DEFAULT_SETTINGS.preferEasierDoubleDragons)
     setSolvePathTimeoutMs(DEFAULT_SETTINGS.solvePathTimeoutMs)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
     setMaxTechniquesPerDragonStep(DEFAULT_SETTINGS.maxTechniquesPerDragonStep)
@@ -4158,7 +4390,15 @@ export default function App() {
   }
 
   function toggleEasySolveEnabled() {
+    // "Prefer easier double dragons" only exists under Easy Solve.
+    if (easySolveEnabled) {
+      setPreferEasierDoubleDragons(false)
+    }
     setEasySolveEnabled((current) => !current)
+  }
+
+  function togglePreferEasierDoubleDragons() {
+    setPreferEasierDoubleDragons((current) => !current)
   }
 
   function onDragonGenerationTimeoutChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -6466,6 +6706,13 @@ export default function App() {
                 Reset welcome popup (dev only)
               </button>
             )}
+            {/* Dev server only: a single Dragon's "Show equivalent AIC" (see
+                SudokuDragonAicConverter) - hidden everywhere while off. */}
+            {import.meta.env.DEV && (
+              <button type="button" className="dropdown-item" aria-pressed={dragonAicDevEnabled} onClick={toggleDragonAicDev}>
+                Dragon equivalent AIC: {dragonAicDevEnabled ? 'ON' : 'OFF'} (dev only)
+              </button>
+            )}
           </div>
           <div className="dropdown-divider" />
           {/* Keyboard input moved out of Settings: it is now the "Use as
@@ -6633,6 +6880,8 @@ export default function App() {
       }}
       easySolveEnabled={easySolveEnabled}
       onToggleEasySolve={toggleEasySolveEnabled}
+      preferEasierDoubleDragons={preferEasierDoubleDragons}
+      onTogglePreferEasierDoubleDragons={togglePreferEasierDoubleDragons}
       solvePathTimeoutMs={solvePathTimeoutMs}
       onSolvePathTimeoutChange={onSolvePathTimeoutChange}
       panelRef={techniquePanelRef}
@@ -6778,9 +7027,21 @@ export default function App() {
                             : null
                         const aicCandidateSource = dragonAicChains
                           ? dragonAicChains.flatMap((chain) => chain.candidates)
-                          : highlightedTechnique?.aicCandidates
+                          : (dragonAic?.view?.candidates ?? highlightedTechnique?.aicCandidates)
+                        // A plain Dragon's equivalent AIC leaves the Dragon's
+                        // own colours (and eliminations) as they are: only the
+                        // chain's uncoloured candidates turn purple.
+                        const keepsDragonColour =
+                          !!dragonAic?.view &&
+                          (isTechniqueBlue ||
+                            isTechniqueYellow ||
+                            isTechniqueDarkBlue ||
+                            isTechniqueOrange ||
+                            isTechniqueEliminated ||
+                            isTechniqueSolved)
                         const isTechniqueAic =
                           active &&
+                          !keepsDragonColour &&
                           (aicCandidateSource?.some(
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
@@ -7634,6 +7895,7 @@ export default function App() {
       import: importRows,
     }
     return (
+      <DragonAicContext.Provider value={dragonAicView}>
       <main
         className={[
           'page',
@@ -7688,10 +7950,12 @@ export default function App() {
         </nav>
         {overlays}
       </main>
+      </DragonAicContext.Provider>
     )
   }
 
   return (
+    <DragonAicContext.Provider value={dragonAicView}>
     <main className="page" onKeyDown={onKeyDown} onKeyUp={onKeyUp} onPaste={onScopedPaste}>
       {header}
 
@@ -7731,5 +7995,6 @@ export default function App() {
 
       {overlays}
     </main>
+    </DragonAicContext.Provider>
   )
 }

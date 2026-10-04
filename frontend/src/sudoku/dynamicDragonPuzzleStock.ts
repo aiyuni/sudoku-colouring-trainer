@@ -171,7 +171,7 @@ function parseBoard(text: string): Board {
 
 /** A uniformly random member of the Sudoku symmetry group (occasionally
  * the identity, which is harmless). */
-function randomSymmetry(board: Board): Board {
+export function randomSymmetry(board: Board): Board {
   const lineOrder = () => shuffled([0, 1, 2]).flatMap((band) => shuffled([0, 1, 2]).map((line) => band * 3 + line))
   const rows = lineOrder()
   const cols = lineOrder()

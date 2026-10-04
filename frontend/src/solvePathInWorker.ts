@@ -29,6 +29,7 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, givens: boolea
     options.urAicEnabled,
     options.alsAicEnabled,
     options.groupedAicEnabled,
+    options.preferEasierDoubleDragons,
   )
 }
 

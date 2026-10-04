@@ -96,6 +96,10 @@ export interface AppSettings {
   dynamicDragonPuzzleUsesDefaultsOnly: boolean
   dragonGenerationTimeoutMs: number
   easySolveEnabled: boolean
+  /** Solve Path tab, only while Easy Solve is on: a Double Dynamic Dragon
+   * using easier techniques than every single Dynamic Dragon needs counts as
+   * easier than single Dynamic Dragon. */
+  preferEasierDoubleDragons: boolean
   solvePathTimeoutMs: number
   /** Keyboard shortcuts (Settings -> Keyboard shortcuts), see hotkeys.ts. */
   hotkeys: HotkeyBindings
@@ -139,6 +143,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dynamicDragonPuzzleUsesDefaultsOnly: false,
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
+  preferEasierDoubleDragons: false,
   solvePathTimeoutMs: 12_000,
   hotkeys: DEFAULT_HOTKEYS,
 }

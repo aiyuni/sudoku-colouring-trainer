@@ -272,8 +272,10 @@ export class SudokuUrAicFinder {
     return this.search(nodes, strong, weak, weakTo, limit)
   }
 
-  /** The extras link: the rectangle's extra candidates as exactly two nodes. */
-  private addExtrasLink(
+  /** The extras link: the rectangle's extra candidates as exactly two nodes.
+   * (Public, like addDeadlyPairLinks, for SudokuComplexAicGraph, which adds
+   * the same UR links to its own graph.) */
+  addExtrasLink(
     ur: AicUrBasis,
     digitsOf: readonly number[][],
     single: (row: number, col: number, digit: number) => number,
@@ -308,7 +310,7 @@ export class SudokuUrAicFinder {
   }
 
   /** The deadly-pair links - see the class comment. */
-  private addDeadlyPairLinks(
+  addDeadlyPairLinks(
     board: Board,
     candidates: CandidateGrid,
     ur: AicUrBasis,

@@ -61,6 +61,7 @@ import {
   type UrAicInstance,
 } from './sudoku/SudokuUrAicFinder'
 import type { Board, CandidateGrid } from './sudoku/types'
+import { RULE3_TECHNIQUE_GROUPS } from './settingsDefaults'
 
 
 export const singleFinder = new SudokuSingleFinder()
@@ -138,6 +139,11 @@ export interface TechniqueInstance {
    * by the Solve Path search: the default search tie-breaks an equal-
    * eliminations choice on it, and "Easy Solve" sorts on it directly. */
   techniqueRank: number
+  /** Double Dynamic Dragon only: a row found with an easier Dynamic Dragon
+   * technique set than every single Dynamic Dragon on the grid needs (see
+   * pushEasierDoubleDynamicDragons). The Solve Path's "Prefer easier double
+   * dragons" ranks such a row below single Dynamic Dragon. */
+  easierThanSingleDynamicDragon?: true
 }
 
 /** Numeric difficulty tier for every technique, lowest = easiest - the exact
@@ -559,12 +565,7 @@ export function computeDoubleDynamicDragonExtensions(
     if (plainPairs.has(key) || !moves.some((move) => move.kind === 'extension-rule3')) {
       continue
     }
-    const effect = [
-      ...moves.flatMap((m) => m.eliminated.map((e) => `x${e.row}${e.col}${e.digit}`)),
-      ...moves.flatMap((m) => m.solved.map((e) => `s${e.row}${e.col}${e.digit}`)),
-    ]
-      .sort()
-      .join(',')
+    const effect = dragonEffectKey(moves)
     const existing = byEffect.get(effect)
     if (!existing || moves.length < existing.moves.length) {
       byEffect.set(effect, { chainKey: key, moves })
@@ -1441,9 +1442,98 @@ export function buildTechniqueInstances(
         buildDragonInstance(board, candidates, 'double-dynamic-dragon', `Double ${dynamicDragonLabel(moves)}`, chainKey, moves),
       )
     }
+
+    // The search above only pairs chains single Dynamic Dragon is stuck on
+    // with *every* allowed technique, so a chain a single Dragon resolves
+    // only by leaning on an Unfair technique never gets a Double - even
+    // though two Dragons with easier techniques are what a human would look
+    // for first. By request, per grid state: when no single Dynamic Dragon
+    // gets anywhere without the Unfair techniques, the Doubles found without
+    // them are listed too; likewise with only the Defaults, when every single
+    // Dynamic Dragon needs something beyond them.
+    if (dynamicDragonExtensions.length > 0) {
+      const listedChains = new Set(doubleDynamicExtensions.map((extension) => extension.chainKey))
+      const listedEffects = new Set(doubleDynamicExtensions.map((extension) => dragonEffectKey(extension.moves)))
+      // RULE3_TECHNIQUE_GROUPS runs Defaults, Advanced, Brutal, Unfair.
+      const unfair = RULE3_TECHNIQUE_GROUPS[RULE3_TECHNIQUE_GROUPS.length - 1].techniques
+      const beyondDefaults = RULE3_TECHNIQUE_GROUPS.slice(1).flatMap((group) => group.techniques)
+      let previousSize = allowedRule3Techniques.size
+      for (const dropped of [unfair, beyondDefaults]) {
+        const easier = new Set([...allowedRule3Techniques].filter((technique) => !dropped.includes(technique)))
+        // Nothing dropped is ticked (or nothing more than the last round
+        // dropped): the same search again.
+        if (easier.size === previousSize) {
+          continue
+        }
+        previousSize = easier.size
+        // Cheap first: a listed single Dragon that already keeps to the
+        // easier set settles it. Otherwise ask outright whether any single
+        // Dynamic Dragon resolves with the easier set - Exhaustive off, since
+        // its first elimination decides that.
+        const everySingleNeedsDropped =
+          dynamicDragonExtensions.every(({ moves }) =>
+            moves.some((move) => (move.dynamicTechniques ?? []).some((technique) => dropped.includes(technique))),
+          ) &&
+          computeStuckDynamicDragonExtensions(
+            board,
+            candidates,
+            'any',
+            minBaseMedusaCandidates,
+            easier,
+            aicLimitPerDragonStep,
+            false,
+            optimizeDragons,
+            optimizeDynamicDragons,
+            maxTechniquesPerDragonStep,
+            givens,
+          ).length === 0
+        if (!everySingleNeedsDropped) {
+          continue
+        }
+        const easierExtensions = computeDoubleDynamicDragonExtensions(
+          board,
+          candidates,
+          minBaseMedusaCandidates,
+          easier,
+          aicLimitPerDragonStep,
+          maxTechniquesPerDragonStep,
+          exhaustiveDragon,
+          optimizeDragons,
+          optimizeDynamicDragons,
+          doubleDragonEnabled,
+          givens,
+        )
+        easierExtensions.sort((a, b) => a.moves.length - b.moves.length)
+        for (const { chainKey, moves } of easierExtensions) {
+          const effect = dragonEffectKey(moves)
+          // Already a row (the chain key is the row's id), or the same
+          // eliminations and placements as one.
+          if (listedChains.has(chainKey) || listedEffects.has(effect)) {
+            continue
+          }
+          listedChains.add(chainKey)
+          listedEffects.add(effect)
+          instances.push({
+            ...buildDragonInstance(board, candidates, 'double-dynamic-dragon', `Double ${dynamicDragonLabel(moves)}`, chainKey, moves),
+            easierThanSingleDynamicDragon: true,
+          })
+        }
+      }
+    }
   }
 
   return instances
+}
+
+/** A Dragon log's whole effect as one string: two logs with the same key make
+ * exactly the same eliminations and placements. */
+function dragonEffectKey(moves: DragonMove[]): string {
+  return [
+    ...moves.flatMap((m) => m.eliminated.map((e) => `x${e.row}${e.col}${e.digit}`)),
+    ...moves.flatMap((m) => m.solved.map((e) => `s${e.row}${e.col}${e.digit}`)),
+  ]
+    .sort()
+    .join(',')
 }
 
 /** Appends `candidates` (sorted by techniqueRank) to `instances`, except any
@@ -1896,21 +1986,33 @@ export function dragonStepCount(instance: TechniqueInstance): number {
  * are broken by fewest Dragon Colouring steps (a shorter chain is a simpler
  * one; always a tie, at 0, between two non-Dragon instances) and then by
  * most candidates eliminated, the only differentiator left once technique
- * and chain length no longer distinguish two instances. */
-export function pickEasiestInstance(instances: TechniqueInstance[]): TechniqueInstance | null {
+ * and chain length no longer distinguish two instances.
+ *
+ * `preferEasierDoubleDragons` (the Solve Path's "Prefer easier double
+ * dragons"): a Double Dynamic Dragon found with an easier technique set than
+ * every single Dynamic Dragon needs (`easierThanSingleDynamicDragon`) counts
+ * as easier than single Dynamic Dragon, instead of as the hardest tier. */
+export function pickEasiestInstance(
+  instances: TechniqueInstance[],
+  preferEasierDoubleDragons = false,
+): TechniqueInstance | null {
+  const rankOf = (instance: TechniqueInstance) =>
+    preferEasierDoubleDragons && instance.easierThanSingleDynamicDragon ? RANK_DYNAMIC_DRAGON - 0.5 : instance.techniqueRank
   let best: TechniqueInstance | null = null
+  let bestRank = Infinity
   let bestSteps = Infinity
   let bestEliminated = -1
   for (const instance of instances) {
-    const rank = instance.techniqueRank
+    const rank = rankOf(instance)
     const steps = dragonStepCount(instance)
-    if (!best || rank < best.techniqueRank || (rank === best.techniqueRank && steps < bestSteps)) {
+    if (!best || rank < bestRank || (rank === bestRank && steps < bestSteps)) {
       best = instance
+      bestRank = rank
       bestSteps = steps
       bestEliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
       continue
     }
-    if (rank === best.techniqueRank && steps === bestSteps) {
+    if (rank === bestRank && steps === bestSteps) {
       const eliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
       if (eliminated > bestEliminated) {
         best = instance
@@ -2029,15 +2131,23 @@ export function buildSolvePath(
   urAicEnabled = false,
   alsAicEnabled = false,
   groupedAicEnabled = false,
+  // "Prefer easier double dragons": only means anything under Easy Solve.
+  preferEasierDoubleDragons = false,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
-  const pickInstance = easySolveEnabled ? pickEasiestInstance : pickGreedyInstance
+  const pickInstance = easySolveEnabled
+    ? (instances: TechniqueInstance[]) => pickEasiestInstance(instances, preferEasierDoubleDragons)
+    : pickGreedyInstance
   const log: string[] = [
     easySolveEnabled
       ? 'Method: "Easy Solve", single-candidate-per-step (no branching/backtracking) - at each step, every ' +
         'currently-applicable technique is evaluated once and whichever is simplest is chosen, regardless of how ' +
         'much progress it makes (ties broken by fewest Dragon Colouring steps, then most candidates eliminated). ' +
+        (preferEasierDoubleDragons
+          ? 'A Double Dynamic Dragon that uses easier techniques than every single Dynamic Dragon needs counts as ' +
+            'simpler than single Dynamic Dragon. '
+          : '') +
         'This is not an exhaustive search for the true minimum step count, which is combinatorially intractable ' +
         'for a full puzzle.'
       : 'Method: greedy, single-candidate-per-step (no branching/backtracking) - at each step, every currently-applicable ' +

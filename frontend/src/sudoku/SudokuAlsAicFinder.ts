@@ -528,8 +528,9 @@ export class SudokuAlsAicFinder {
 }
 
 /** Every ALS of 2 to `maxCells` cells, each distinct cell set once (cells
- * sharing a row or column and a box are found from both houses). */
-function findAls(board: Board, candidates: CandidateGrid, maxCells: number): AicAlsBasis[] {
+ * sharing a row or column and a box are found from both houses). Exported
+ * for SudokuComplexAicGraph, which puts the same ALS links in its graph. */
+export function findAls(board: Board, candidates: CandidateGrid, maxCells: number): AicAlsBasis[] {
   const byKey = new Map<string, AicAlsBasis>()
   for (const unit of sudokuUnits()) {
     const open: Array<{ cell: Cell; mask: number }> = []

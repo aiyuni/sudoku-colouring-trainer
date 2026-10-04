@@ -38,6 +38,8 @@ export interface SolvePathOptions {
   alsAicEnabled: boolean
   /** Grouped AIC enabled in Settings (off by default). */
   groupedAicEnabled: boolean
+  /** "Prefer easier double dragons" (off by default; only with Easy Solve). */
+  preferEasierDoubleDragons: boolean
 }
 
 export interface SolvePathWorkerRequest {
@@ -83,6 +85,7 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.urAicEnabled,
         options.alsAicEnabled,
         options.groupedAicEnabled,
+        options.preferEasierDoubleDragons,
       ),
     }
   } catch (error) {

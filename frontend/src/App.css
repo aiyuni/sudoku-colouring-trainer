@@ -1984,6 +1984,25 @@ html.app-busy .busy-cancel,
   font-weight: 600;
   padding: 0.3rem 0.9rem;
   border-radius: 0.4rem;
+  /* The panel's one primary action: solid blue, so it stands out from the
+     tabs and the list's own buttons. */
+  background: #2563eb;
+  border: 1px solid #3b82f6;
+  color: #fff;
+}
+
+.technique-apply-button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+/* Nothing to apply yet: still plainly a button (outlined, readable label)
+   rather than faded into the panel. */
+.technique-apply-button:disabled {
+  background: transparent;
+  border-color: #64748b;
+  color: #94a3b8;
+  opacity: 1;
+  cursor: not-allowed;
 }
 
 .technique-empty {
@@ -2138,6 +2157,18 @@ html.app-busy .busy-cancel,
   gap: 0.3rem;
   font-size: 0.7rem;
   cursor: pointer;
+  /* A full line each, under the Generate / time limit line. */
+  flex-basis: 100%;
+}
+
+.solve-path-sub-option {
+  margin-top: -0.2rem;
+  padding-left: 1.3rem;
+}
+
+.solve-path-option-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .solve-path-timeout {
@@ -2145,6 +2176,8 @@ html.app-busy .busy-cancel,
   align-items: center;
   gap: 0.3rem;
   font-size: 0.7rem;
+  /* Right-hand end of the Generate line. */
+  margin-left: auto;
 }
 
 .solve-path-timeout select {
@@ -2227,6 +2260,56 @@ html.app-busy .busy-cancel,
   margin-left: 0;
 }
 
+/* A single Dragon row's "has an equivalent AIC" badge (DragonAicBadge in
+   App.tsx), just left of the row's ?: purple like the chain itself when every
+   elimination step is a chain, dashed and pale when only some are, greyed and
+   struck through when none is. In the touch layout's focus head it is an
+   ordinary flex item. */
+.dragon-aic-badge {
+  flex: none;
+  padding: 0.12rem 0.3rem;
+  border: 1px solid var(--aic-node-color);
+  border-radius: 0.35rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--aic-node-color);
+  cursor: help;
+}
+
+.dragon-aic-badge-some {
+  color: var(--aic-node-color);
+  background: var(--aic-node-bg);
+  border-style: dashed;
+}
+
+.dragon-aic-badge-none {
+  color: #6b7280;
+  background: transparent;
+  border-color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.technique-row > .dragon-aic-badge {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.55rem;
+}
+
+.technique-row:has(> .technique-learn-button) > .dragon-aic-badge {
+  right: 2.1rem;
+}
+
+.technique-row:has(> .dragon-aic-badge) > .technique-item {
+  padding-right: 2.7rem;
+}
+
+.technique-row:has(> .dragon-aic-badge):has(> .technique-learn-button) > .technique-item {
+  padding-right: 4.3rem;
+}
+
 /* Dragon Colouring's move-by-move player - expands below its row in the
    Techniques list instead of just highlighting the grid on click. */
 .dragon-player {
@@ -2262,6 +2345,34 @@ html.app-busy .busy-cancel,
   font-size: 0.78rem;
   line-height: 1.35;
   color: #78350f;
+}
+
+/* A plain Dragon's "Show equivalent AIC" toggle and the chain it names -
+   purple like the chain drawn on the grid, under the step's own text. */
+.dragon-aic-note {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.55rem 0.45rem;
+  border-top: 1px dashed var(--aic-node-color);
+  border-radius: 0 0 0.4rem 0.4rem;
+  background: var(--aic-node-bg);
+}
+
+.dragon-aic-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--aic-node-color);
+  cursor: pointer;
+}
+
+.dragon-aic-text {
+  margin: 0.3rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: #581c87;
+  overflow-wrap: anywhere;
 }
 
 /* The optional "reveal one technique at a time" player nested under a

@@ -36,6 +36,134 @@ function sees(a: Cell, b: Cell): boolean {
   return a[0] === b[0] || a[1] === b[1] || boxOf(a) === boxOf(b)
 }
 
+/** The link graph a Grouped AIC is searched in: every single candidate of
+ * buildLinkGraphs plus the box/line group nodes, by numeric id. Shared with
+ * SudokuDragonAicConverter, which reads a Dragon Colouring as a chain through
+ * this same graph. */
+export interface GroupedLinkGraph {
+  nodes: AicCandidate[]
+  /** candidateKey(row, col, digit) for a single candidate. */
+  idOf: Map<string, number>
+  strong: number[][]
+  weak: number[][]
+  strongSet: Array<Set<number>>
+  weakSet: Array<Set<number>>
+  groupCount: number
+}
+
+export function buildGroupedLinkGraph(board: Board, candidates: CandidateGrid, graphs?: LinkGraphs): GroupedLinkGraph {
+  const base = graphs ?? buildLinkGraphs(board, candidates)
+
+  const nodes: AicCandidate[] = []
+  const idOf = new Map<string, number>()
+  const strong: number[][] = []
+  const weak: number[][] = []
+  const weakSet: Array<Set<number>> = []
+  const strongSet: Array<Set<number>> = []
+  const register = (key: string, node: AicCandidate): number => {
+    let id = idOf.get(key)
+    if (id === undefined) {
+      id = nodes.length
+      idOf.set(key, id)
+      nodes.push(node)
+      strong.push([])
+      weak.push([])
+      weakSet.push(new Set())
+      strongSet.push(new Set())
+    }
+    return id
+  }
+  const addWeak = (a: number, b: number) => {
+    if (a === b || weakSet[a].has(b)) {
+      return
+    }
+    weakSet[a].add(b)
+    weakSet[b].add(a)
+    weak[a].push(b)
+    weak[b].push(a)
+  }
+  const addStrong = (a: number, b: number) => {
+    if (a === b || strongSet[a].has(b)) {
+      return
+    }
+    strongSet[a].add(b)
+    strongSet[b].add(a)
+    strong[a].push(b)
+    strong[b].push(a)
+  }
+
+  for (const [key, node] of base.nodeByKey) {
+    register(key, node)
+  }
+  for (const [key, neighbours] of base.strongAdjacency) {
+    for (const other of neighbours) {
+      addStrong(idOf.get(key)!, idOf.get(other)!)
+    }
+  }
+  for (const [key, neighbours] of base.weakAdjacency) {
+    for (const other of neighbours) {
+      addWeak(idOf.get(key)!, idOf.get(other)!)
+    }
+  }
+
+  const has = (row: number, col: number, digit: number) => board[row][col] === 0 && candidates[row][col][digit - 1]
+  // `digit` in one of `cells` (row-major): a single candidate's node, or a
+  // group's (whose weak links are added once every node exists).
+  const groupIds: number[] = []
+  const nodeFor = (digit: number, cells: readonly Cell[]): number => {
+    if (cells.length === 1) {
+      return register(candidateKey(cells[0][0], cells[0][1], digit), { row: cells[0][0], col: cells[0][1], digit })
+    }
+    const key = `g${digit}:${cells.map(cellRef).join('')}`
+    const known = idOf.get(key)
+    if (known !== undefined) {
+      return known
+    }
+    const id = register(key, { row: cells[0][0], col: cells[0][1], digit, cells })
+    groupIds.push(id)
+    return id
+  }
+
+  // Grouped strong links: a unit whose candidates of a digit split into
+  // exactly two box/line parts (two single cells are the conjugate pair
+  // already linked above).
+  const units = sudokuUnits()
+  for (let digit = 1; digit <= BOARD_SIZE; digit++) {
+    units.forEach((unit, u) => {
+      const cells = unit.filter(([r, c]) => has(r, c, digit)).sort((p, q) => p[0] - q[0] || p[1] - q[1])
+      if (cells.length < 3) {
+        return
+      }
+      // Units are rows 0-8, columns 9-17, boxes 18-26 (SudokuUnits).
+      const splits: Array<(cell: Cell) => number> = u < 18 ? [boxOf] : [([r]) => r, ([, c]) => c]
+      for (const partOf of splits) {
+        const parts = new Map<number, Cell[]>()
+        for (const cell of cells) {
+          parts.set(partOf(cell), [...(parts.get(partOf(cell)) ?? []), cell])
+        }
+        if (parts.size === 2) {
+          const [p, q] = [...parts.values()]
+          addStrong(nodeFor(digit, p), nodeFor(digit, q))
+        }
+      }
+    })
+  }
+  // Groups' weak links: every other node of the digit seeing all of the
+  // group (so disjoint from it - a cell never sees itself).
+  const byDigit: number[][] = Array.from({ length: BOARD_SIZE + 1 }, () => [])
+  nodes.forEach((node, id) => byDigit[node.digit].push(id))
+  for (const g of groupIds) {
+    const gCells = nodes[g].cells!
+    for (const other of byDigit[nodes[g].digit]) {
+      if (other !== g && aicNodeCells(nodes[other]).every((cell) => gCells.every((gc) => sees(cell, gc)))) {
+        addWeak(g, other)
+      }
+    }
+  }
+
+  return { nodes, idOf, strong, weak, strongSet, weakSet, groupCount: groupIds.length }
+}
+
 /**
  * Grouped AIC: a Generic AIC (any odd length up to GROUPED_AIC_MAX_LENGTH)
  * whose nodes may be groups - a digit's 2-3 candidates in one box and one row
@@ -67,119 +195,10 @@ function sees(a: Cell, b: Cell): boolean {
 export class SudokuGroupedAicFinder {
   find(board: Board, candidates: CandidateGrid, graphs?: LinkGraphs, maxLength: number = GROUPED_AIC_MAX_LENGTH): ShortAicInstance[] {
     const limit = maxLength % 2 === 0 ? maxLength - 1 : maxLength
-    const base = graphs ?? buildLinkGraphs(board, candidates)
-
-    const nodes: AicCandidate[] = []
-    const idOf = new Map<string, number>()
-    const strong: number[][] = []
-    const weak: number[][] = []
-    const weakSet: Array<Set<number>> = []
-    const strongSet: Array<Set<number>> = []
-    const register = (key: string, node: AicCandidate): number => {
-      let id = idOf.get(key)
-      if (id === undefined) {
-        id = nodes.length
-        idOf.set(key, id)
-        nodes.push(node)
-        strong.push([])
-        weak.push([])
-        weakSet.push(new Set())
-        strongSet.push(new Set())
-      }
-      return id
-    }
-    const addWeak = (a: number, b: number) => {
-      if (a === b || weakSet[a].has(b)) {
-        return
-      }
-      weakSet[a].add(b)
-      weakSet[b].add(a)
-      weak[a].push(b)
-      weak[b].push(a)
-    }
-    const addStrong = (a: number, b: number) => {
-      if (a === b || strongSet[a].has(b)) {
-        return
-      }
-      strongSet[a].add(b)
-      strongSet[b].add(a)
-      strong[a].push(b)
-      strong[b].push(a)
-    }
-
-    for (const [key, node] of base.nodeByKey) {
-      register(key, node)
-    }
-    for (const [key, neighbours] of base.strongAdjacency) {
-      for (const other of neighbours) {
-        addStrong(idOf.get(key)!, idOf.get(other)!)
-      }
-    }
-    for (const [key, neighbours] of base.weakAdjacency) {
-      for (const other of neighbours) {
-        addWeak(idOf.get(key)!, idOf.get(other)!)
-      }
-    }
-
-    const has = (row: number, col: number, digit: number) => board[row][col] === 0 && candidates[row][col][digit - 1]
-    // `digit` in one of `cells` (row-major): a single candidate's node, or a
-    // group's (whose weak links are added once every node exists).
-    const groupIds: number[] = []
-    const nodeFor = (digit: number, cells: readonly Cell[]): number => {
-      if (cells.length === 1) {
-        return register(candidateKey(cells[0][0], cells[0][1], digit), { row: cells[0][0], col: cells[0][1], digit })
-      }
-      const key = `g${digit}:${cells.map(cellRef).join('')}`
-      const known = idOf.get(key)
-      if (known !== undefined) {
-        return known
-      }
-      const id = register(key, { row: cells[0][0], col: cells[0][1], digit, cells })
-      groupIds.push(id)
-      return id
-    }
-
-    // Grouped strong links: a unit whose candidates of a digit split into
-    // exactly two box/line parts (two single cells are the conjugate pair
-    // already linked above).
-    const units = sudokuUnits()
-    for (let digit = 1; digit <= BOARD_SIZE; digit++) {
-      units.forEach((unit, u) => {
-        const cells = unit.filter(([r, c]) => has(r, c, digit)).sort((p, q) => p[0] - q[0] || p[1] - q[1])
-        if (cells.length < 3) {
-          return
-        }
-        // Units are rows 0-8, columns 9-17, boxes 18-26 (SudokuUnits).
-        const splits: Array<(cell: Cell) => number> = u < 18 ? [boxOf] : [([r]) => r, ([, c]) => c]
-        for (const partOf of splits) {
-          const parts = new Map<number, Cell[]>()
-          for (const cell of cells) {
-            parts.set(partOf(cell), [...(parts.get(partOf(cell)) ?? []), cell])
-          }
-          if (parts.size === 2) {
-            const [p, q] = [...parts.values()]
-            addStrong(nodeFor(digit, p), nodeFor(digit, q))
-          }
-        }
-      })
-    }
-    if (groupIds.length === 0) {
+    const { nodes, strong, weak, weakSet, groupCount } = buildGroupedLinkGraph(board, candidates, graphs)
+    if (groupCount === 0) {
       return []
     }
-
-    // Groups' weak links: every other node of the digit seeing all of the
-    // group (so disjoint from it - a cell never sees itself).
-    const byDigit: number[][] = Array.from({ length: BOARD_SIZE + 1 }, () => [])
-    nodes.forEach((node, id) => byDigit[node.digit].push(id))
-    for (const g of groupIds) {
-      const gCells = nodes[g].cells!
-      for (const other of byDigit[nodes[g].digit]) {
-        if (other !== g && aicNodeCells(nodes[other]).every((cell) => gCells.every((gc) => sees(cell, gc)))) {
-          addWeak(g, other)
-        }
-      }
-    }
-
     return this.search(nodes, strong, weak, weakSet, limit)
   }
 

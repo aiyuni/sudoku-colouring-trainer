@@ -64,12 +64,39 @@ const PHASE1_CLUE_THRESHOLD = 55
 /** Lookup tables for solveWithSinglesOnly's bitmask search, cells indexed
  * row * 9 + col. */
 const FULL_DIGIT_MASK = (1 << BOARD_SIZE) - 1
+
+/** A board solved as far as naked/hidden singles go, with the "digit used"
+ * bitmask of each row, column and box (bit d-1 = digit d placed there). */
+interface SinglesClosure {
+  /** The 81 cells, row-major, 0 = empty. */
+  cells: Int8Array
+  rowUsed: Int32Array
+  colUsed: Int32Array
+  boxUsed: Int32Array
+  /** How many cells are still empty. */
+  empty: number
+}
 const BOX_OF: number[] = Array.from({ length: BOARD_SIZE * BOARD_SIZE }, (_, cell) => {
   const r = Math.floor(cell / BOARD_SIZE)
   const c = cell % BOARD_SIZE
   return Math.floor(r / 3) * 3 + Math.floor(c / 3)
 })
 const UNIT_CELLS: number[][] = sudokuUnits().map((unit) => unit.map(([r, c]) => r * BOARD_SIZE + c))
+const CELL_COUNT = BOARD_SIZE * BOARD_SIZE
+/** Set bits of every 9-bit digit mask. */
+const POPCOUNT9 = Uint8Array.from({ length: FULL_DIGIT_MASK + 1 }, (_, mask) => {
+  let count = 0
+  for (let m = mask; m !== 0; m &= m - 1) {
+    count++
+  }
+  return count
+})
+const ROW_OF = Int32Array.from({ length: CELL_COUNT }, (_, cell) => Math.floor(cell / BOARD_SIZE))
+const COL_OF = Int32Array.from({ length: CELL_COUNT }, (_, cell) => cell % BOARD_SIZE)
+/** The three units (indices into UNIT_CELLS: row, column, box) of each cell. */
+const UNITS_OF_CELL: number[][] = Array.from({ length: CELL_COUNT }, (_, cell) =>
+  UNIT_CELLS.flatMap((unit, index) => (unit.includes(cell) ? [index] : [])),
+)
 
 /** Hands control back to the browser's event loop for a tick - see
  * YIELD_INTERVAL_MS. A plain `setTimeout(resolve, 0)` rather than
@@ -333,16 +360,46 @@ export class SudokuDragonPuzzleGenerator {
     const puzzle = cloneBoard(solved)
     const target = this.checkpointTarget(options)
     let clueCount = BOARD_SIZE * BOARD_SIZE
+    // The clues' own "digit used" masks, kept in step with `puzzle`: what
+    // lets most removals of the early, clue-rich phase be settled in a few
+    // operations (removedCellIsSingle) instead of a whole singles solve.
+    const rowUsed = new Int32Array(BOARD_SIZE).fill(FULL_DIGIT_MASK)
+    const colUsed = new Int32Array(BOARD_SIZE).fill(FULL_DIGIT_MASK)
+    const boxUsed = new Int32Array(BOARD_SIZE).fill(FULL_DIGIT_MASK)
+    const setClue = (row: number, col: number, value: number, present: boolean) => {
+      const bit = 1 << (value - 1)
+      puzzle[row][col] = present ? value : 0
+      // A digit is in a row/column/box once, so clearing the bit is exact.
+      rowUsed[row] = present ? rowUsed[row] | bit : rowUsed[row] & ~bit
+      colUsed[col] = present ? colUsed[col] | bit : colUsed[col] & ~bit
+      const box = BOX_OF[row * BOARD_SIZE + col]
+      boxUsed[box] = present ? boxUsed[box] | bit : boxUsed[box] & ~bit
+    }
 
     for (const [row, col] of this.shuffled(this.allCoordinates())) {
       const removedValue = puzzle[row][col]
       if (removedValue === 0) {
         continue
       }
-      puzzle[row][col] = 0
+      setClue(row, col, removedValue, false)
 
-      if (this.solver.solve(puzzle).status !== 'solved') {
-        puzzle[row][col] = removedValue
+      // Above PHASE1_CLUE_THRESHOLD nothing but "is it still unique" is
+      // asked (see below), and a removed cell that is a naked or hidden
+      // single straight away answers that with yes - staysUniqueWithout's
+      // own first test, without the singles solve in front of it.
+      if (
+        clueCount - 1 > PHASE1_CLUE_THRESHOLD &&
+        this.removedCellIsSingle(puzzle, rowUsed, colUsed, boxUsed, row * BOARD_SIZE + col, removedValue)
+      ) {
+        clueCount--
+        continue
+      }
+
+      // The singles closure is both the cheap half of the uniqueness check
+      // and what buildRobustCheckpoint starts from - computed once here.
+      const closed = this.solveWithSinglesOnly(puzzle)
+      if (!this.staysUniqueWithout(closed, row * BOARD_SIZE + col, removedValue)) {
+        setClue(row, col, removedValue, true)
         continue
       }
       clueCount--
@@ -356,7 +413,7 @@ export class SudokuDragonPuzzleGenerator {
         continue
       }
 
-      const checkpoint = this.buildRobustCheckpoint(puzzle, target)
+      const checkpoint = this.buildRobustCheckpoint(puzzle, target, closed)
       if (!checkpoint) {
         // Still too easy (something short of the target technique still
         // works once candidates are freshly autofilled), or a dead end
@@ -382,7 +439,7 @@ export class SudokuDragonPuzzleGenerator {
       }
       // This removal demands something harder than the target technique -
       // too far, put the clue back and try removing a different one.
-      puzzle[row][col] = removedValue
+      setClue(row, col, removedValue, true)
       clueCount++
     }
 
@@ -419,43 +476,48 @@ export class SudokuDragonPuzzleGenerator {
    * and both kinds of single stay applicable (or get placed) as other true
    * digits land - a monotone closure with exactly one fixed point, whatever
    * the order. Verified equal to the SudokuSingleFinder version (board and
-   * candidates) on 200k+ reduction states before switching. */
-  private solveWithSinglesOnly(clueBoard: Board): { board: Board; candidates: CandidateGrid } {
-    const board = cloneBoard(clueBoard)
-    const rowUsed = new Array<number>(BOARD_SIZE).fill(0)
-    const colUsed = new Array<number>(BOARD_SIZE).fill(0)
-    const boxUsed = new Array<number>(BOARD_SIZE).fill(0)
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
-        const value = board[r][c]
-        if (value !== 0) {
-          const bit = 1 << (value - 1)
-          rowUsed[r] |= bit
-          colUsed[c] |= bit
-          boxUsed[BOX_OF[r * BOARD_SIZE + c]] |= bit
-        }
+   * candidates) on 200k+ reduction states before switching.
+   *
+   * Returns the board and the masks it ended with, not a CandidateGrid:
+   * the reduction loop also uses this closure for its uniqueness check
+   * (staysUniqueWithout), and ~95% of removals are solved outright by
+   * singles, where building candidates (10% of a worker's time) was wasted.
+   * withCandidates turns it into the autofilled grid when one is needed. */
+  private solveWithSinglesOnly(clueBoard: Board): SinglesClosure {
+    // Flat typed arrays throughout: after the uniqueness check stopped
+    // dominating, this loop was half of a worker's time, most of it index
+    // arithmetic on the 2D board.
+    const cells = new Int8Array(CELL_COUNT)
+    const rowUsed = new Int32Array(BOARD_SIZE)
+    const colUsed = new Int32Array(BOARD_SIZE)
+    const boxUsed = new Int32Array(BOARD_SIZE)
+    let empty = 0
+    for (let cell = 0; cell < CELL_COUNT; cell++) {
+      const value = clueBoard[ROW_OF[cell]][COL_OF[cell]]
+      cells[cell] = value
+      if (value !== 0) {
+        const bit = 1 << (value - 1)
+        rowUsed[ROW_OF[cell]] |= bit
+        colUsed[COL_OF[cell]] |= bit
+        boxUsed[BOX_OF[cell]] |= bit
+      } else {
+        empty++
       }
     }
-    const available = (cell: number) =>
-      FULL_DIGIT_MASK & ~(rowUsed[(cell / BOARD_SIZE) | 0] | colUsed[cell % BOARD_SIZE] | boxUsed[BOX_OF[cell]])
-    const place = (cell: number, bit: number) => {
-      const r = (cell / BOARD_SIZE) | 0
-      const c = cell % BOARD_SIZE
-      board[r][c] = 31 - Math.clz32(bit) + 1
-      rowUsed[r] |= bit
-      colUsed[c] |= bit
-      boxUsed[BOX_OF[cell]] |= bit
-    }
 
-    for (let progress = true; progress; ) {
+    for (let progress = true; progress && empty > 0; ) {
       progress = false
-      for (let cell = 0; cell < BOARD_SIZE * BOARD_SIZE; cell++) {
-        if (board[(cell / BOARD_SIZE) | 0][cell % BOARD_SIZE] !== 0) {
+      for (let cell = 0; cell < CELL_COUNT; cell++) {
+        if (cells[cell] !== 0) {
           continue
         }
-        const mask = available(cell)
+        const mask = FULL_DIGIT_MASK & ~(rowUsed[ROW_OF[cell]] | colUsed[COL_OF[cell]] | boxUsed[BOX_OF[cell]])
         if (mask !== 0 && (mask & (mask - 1)) === 0) {
-          place(cell, mask)
+          cells[cell] = 32 - Math.clz32(mask)
+          rowUsed[ROW_OF[cell]] |= mask
+          colUsed[COL_OF[cell]] |= mask
+          boxUsed[BOX_OF[cell]] |= mask
+          empty--
           progress = true
         }
       }
@@ -466,8 +528,8 @@ export class SudokuDragonPuzzleGenerator {
         let seenOnce = 0
         let seenTwice = 0
         for (const cell of unit) {
-          if (board[(cell / BOARD_SIZE) | 0][cell % BOARD_SIZE] === 0) {
-            const mask = available(cell)
+          if (cells[cell] === 0) {
+            const mask = FULL_DIGIT_MASK & ~(rowUsed[ROW_OF[cell]] | colUsed[COL_OF[cell]] | boxUsed[BOX_OF[cell]])
             seenTwice |= seenOnce & mask
             seenOnce |= mask
           }
@@ -477,8 +539,12 @@ export class SudokuDragonPuzzleGenerator {
           const bit = hidden & -hidden
           hidden &= hidden - 1
           for (const cell of unit) {
-            if (board[(cell / BOARD_SIZE) | 0][cell % BOARD_SIZE] === 0 && (available(cell) & bit) !== 0) {
-              place(cell, bit)
+            if (cells[cell] === 0 && (FULL_DIGIT_MASK & ~(rowUsed[ROW_OF[cell]] | colUsed[COL_OF[cell]] | boxUsed[BOX_OF[cell]]) & bit) !== 0) {
+              cells[cell] = 32 - Math.clz32(bit)
+              rowUsed[ROW_OF[cell]] |= bit
+              colUsed[COL_OF[cell]] |= bit
+              boxUsed[BOX_OF[cell]] |= bit
+              empty--
               progress = true
               break
             }
@@ -487,16 +553,167 @@ export class SudokuDragonPuzzleGenerator {
       }
     }
 
+    return { cells, rowUsed, colUsed, boxUsed, empty }
+  }
+
+  /** A singles closure as the board and freshly autofilled candidates the
+   * finders work on. */
+  private withCandidates({ cells, rowUsed, colUsed, boxUsed }: SinglesClosure): { board: Board; candidates: CandidateGrid } {
+    const board: Board = Array.from({ length: BOARD_SIZE }, (_, r) => Array.from({ length: BOARD_SIZE }, (_, c) => cells[r * BOARD_SIZE + c]))
     const candidates = createEmptyCandidates()
-    for (let cell = 0; cell < BOARD_SIZE * BOARD_SIZE; cell++) {
-      const r = (cell / BOARD_SIZE) | 0
-      const c = cell % BOARD_SIZE
-      if (board[r][c] === 0) {
-        const mask = available(cell)
-        candidates[r][c] = DIGITS.map((d) => (mask & (1 << (d - 1))) !== 0)
+    for (let cell = 0; cell < CELL_COUNT; cell++) {
+      if (cells[cell] === 0) {
+        const mask = FULL_DIGIT_MASK & ~(rowUsed[ROW_OF[cell]] | colUsed[COL_OF[cell]] | boxUsed[BOX_OF[cell]])
+        candidates[ROW_OF[cell]][COL_OF[cell]] = DIGITS.map((d) => (mask & (1 << (d - 1))) !== 0)
       }
     }
     return { board, candidates }
+  }
+
+  /** Is the cell a clue was just removed from a naked or hidden single of
+   * the remaining clues (`puzzle`, with its row/column/box masks)? Then the
+   * removed digit is forced back, and the puzzle is as unique as it was. A
+   * yes is certain; a no only means the full check has to decide. */
+  private removedCellIsSingle(
+    puzzle: Board,
+    rowUsed: Int32Array,
+    colUsed: Int32Array,
+    boxUsed: Int32Array,
+    cell: number,
+    removedValue: number,
+  ): boolean {
+    const bit = 1 << (removedValue - 1)
+    if ((FULL_DIGIT_MASK & ~(rowUsed[ROW_OF[cell]] | colUsed[COL_OF[cell]] | boxUsed[BOX_OF[cell]])) === bit) {
+      return true
+    }
+    for (const unitIndex of UNITS_OF_CELL[cell]) {
+      let onlyPlace = true
+      for (const other of UNIT_CELLS[unitIndex]) {
+        if (
+          other !== cell &&
+          puzzle[ROW_OF[other]][COL_OF[other]] === 0 &&
+          ((rowUsed[ROW_OF[other]] | colUsed[COL_OF[other]] | boxUsed[BOX_OF[other]]) & bit) === 0
+        ) {
+          onlyPlace = false
+          break
+        }
+      }
+      if (onlyPlace) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Is a uniquely solvable puzzle still uniquely solvable after the clue
+   * `removedValue` was taken out of `cell`? `closed` is the singles closure
+   * of the puzzle without it.
+   *
+   * Exactly `this.solver.solve(puzzle).status === 'solved'` (verified:
+   * dragon-research/plain-dragon-gen/unique-check.ts), but that was 70% of a
+   * worker's time with nothing disregarded: it counts solutions from the
+   * bare clues, so on every removal it re-finds the solution we already know
+   * and then exhausts the rest of the tree. What the caller knows makes the
+   * question much smaller:
+   *
+   * - The puzzle had ONE solution before the removal, with `removedValue` in
+   *   `cell`. Every solution of the reduced puzzle that still has it there
+   *   is a solution of the old one, i.e. that same one. So the reduced puzzle
+   *   is unique exactly when it has NO solution with another digit in `cell`.
+   * - Singles are forced in every solution. If the closure fills `cell` (or
+   *   the whole board), no other digit can go there: unique, no search - by
+   *   far the usual case while a grid still has many clues. Otherwise the
+   *   search starts from the closure, not the bare clues, and only looks for
+   *   one solution per other digit of `cell`; when there is none (a removal
+   *   that is kept), those subtrees die quickly.
+   */
+  private staysUniqueWithout(closed: SinglesClosure, cell: number, removedValue: number): boolean {
+    const row = (cell / BOARD_SIZE) | 0
+    const col = cell % BOARD_SIZE
+    if (closed.cells[cell] !== 0) {
+      return true
+    }
+    const grid = closed.cells.slice()
+    const rowUsed = closed.rowUsed.slice()
+    const colUsed = closed.colUsed.slice()
+    const boxUsed = closed.boxUsed.slice()
+    // Only the cells still empty are ever looked at: scanning all 81 for the
+    // next cell was most of this search's time.
+    const open = new Int32Array(closed.empty)
+    let openCount = 0
+    for (let i = 0; i < CELL_COUNT; i++) {
+      if (grid[i] === 0) {
+        open[openCount++] = i
+      }
+    }
+    // Any solution from here? Minimum-remaining-values backtracking.
+    const solvable = (): boolean => {
+      let best = -1
+      let bestMask = 0
+      let bestCount = BOARD_SIZE + 1
+      let anyEmpty = false
+      for (let k = 0; k < openCount; k++) {
+        const i = open[k]
+        if (grid[i] !== 0) {
+          continue
+        }
+        anyEmpty = true
+        const mask = FULL_DIGIT_MASK & ~(rowUsed[ROW_OF[i]] | colUsed[COL_OF[i]] | boxUsed[BOX_OF[i]])
+        if (mask === 0) {
+          return false
+        }
+        const count = POPCOUNT9[mask]
+        if (count < bestCount) {
+          best = i
+          bestMask = mask
+          bestCount = count
+          if (count === 1) {
+            break
+          }
+        }
+      }
+      if (!anyEmpty) {
+        return true
+      }
+      const r = ROW_OF[best]
+      const c = COL_OF[best]
+      const box = BOX_OF[best]
+      for (let m = bestMask; m !== 0; m &= m - 1) {
+        const bit = m & -m
+        grid[best] = 1
+        rowUsed[r] |= bit
+        colUsed[c] |= bit
+        boxUsed[box] |= bit
+        const found = solvable()
+        grid[best] = 0
+        rowUsed[r] &= ~bit
+        colUsed[c] &= ~bit
+        boxUsed[box] &= ~bit
+        if (found) {
+          return true
+        }
+      }
+      return false
+    }
+    const box = BOX_OF[cell]
+    const others = FULL_DIGIT_MASK & ~(rowUsed[row] | colUsed[col] | boxUsed[box]) & ~(1 << (removedValue - 1))
+    for (let m = others; m !== 0; m &= m - 1) {
+      const bit = m & -m
+      grid[cell] = 1
+      rowUsed[row] |= bit
+      colUsed[col] |= bit
+      boxUsed[box] |= bit
+      const found = solvable()
+      grid[cell] = 0
+      rowUsed[row] &= ~bit
+      colUsed[col] &= ~bit
+      boxUsed[box] &= ~bit
+      if (found) {
+        return false
+      }
+    }
+    return true
   }
 
   /** Builds the board+candidates state to hand back, or null if this clue
@@ -515,12 +732,13 @@ export class SudokuDragonPuzzleGenerator {
       enabledFish,
       alsXzEnabled,
     }: CheckpointTarget,
+    // The singles closure of clueBoard, when the caller already has it.
+    closed: SinglesClosure = this.solveWithSinglesOnly(clueBoard),
   ): { board: Board; candidates: CandidateGrid } | null {
-    const { board, candidates } = this.solveWithSinglesOnly(clueBoard)
-
-    if (this.isFullySolved(board)) {
+    if (closed.empty === 0) {
       return null
     }
+    const { board, candidates } = this.withCandidates(closed)
     if (this.lockedCandidateFinder.findEliminations(board, candidates).length > 0) {
       return null
     }

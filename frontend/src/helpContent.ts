@@ -274,20 +274,13 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Enable Extended UR',
             settingKey: 'extendedUrEnabled',
             description:
-              'Enable Extended Unique Rectangles (Type 1) to be found by the solver: a Unique Rectangle on one of the four 6-cell deadly patterns ' +
-              "(two 2-by-3 rectangles of three digits, two loops of two digits). Five of the six cells hold only the pattern's digits, " +
-              'so the sixth must be one of its other candidates. Ranked just after the Short Single-Digit AICs. ' +
-              'It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu), and its lesson appears under ' +
-              "Learn techniques, Abusing Uniqueness. No auto-solve button, and it doesn't affect puzzle generation.",
+              'Enable Extended Unique Rectangles (Type 1) to be found by the solver.  Recognizes only 8-cell patterns.'
           },
           {
             name: 'Enable Grouped AIC',
             settingKey: 'groupedAicEnabled',
             description:
-              'Enable Grouped AIC to be found by the solver: a Generic AIC whose links may go through a group - a digit\'s two or three ' +
-              'candidates in one box and one row or column, read as "the digit is in one of these cells". ' +
-              'A grouped chain is only listed when no easier technique (a Generic AIC included) already makes its eliminations, ' +
-              'unless "All Possible Techniques" is on. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).',
+              'Enable Grouped AIC to be found by the solver.',
           },
           {
             name: 'Enable ALS-xz',
@@ -422,6 +415,19 @@ export const HELP_TABS: HelpTab[] = [
               'candidates eliminated, then the simplest).\n\n' +
               'ON: each step takes the simplest technique regardless of progress; ties go to the shortest Dragon, ' +
               'then most candidates eliminated.',
+          },
+          {
+            name: 'Prefer easier double dragons',
+            settingKey: 'preferEasierDoubleDragons',
+            description:
+              'Only available while Easy Solve is ON (turning Easy Solve off turns this off too), and only matters ' +
+              'with Double Dynamic Dragon Colouring enabled.\n\n' +
+              'When every single Dynamic Dragon on the grid needs an Unfair technique, the Techniques list also shows ' +
+              'the Double Dynamic Dragons that work without any Unfair technique. Likewise, when every single Dynamic ' +
+              'Dragon needs something beyond the Defaults, it also shows the Double Dynamic Dragons that use only the ' +
+              'Defaults.\n\n' +
+              'ON: the solve path treats those Double Dynamic Dragons as easier than a single Dynamic Dragon.\n\n' +
+              'OFF: a Double Dynamic Dragon is always the hardest technique.',
           },
           {
             name: 'Timeout',
