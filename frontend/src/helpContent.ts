@@ -95,9 +95,7 @@ export const HELP_TABS: HelpTab[] = [
             settingKey: 'minBaseMedusaFilter',
             description:
               `ON: the Techniques panel only lists Dragons whose starting Medusa has at least ` +
-              `${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates, i.e. the easily spotted ones, and the Solve Path ` +
-              'only takes those Dragons (so it can get stuck where a smaller Medusa would have carried on). ' +
-              'Auto-solve and the "Solvable" check under the grid ignore it.',
+              `${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates, i.e. the easily spotted ones. `
           },
         ],
       },
@@ -162,13 +160,7 @@ export const HELP_TABS: HelpTab[] = [
             //settingKey: 'allowedRule3Techniques',
             description:
               "The most important setting for Dynamic Dragons. Controls the non-colouring and non-singles techniques Dynamic Dragon may use to extend the Dragon colouring. " +
-              'Locked Candidates & Naked Pair are always ON.\n\n' +
-              'The techniques are grouped into four sections; click a section name to open or close it. ' +
-              'Defaults: up to Avoidable Rectangle. ' +
-              'Advanced Techniques: X-Wing, Short Single-Digit AIC, Finned X-Wing and Short AIC. ' +
-              'Brutal Techniques (closed at first): Swordfish, Finned Swordfish and Generic AIC - challenging to spot for a human within a Dragon. ' +
-              'Unfair Techniques (closed at first): Extended UR, Grouped AIC, ALS-xz, UR-AIC and ALS-AIC - inhumane to spot within a Dragon. ' +
-              'A closed section keeps its ticks; closing it does not turn its techniques off.',
+              '\n\n Locked Candidates & Naked Pair are always ON.'
           },
         ],
       },
@@ -182,14 +174,14 @@ export const HELP_TABS: HelpTab[] = [
         title: 'Basic Techniques',
         intro:
           'Naked Singles, Hidden Singles, Naked Pairs, Locked Candidates, Naked Triples, Naked Quads and Hidden Pairs. ' +
-          'These are always used by the solver and cannot be turned off; the list is collapsed by default.',
+          'These are always used by the solver and cannot be turned off.',
         items: [],
       },
       {
         title: 'Colouring Techniques',
         intro:
           'Simple Colouring, 3D Medusa and Dragon Colouring are always used by the solver and cannot be turned off. ' +
-          'Double Dragon, Dynamic Dragon and Double Dynamic Dragon Colouring can be turned off here or in the Dragon Configuration menu - both places change the same setting.',
+          'Double Dragon, Dynamic Dragon and Double Dynamic Dragon Colouring can be turned off here or in the Dragon Configuration menu.',
         items: [
           {
             name: 'Double Dragon Colouring',
@@ -355,7 +347,7 @@ export const HELP_TABS: HelpTab[] = [
           {
             name: HOTKEY_LABELS.copyGrid,
             defaultText: formatHotkey(DEFAULT_HOTKEYS.copyGrid),
-            description: 'Same as the Copy Puzzle As-Is button: copies the current progress (givens, solved cells, candidates and colours) as a string that pastes into Sudoku.Coach (without the colours) or back into this app.',
+            description: 'Same as the Copy Puzzle As-Is button: copies the current progress (givens, solved cells, candidates and colours) as a string.',
           },
           {
             name: HOTKEY_LABELS.paste,
@@ -392,10 +384,10 @@ export const HELP_TABS: HelpTab[] = [
             name: 'All Possible Techniques',
             settingKey: 'allPossibleTechniques',
             description:
-              'OFF: a row is left out of the Techniques list when easier techniques already make all of its eliminations.\n\n' +
+            'This setting affects the Techniques List only.  Does not affect the Solve Path. \n\n' +
+              'OFF: The techniques list only shows a technique if there are no easier techniques that finds the same eliminations.\n\n' +
               'ON: every row of every enabled technique is listed, even when an easier technique finds the same eliminations - ' +
-              'unless the easier technique is one of the Basic Techniques (locked candidates, naked pairs/triples/quads, hidden pairs).\n\n' +
-              'Only the Techniques list changes: the Solve Path, the Solvable check and the Hint are the same either way.',
+              'unless the easier technique is one of the Basic techniques.\n\n',
           },
           {
             name: 'Prefer easiest techs within dragon',
@@ -405,9 +397,9 @@ export const HELP_TABS: HelpTab[] = [
               'Double Dynamic Dragon rows).\n\n' +
               'ON: the Dragon that needs the easiest techniques comes first. First, the hardest technique group it uses ' +
               '(Defaults, Advanced, Brutal, Unfair - the groups of Dragon Configuration\'s technique list). If tied, ' +
-              'the fewest techniques chained in a single step, counting only the Dragon\'s busiest step. If still ' +
+              'the fewest techniques used within a step, counting only the Dragon\'s busiest step. If still ' +
               'tied, the shortest Dragon.\n\n' +
-              'OFF: the shortest Dragon comes first, whatever techniques it needs.\n\n' +
+              'OFF: the shortest Dragon comes first, regardless of the technqiues used.\n\n' +
               'Only the order of the list changes. It is separate from the Solve Path tab\'s checkbox of the same name: ' +
               'neither affects the other.',
           },
@@ -514,17 +506,14 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Dynamic Dragon only uses defaults',
             settingKey: 'dynamicDragonPuzzleUsesDefaultsOnly',
             description:
-              'ON: "Double Dynamic Dragon Colouring puzzle" picks from a stock where the Dynamic Dragons need only the default ' +
-              'Dynamic Dragon techniques (at most 3 per step), checked with every other technique enabled except Sue-de-Coq, ' +
-              'so it holds whatever techniques you have enabled.' +
-              '\n\nOFF: Double Dynamic Dragon puzzles come from the stock that needs every Dynamic Dragon technique.' +
-              '\n\n"Dynamic Dragon Colouring puzzle" is the same either way: its Dynamic Dragon only ever uses the default techniques.',
+              'ON: The puzzle will be generated at a state where the Dynamic Dragon or Double Dynamic Dragon that progress the puzzle only uses Basic techniques.  ' +
+              '\n\nOFF: The puzzle is generated so that any Dynamic/Double Dynamic Dragon is fair game.',
           },
           {
             name: 'Dragon puzzle generation max timeout',
             settingKey: 'dragonGenerationTimeoutMs',
             description:
-              'How long to search before giving up. Keep this on the default value unless you are experiencing performance issues.',
+              'How long the generator tries to generate a proper puzzle before giving up. Keep this on the default value unless you are experiencing performance issues, as I do not expect searches to take longer than 30 seconds.',
           },
         ],
       },

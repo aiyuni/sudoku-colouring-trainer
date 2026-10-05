@@ -127,8 +127,6 @@ import {
   hiddenPairFinder,
   uniqueRectangleFinder,
   bugPlusNFinder,
-  avoidableRectangleFinder,
-  bivalueOddagonFinder,
   colorFinder,
   medusaFinder,
   NINE,
@@ -137,6 +135,8 @@ import {
   describeTargetProblem,
   cellRef,
   type DragonChainFilter,
+  computeDoubleDragonExtensions,
+  computeDoubleDynamicDragonExtensions,
   computeStuckDragonExtensions,
   computeStuckDynamicDragonExtensions,
   computeShortAicEliminationsByKind,
@@ -179,7 +179,7 @@ const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.8.5-beta'
+const APP_VERSION = 'v0.8.7-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -3854,80 +3854,6 @@ export default function App() {
     setStatus(`${bugPlusNName(bug)}: ${bugPlusNEliminationsText(bug)}.`)
   }
 
-  function onAvoidableRectangle() {
-    // Needs no full candidates: every elimination is of a mark that's there.
-    const instances = avoidableRectangleFinder.find(board, candidates, givens)
-    if (instances.length === 0) {
-      setStatus('No Avoidable Rectangle deductions to apply.')
-      return
-    }
-    const nextCandidates = cloneCandidates(candidates)
-    let count = 0
-    for (const { row, col, digit } of instances.flatMap((ar) => ar.eliminations)) {
-      if (nextCandidates[row][col][digit - 1]) {
-        nextCandidates[row][col][digit - 1] = false
-        count++
-      }
-    }
-    commitAutoSolve({ board, givens, candidates: nextCandidates })
-    setStatus(`Avoidable Rectangle removed ${count} candidate${count === 1 ? '' : 's'}.`)
-  }
-
-  function onBivalueOddagon() {
-    if (!pairFinder.hasFullCandidates(board, candidates)) {
-      setStatus('Bivalue Oddagon needs every empty cell to have its candidates marked first — try Autofill all.')
-      return
-    }
-
-    const instances = bivalueOddagonFinder.find(board, candidates)
-    if (instances.length === 0) {
-      setStatus('No Bivalue Oddagon deductions to apply.')
-      return
-    }
-
-    const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
-    const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
-    for (const oddagon of instances) {
-      if (oddagon.solvedCell) {
-        const [row, col] = oddagon.solvedCell
-        solvedByCell.set(`${row},${col}`, { row, col, digit: oddagon.guardianDigit })
-      }
-      for (const { row, col, digit } of oddagon.eliminations) {
-        eliminatedByCell.set(`${row},${col},${digit}`, { row, col, digit })
-      }
-    }
-
-    const solvedAssignments = Array.from(solvedByCell.values())
-    const eliminations = Array.from(eliminatedByCell.values())
-
-    const nextBoard = cloneBoard(board)
-    for (const { row, col, digit } of solvedAssignments) {
-      nextBoard[row][col] = digit
-    }
-
-    const nextCandidates = cloneCandidates(candidates)
-    for (const { row, col, digit } of solvedAssignments) {
-      nextCandidates[row][col] = Array(9).fill(false)
-      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
-    }
-    for (const { row, col, digit } of eliminations) {
-      if (nextBoard[row][col] === 0) {
-        nextCandidates[row][col][digit - 1] = false
-      }
-    }
-
-    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
-
-    const parts: string[] = []
-    if (solvedAssignments.length > 0) {
-      parts.push(`solved ${solvedAssignments.length} cell${solvedAssignments.length === 1 ? '' : 's'}`)
-    }
-    if (eliminations.length > 0) {
-      parts.push(`eliminated ${eliminations.length} candidate${eliminations.length === 1 ? '' : 's'}`)
-    }
-    setStatus(`Bivalue Oddagon ${parts.join(' and ')}.`)
-  }
-
   function onSimpleColoring() {
     const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
     const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
@@ -4204,10 +4130,29 @@ export default function App() {
     )
   }
 
+  /** Whether auto-solve may apply a Dragon whose steps used these Dynamic
+   * techniques - shared by the Dynamic and Double Dynamic buttons. */
+  function dynamicDragonAutoSolveAllows(moves: DragonMove[]) {
+    const uses = (techniques: Rule3Technique[]) =>
+      moves.some((move) => (move.dynamicTechniques ?? []).some((t) => techniques.includes(t)))
+    // Grouped AIC, ALS-xz, UR-AIC and ALS-AIC are never auto-solved, not even inside
+    // a Dynamic Dragon chain - no setting opts back in.
+    if (uses(['grouped aic', 'als-xz', 'ur-aic', 'als-aic'])) {
+      return false
+    }
+    // Default: a chain whose steps needed an AIC (either kind) anywhere
+    // is left entirely untouched by auto-solve, even if AICs are
+    // otherwise enabled for Dynamic Dragon Colouring - the "Dynamic
+    // Dragon Colouring auto-solve includes AICs?" setting is what
+    // opts back in (its checkbox is hidden by request; only a value
+    // saved before then, or Reset to defaults, still changes it).
+    return dynamicDragonAutoSolveIncludesAics || !uses(['short aic', 'short single-digit aic', 'generic aic'])
+  }
+
   function onDynamicDragonColouring() {
     runDragonColouring(
-      (b, c, f) => {
-        const results = computeStuckDynamicDragonExtensions(
+      (b, c, f) =>
+        computeStuckDynamicDragonExtensions(
           b,
           c,
           f,
@@ -4219,33 +4164,40 @@ export default function App() {
           optimizeDynamicDragons,
           maxTechniquesPerDragonStep,
           givens,
-        )
-        // Grouped AIC, ALS-xz, UR-AIC and ALS-AIC are never auto-solved, not even inside
-        // a Dynamic Dragon chain - no setting opts back in.
-        const withoutAlsXz = results.filter(
-          ({ moves }) =>
-            !moves.some((move) => (move.dynamicTechniques ?? []).some((t) => t === 'grouped aic' || t === 'als-xz' || t === 'ur-aic' || t === 'als-aic')),
-        )
-        if (dynamicDragonAutoSolveIncludesAics) {
-          return withoutAlsXz
-        }
-        // Default: a chain whose steps needed an AIC (either kind) anywhere
-        // is left entirely untouched by auto-solve, even if AICs are
-        // otherwise enabled for Dynamic Dragon Colouring - the "Dynamic
-        // Dragon Colouring auto-solve includes AICs?" setting is what
-        // opts back in (its checkbox is hidden by request; only a value
-        // saved before then, or Reset to defaults, still changes it).
-        return withoutAlsXz.filter(
-          ({ moves }) =>
-            !moves.some((move) =>
-              (move.dynamicTechniques ?? []).some(
-                (t) => t === 'short aic' || t === 'short single-digit aic' || t === 'generic aic',
-              ),
-            ),
-        )
-      },
+        ).filter(({ moves }) => dynamicDragonAutoSolveAllows(moves)),
       'any',
       'Dynamic Dragon Colouring',
+    )
+  }
+
+  // The two Double buttons take every pair of stuck chains (no Medusa filter,
+  // like the single Dragon buttons' 0 minimum base candidates).
+  function onDoubleDragonColouring() {
+    runDragonColouring(
+      (b, c) => computeDoubleDragonExtensions(b, c, 0, exhaustiveDragonColouring, optimizeDragons),
+      'any',
+      'Double Dragon Colouring',
+    )
+  }
+
+  function onDoubleDynamicDragonColouring() {
+    runDragonColouring(
+      (b, c) =>
+        computeDoubleDynamicDragonExtensions(
+          b,
+          c,
+          0,
+          effectiveAllowedRule3Techniques,
+          aicLimitPerDragonStep,
+          maxTechniquesPerDragonStep,
+          exhaustiveDragonColouring,
+          optimizeDragons,
+          optimizeDynamicDragons,
+          doubleDragonEnabled,
+          givens,
+        ).filter(({ moves }) => dynamicDragonAutoSolveAllows(moves)),
+      'any',
+      'Double Dynamic Dragon Colouring',
     )
   }
 
@@ -7714,24 +7666,6 @@ export default function App() {
           >
             BUG+1
           </button>
-          <button
-            type="button"
-            className="autosolve-button"
-            disabled={busy || filled === 81}
-            onClick={onAvoidableRectangle}
-            title="Auto-solve all visible Avoidable Rectangles (Types 1 and 2)."
-          >
-            Avoidable rectangle
-          </button>
-          <button
-            type="button"
-            className="autosolve-button"
-            disabled={busy || filled === 81}
-            onClick={onBivalueOddagon}
-            title="Auto-solve all visible Bivalue Oddagons."
-          >
-            Bivalue Oddagon
-          </button>
         </div>
       </div>
       <div className="autosolve-subgroup">
@@ -7785,6 +7719,32 @@ export default function App() {
             }
           >
             Dynamic Dragon
+          </button>
+          <button
+            type="button"
+            className="autosolve-button"
+            disabled={busy || !hasAnyCandidates || filled === 81 || !doubleDragonEnabled}
+            onClick={() => runAutoSolve('Double Dragon Colouring', onDoubleDragonColouring)}
+            title={
+              doubleDragonEnabled
+                ? 'Auto-solve Double Dragons (two linked Non-dynamic Dragons).'
+                : 'Double Dragon Colouring is switched off in Dragon Configuration'
+            }
+          >
+            Double Plain Dragon
+          </button>
+          <button
+            type="button"
+            className="autosolve-button"
+            disabled={busy || !hasAnyCandidates || filled === 81 || !doubleDynamicDragonEnabled || dynamicDragonDisabled}
+            onClick={() => runAutoSolve('Double Dynamic Dragon Colouring', onDoubleDynamicDragonColouring)}
+            title={
+              doubleDynamicDragonEnabled && !dynamicDragonDisabled
+                ? 'Auto-solve Double Dynamic Dragons.  Ones that use AIC will be solved based on the Setting.'
+                : 'Double Dynamic Dragon Colouring is switched off in Dragon Configuration'
+            }
+          >
+            Double Dynamic Dragon
           </button>
         </div>
       </div>
