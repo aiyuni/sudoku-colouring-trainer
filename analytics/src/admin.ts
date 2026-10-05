@@ -171,6 +171,7 @@ function readFilters(url: URL): Filters {
 const VISITS = 'visits v JOIN visitors vr ON vr.visitor_id = v.visitor_id'
 const AREAS = 'visit_areas a JOIN visits v ON v.visit_id = a.visit_id JOIN visitors vr ON vr.visitor_id = v.visitor_id'
 const EVENTS = 'events e JOIN visits v ON v.visit_id = e.visit_id JOIN visitors vr ON vr.visitor_id = v.visitor_id'
+const QUIZ = 'quiz_answers q JOIN visits v ON v.visit_id = q.visit_id JOIN visitors vr ON vr.visitor_id = v.visitor_id'
 
 async function all<T = Record<string, unknown>>(db: D1Database, sql: string, params: unknown[]): Promise<T[]> {
   return (await db.prepare(sql).bind(...params).all<T>()).results
@@ -312,6 +313,10 @@ const EXPORTS: Record<string, (f: Filters) => string> = {
   events: (f) =>
     `SELECT e.id, e.visit_id, e.visitor_id, vr.label AS visitor_label, e.occurred_at, e.category, e.name, e.label, e.value, e.count
      FROM ${EVENTS} ${f.where} ORDER BY e.occurred_at, e.id`,
+  quiz: (f) =>
+    `SELECT q.id, q.visit_id, q.visitor_id, vr.label AS visitor_label, q.answered_at, q.quiz_id, q.run_id, q.question_index,
+            q.question_count, q.question_id, q.question_kind, q.wrong_attempts, q.first_try, q.revealed, q.duration_ms
+     FROM ${QUIZ} ${f.where} ORDER BY q.answered_at, q.id`,
 }
 
 function csvCell(value: unknown): string {

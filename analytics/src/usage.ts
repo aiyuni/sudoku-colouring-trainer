@@ -2,6 +2,8 @@
 // - engaged time per area and merged events for one visit, plus (on a page
 // load's first batch) the page context. Written to the visitors, visits,
 // visit_areas and events tables (migration 0003), never to puzzle_imports.
+// Answered practice-quiz questions ride along in the same batch (`quiz`) and
+// go to quiz_answers (migration 0004).
 //
 // Everything the client says is treated as untrusted: ids and names are
 // length- and charset-checked, times and counts clamped, and timestamps come
@@ -12,6 +14,11 @@ import { describeDevice, parseHints } from './device'
 const MAX_BODY_BYTES = 32 * 1024
 const MAX_AREAS = 60
 const MAX_EVENTS = 200
+const MAX_QUIZ_ANSWERS = 60
+const QUIZ_ID_PATTERN = /^[a-z0-9][a-z0-9/-]{0,79}$/
+const QUIZ_KINDS = new Set(['choice', 'cells', 'candidates', 'colour'])
+const MAX_QUIZ_QUESTIONS = 50
+const MAX_QUIZ_QUESTION_MS = 60 * 60_000
 // A batch covers about a minute; the last one before a tab closes can hold
 // longer (a flush is skipped while hidden). Anything above this is bogus.
 const MAX_AREA_MS = 2 * 60 * 60_000
@@ -26,6 +33,19 @@ interface UsageEvent {
   label: string | null
   value: number | null
   count: number
+  age: number
+}
+
+interface QuizAnswer {
+  quiz: string
+  run: string
+  question: string
+  kind: string
+  index: number
+  total: number
+  misses: number
+  revealed: number
+  ms: number | null
   age: number
 }
 
@@ -47,6 +67,7 @@ interface UsageBatch {
   visit: string
   areas: Array<[string, number]>
   events: UsageEvent[]
+  quiz: QuizAnswer[]
   context: UsageContext | null
 }
 
@@ -61,6 +82,53 @@ function text(value: unknown, max: number): string | null {
 
 function flag(value: unknown): number | null {
   return typeof value === 'boolean' ? (value ? 1 : 0) : null
+}
+
+function wholeNumber(value: unknown, min: number, max: number): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? Math.round(value) : null
+}
+
+function parseQuizAnswers(raw: unknown): QuizAnswer[] {
+  const answers: QuizAnswer[] = []
+  if (!Array.isArray(raw)) {
+    return answers
+  }
+  for (const item of raw.slice(0, MAX_QUIZ_ANSWERS)) {
+    if (typeof item !== 'object' || item === null) continue
+    const a = item as Record<string, unknown>
+    const question = text(a.question, 80)
+    const index = wholeNumber(a.index, 0, MAX_QUIZ_QUESTIONS - 1)
+    const total = wholeNumber(a.total, 1, MAX_QUIZ_QUESTIONS)
+    const misses = wholeNumber(a.misses, 0, 999)
+    if (
+      typeof a.quiz !== 'string' ||
+      !QUIZ_ID_PATTERN.test(a.quiz) ||
+      typeof a.run !== 'string' ||
+      !ID_PATTERN.test(a.run) ||
+      typeof a.kind !== 'string' ||
+      !QUIZ_KINDS.has(a.kind) ||
+      !question ||
+      index === null ||
+      total === null ||
+      index >= total ||
+      misses === null
+    ) {
+      continue
+    }
+    answers.push({
+      quiz: a.quiz,
+      run: a.run,
+      question,
+      kind: a.kind,
+      index,
+      total,
+      misses,
+      revealed: a.revealed === true ? 1 : 0,
+      ms: wholeNumber(a.ms, 0, MAX_QUIZ_QUESTION_MS),
+      age: typeof a.age === 'number' && Number.isFinite(a.age) ? Math.max(0, Math.min(a.age, MAX_EVENT_AGE_MS)) : 0,
+    })
+  }
+  return answers
 }
 
 function parseBatch(raw: string): UsageBatch | null {
@@ -131,7 +199,7 @@ function parseBatch(raw: string): UsageBatch | null {
       device: c.device,
     }
   }
-  return { visitor: b.visitor, visit: b.visit, areas, events, context }
+  return { visitor: b.visitor, visit: b.visit, areas, events, quiz: parseQuizAnswers(b.quiz), context }
 }
 
 export async function handleSync(request: Request, db: D1Database, ctx: ExecutionContext): Promise<number> {
@@ -269,7 +337,41 @@ export async function handleSync(request: Request, db: D1Database, ctx: Executio
     )
   }
 
+  // Quiz answers go in a transaction of their own, after the visit exists:
+  // if quiz_answers is missing (this Worker deployed before migration 0004),
+  // only they are lost, not the whole usage batch. A resent answer is ignored
+  // (UNIQUE run_id + question_index).
+  const quizInsert = db.prepare(
+    `INSERT OR IGNORE INTO quiz_answers (visit_id, visitor_id, answered_at, quiz_id, run_id, question_id, question_kind,
+                                         question_index, question_count, wrong_attempts, first_try, revealed, duration_ms)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+     WHERE EXISTS (SELECT 1 FROM visits WHERE visit_id = ?1 AND visitor_id = ?2)`,
+  )
+  const quizStatements = batch.quiz.map((a) =>
+    quizInsert.bind(
+      batch.visit,
+      batch.visitor,
+      new Date(now - a.age).toISOString(),
+      a.quiz,
+      a.run,
+      a.question,
+      a.kind,
+      a.index,
+      a.total,
+      a.misses,
+      a.misses === 0 ? 1 : 0,
+      a.revealed,
+      a.ms,
+    ),
+  )
+
   // Respond at once; the writes (one transaction) finish in the background.
-  ctx.waitUntil(db.batch(statements).catch((err) => console.error('D1 usage batch failed', err)))
+  ctx.waitUntil(
+    db
+      .batch(statements)
+      .catch((err) => console.error('D1 usage batch failed', err))
+      .then(() => (quizStatements.length > 0 ? db.batch(quizStatements) : undefined))
+      .catch((err) => console.error('D1 quiz batch failed', err)),
+  )
   return 204
 }

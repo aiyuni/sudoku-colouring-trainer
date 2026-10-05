@@ -120,6 +120,26 @@ migration `0003`:
 - **Imports** also appear as `events` rows (`category = 'import'`, `label` = the
   81-char puzzle). That ties each import to a visitor, and you can join it to `puzzle_imports.puzzle`.
 
+### Practice quizzes
+
+The How It Works practice quizzes send one row per answered question in the same
+batches, stored in `quiz_answers` (migration `0004`). `quiz_id` is the lesson
+(`basics/singles`, `medusa`, `uniqueness/ur-type-1`, ...), `run_id` is one pass
+through a quiz, `wrong_attempts` counts wrong taps before the right answer, and
+`first_try` = 1 means there were none. The app shows no score, so "accuracy" below
+means the share of questions answered right first time.
+
+| view | one row per | use it for |
+|---|---|---|
+| `quiz_visitor_summary` | visitor × quiz | who has done which quiz, how often, first / best / average accuracy |
+| `quiz_runs` | pass through a quiz | whether it was finished, accuracy, wrong attempts, seconds |
+| `quiz_summary` | quiz | visitors, runs, completion rate, average accuracy |
+| `quiz_question_summary` | question | first-try rate per question, to spot one that is too hard or badly worded |
+
+A quiz also leaves `events` rows (`category = 'quiz'`, `name` = `Started` /
+`Completed`, `label` = the quiz id), so it shows in a visit's timeline on the
+dashboard. **Export → Practice quiz answers** downloads `quiz_answers` as CSV.
+
 ### Setup (once)
 
 ```sh
@@ -188,6 +208,18 @@ $D1 "SELECT name, label, SUM(count) n FROM events WHERE category = 'technique' G
 
 # long tasks (puzzle generation etc): how long they take, how often they're cancelled
 $D1 "SELECT name, label, COUNT(*) n, ROUND(AVG(value)/1000, 1) avg_seconds FROM events WHERE category = 'task' GROUP BY 1, 2 ORDER BY n DESC"
+
+# practice quizzes: which visitor has done which quiz, and how well
+$D1 "SELECT * FROM quiz_visitor_summary ORDER BY last_run_at DESC"
+
+# one visitor's quiz runs
+$D1 "SELECT quiz_id, started_at, completed, accuracy_pct, wrong_attempts, seconds FROM quiz_runs WHERE visitor_id = '<id>' ORDER BY started_at"
+
+# per quiz: how many try it, finish it, and how accurate they are
+$D1 "SELECT * FROM quiz_summary ORDER BY runs DESC"
+
+# the questions people most often get wrong first time
+$D1 "SELECT * FROM quiz_question_summary WHERE answers >= 5 ORDER BY first_try_pct LIMIT 20"
 
 # imports with the visitor who made them
 $D1 "SELECT occurred_at, visitor_id, name, label AS puzzle FROM events WHERE category = 'import' ORDER BY occurred_at DESC LIMIT 50"

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AREA_LAYER, useAnalyticsArea } from '../usageTracking'
+import QuizPlayer from './QuizPlayer'
+import { buildColourQuiz, buildGroupQuiz, quizIdFor } from './quizExamples'
+import { useQuizzesDone } from './quizProgress'
+import type { Quiz } from './quizTypes'
 import TutorialGrid from './TutorialGrid'
 import {
   buildBasicsGroups,
@@ -155,12 +159,14 @@ function Legend({ lesson }: { lesson: TutorialLesson }) {
 interface LessonPlayerProps {
   lesson: TutorialLesson
   initialStep?: number
+  /** Opens the lesson's practice quiz; offered on the last step. */
+  onPractice?: () => void
 }
 
 /** One example, revealed a step at a time. Each step is a `TutorialFrame`
  * that lists exactly what to show, so Back/Next just swap which frame is on
  * screen - the newest candidate carries a ring so the eye lands on it. */
-export function LessonPlayer({ lesson, initialStep = 0 }: LessonPlayerProps) {
+export function LessonPlayer({ lesson, initialStep = 0, onPractice }: LessonPlayerProps) {
   const total = lesson.frames.length
   const [step, setStep] = useState(Math.min(initialStep, total - 1))
   const frame = lesson.frames[step]
@@ -208,9 +214,16 @@ export function LessonPlayer({ lesson, initialStep = 0 }: LessonPlayerProps) {
             ← Back
           </button>
           {atEnd ? (
-            <button type="button" className="primary" onClick={() => setStep(0)}>
-              ↺ Replay
-            </button>
+            <>
+              <button type="button" className={onPractice ? undefined : 'primary'} onClick={() => setStep(0)}>
+                ↺ Replay
+              </button>
+              {onPractice && (
+                <button type="button" className="primary" data-track="Practice (end of lesson)" onClick={onPractice}>
+                  Practice →
+                </button>
+              )}
+            </>
           ) : (
             <button type="button" className="primary" onClick={() => setStep((s) => Math.min(s + 1, total - 1))}>
               Next →
@@ -243,6 +256,7 @@ function GroupTabs({
   render: (group: LessonGroup) => ReactNode
 }) {
   const shown = groups.filter((group) => group.lessons.length > 0)
+  const quizzesDone = useQuizzesDone()
   const [index, setIndex] = useState(() => Math.max(0, shown.findIndex((g) => g.title === initialGroup)))
   const group = shown[Math.min(index, shown.length - 1)]
   // Which technique of this tab is being read (the tab itself is tracked by
@@ -261,9 +275,11 @@ function GroupTabs({
             role="tab"
             aria-selected={i === index}
             className={['tutorial-subtab', i === index ? 'active' : ''].filter(Boolean).join(' ')}
+            data-track={candidate.title}
             onClick={() => setIndex(i)}
           >
             {candidate.title}
+            {quizzesDone.has(quizIdFor(tab, candidate.title)) && <DoneMark />}
           </button>
         ))}
       </div>
@@ -275,6 +291,39 @@ function GroupTabs({
   )
 }
 
+/** The ✓ a finished practice quiz leaves on its pill and its sub-tab. */
+function DoneMark() {
+  return (
+    <span className="tutorial-done-mark" role="img" aria-label="practice completed">
+      ✓
+    </span>
+  )
+}
+
+/** The pill that opens a lesson's practice quiz. It sits with the example
+ * pills, so practice is one tap away without stepping through the lesson. */
+function PracticePill({ quiz, active, onClick }: { quiz: Quiz; active: boolean; onClick: () => void }) {
+  const done = useQuizzesDone().has(quiz.id)
+  return (
+    <button
+      type="button"
+      className={['tutorial-pill', 'tutorial-pill-practice', active ? 'active' : ''].filter(Boolean).join(' ')}
+      aria-pressed={active}
+      data-track="Practice"
+      onClick={onClick}
+    >
+      <span aria-hidden="true">✎ </span>
+      Practice
+      {done && <DoneMark />}
+    </button>
+  )
+}
+
+function practiceAreaName(tab: TabId, groupTitle?: string): string {
+  const label = TABS.find((t) => t.id === tab)?.label ?? tab
+  return ['How It Works', label, groupTitle, 'Practice'].filter(Boolean).join(' › ')
+}
+
 /** Basics: every step of the technique's example(s) on screen at once, side by side. */
 function BasicsView({ initialGroup }: { initialGroup?: string }) {
   const groups = useMemo(() => buildBasicsGroups(), [])
@@ -284,7 +333,33 @@ function BasicsView({ initialGroup }: { initialGroup?: string }) {
       label="Basic techniques"
       tab="basics"
       initialGroup={initialGroup}
-      render={(group) => (
+      render={(group) => <BasicsGroup key={group.title} group={group} />}
+    />
+  )
+}
+
+/** One Basics sub-tab: its examples laid out as a strip, or its practice. */
+function BasicsGroup({ group }: { group: LessonGroup }) {
+  const quiz = useMemo(() => buildGroupQuiz('basics', group), [group])
+  const [practising, setPractising] = useState(false)
+  return (
+    <div className="tutorial-colour">
+      {quiz && (
+        <div className="tutorial-pills" role="group" aria-label="Lesson or practice">
+          <button
+            type="button"
+            className={['tutorial-pill', practising ? '' : 'active'].filter(Boolean).join(' ')}
+            aria-pressed={!practising}
+            onClick={() => setPractising(false)}
+          >
+            Lesson
+          </button>
+          <PracticePill quiz={quiz} active={practising} onClick={() => setPractising(true)} />
+        </div>
+      )}
+      {quiz && practising ? (
+        <QuizPlayer quiz={quiz} areaName={practiceAreaName('basics', group.title)} onExit={() => setPractising(false)} />
+      ) : (
         <section className="tutorial-card">
           {group.lessons.map((lesson) => (
             <div key={lesson.id} className="tutorial-example">
@@ -308,8 +383,15 @@ function BasicsView({ initialGroup }: { initialGroup?: string }) {
           ))}
         </section>
       )}
-    />
+    </div>
   )
+}
+
+/** A sub-tab played step by step (Abusing Uniqueness, Double Dragons), with
+ * its practice quiz. */
+function GroupLessons({ tab, group }: { tab: 'uniqueness' | 'double'; group: LessonGroup }) {
+  const quiz = useMemo(() => buildGroupQuiz(tab, group), [tab, group])
+  return <LessonSwitcher lessons={group.lessons} quiz={quiz} areaName={practiceAreaName(tab, group.title)} />
 }
 
 /** Double Dragons: a sub-tab each for plain and Dynamic, played step by step. */
@@ -321,7 +403,7 @@ function DoubleDragonView({ initialGroup }: { initialGroup?: string }) {
       label="Double Dragon techniques"
       tab="double"
       initialGroup={initialGroup}
-      render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
+      render={(group) => <GroupLessons key={group.title} tab="double" group={group} />}
     />
   )
 }
@@ -335,43 +417,57 @@ function UniquenessView({ initialGroup, extendedUrEnabled }: { initialGroup?: st
       label="Uniqueness techniques"
       tab="uniqueness"
       initialGroup={initialGroup}
-      render={(group) => <LessonSwitcher key={group.title} lessons={group.lessons} />}
+      render={(group) => <GroupLessons key={group.title} tab="uniqueness" group={group} />}
     />
   )
 }
 
 function ColourView({ tab }: { tab: ColourTabId }) {
   const lessons = useMemo(() => buildColourLessons(tab), [tab])
-  return <LessonSwitcher lessons={lessons} />
+  const quiz = useMemo(() => buildColourQuiz(tab, lessons), [tab, lessons])
+  return <LessonSwitcher lessons={lessons} quiz={quiz} areaName={practiceAreaName(tab)} />
 }
 
 /** One or more examples played step by step, with a pill per example when
- * there's more than one. */
-function LessonSwitcher({ lessons }: { lessons: TutorialLesson[] }) {
+ * there's more than one - and a last pill for the practice quiz, so it can be
+ * opened straight away, without stepping through a lesson first. */
+function LessonSwitcher({ lessons, quiz, areaName }: { lessons: TutorialLesson[]; quiz: Quiz | null; areaName: string }) {
   const [index, setIndex] = useState(0)
+  const [practising, setPractising] = useState(false)
   const lesson = lessons[Math.min(index, lessons.length - 1)]
   if (!lesson) {
     return <p className="tutorial-empty">This example isn't available right now.</p>
   }
+  const showLesson = (i: number) => {
+    setIndex(i)
+    setPractising(false)
+  }
   return (
     <div className="tutorial-colour">
-      {lessons.length > 1 && (
-        <div className="tutorial-pills" role="group" aria-label="Examples">
+      {(lessons.length > 1 || quiz) && (
+        <div className="tutorial-pills" role="group" aria-label={quiz ? 'Examples and practice' : 'Examples'}>
           {lessons.map((candidate, i) => (
             <button
               key={candidate.id}
               type="button"
-              className={['tutorial-pill', i === index ? 'active' : ''].filter(Boolean).join(' ')}
-              aria-pressed={i === index}
-              onClick={() => setIndex(i)}
+              className={['tutorial-pill', i === index && !practising ? 'active' : ''].filter(Boolean).join(' ')}
+              aria-pressed={i === index && !practising}
+              onClick={() => showLesson(i)}
             >
               {candidate.title}
             </button>
           ))}
+          {quiz && <PracticePill quiz={quiz} active={practising} onClick={() => setPractising(true)} />}
         </div>
       )}
-      {lesson.hint && <p className="tutorial-lesson-hint">{lesson.hint}</p>}
-      <LessonPlayer key={lesson.id} lesson={lesson} />
+      {quiz && practising ? (
+        <QuizPlayer quiz={quiz} areaName={areaName} onExit={() => setPractising(false)} />
+      ) : (
+        <>
+          {lesson.hint && <p className="tutorial-lesson-hint">{lesson.hint}</p>}
+          <LessonPlayer key={lesson.id} lesson={lesson} onPractice={quiz ? () => setPractising(true) : undefined} />
+        </>
+      )}
     </div>
   )
 }

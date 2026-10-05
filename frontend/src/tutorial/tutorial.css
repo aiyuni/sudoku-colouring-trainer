@@ -590,6 +590,376 @@
   }
 }
 
+/* ---- practice quiz (QuizPlayer): the lesson player's own layout, with a
+   tappable board and answer buttons where the caption and Back/Next are ---- */
+
+.tutorial-page {
+  --t-good-soft: #dcfce7;
+  --t-good-text: #166534;
+  --t-bad: #dc2626;
+  --t-bad-soft: #fee2e2;
+  --t-bad-text: #991b1b;
+}
+
+/* The pill that opens the practice sits with the example pills but reads as
+   something to do, not another example. */
+.tutorial-pill.tutorial-pill-practice {
+  font-weight: 700;
+  color: var(--t-accent-text);
+  border-color: var(--t-accent);
+  border-style: dashed;
+}
+
+.tutorial-pill.tutorial-pill-practice.active {
+  color: #fff;
+  background: var(--t-accent);
+  border-style: solid;
+}
+
+.tutorial-done-mark {
+  display: inline-block;
+  margin-left: 0.35rem;
+  font-weight: 800;
+  color: var(--t-good);
+}
+
+.tutorial-subtab.active .tutorial-done-mark,
+.tutorial-pill-practice.active .tutorial-done-mark {
+  color: inherit;
+}
+
+.tutorial-controls {
+  flex-wrap: wrap;
+}
+
+.tutorial-quiz-count {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--t-accent-text);
+}
+
+.tutorial-caption.tutorial-quiz-prompt {
+  min-height: 0;
+}
+
+/* The board: cells (and, with a mouse, single pencil marks) are targets. */
+.tutorial-grid.tutorial-grid-interactive .cell {
+  cursor: pointer;
+}
+
+.tutorial-grid.tutorial-grid-interactive .cell:hover:not(.given),
+.tutorial-grid.tutorial-grid-interactive .cell.given:hover {
+  box-shadow: inset 0 0 0 2px var(--t-accent, #2563eb);
+}
+
+.tutorial-grid.tutorial-grid-interactive .cell:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: -3px;
+  z-index: 3;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tutorial-grid.tutorial-grid-pips .candidate.active:hover {
+    outline: 2px solid #2563eb;
+    border-radius: 999px;
+    position: relative;
+    z-index: 2;
+  }
+}
+
+.tutorial-grid .cell.tutorial-quiz-selected,
+.tutorial-grid .cell.tutorial-quiz-selected:hover:not(.given) {
+  background: #dbeafe;
+  box-shadow: inset 0 0 0 3px #2563eb;
+}
+
+.tutorial-grid .cell.tutorial-quiz-hit,
+.tutorial-grid .cell.tutorial-quiz-hit:hover:not(.given) {
+  background: #dcfce7;
+  box-shadow: inset 0 0 0 3px #16a34a;
+}
+
+/* Given away after two misses: the same ring a lesson puts on its newest
+   candidate, pulsing so it can't be missed. */
+.tutorial-grid .cell.tutorial-quiz-reveal {
+  box-shadow: inset 0 0 0 3px #0f172a;
+  animation: tutorial-quiz-pulse 1.1s ease-in-out infinite;
+}
+
+.tutorial-grid.tutorial-grid-interactive .candidate.tutorial-fresh {
+  animation: tutorial-quiz-pulse 1.1s ease-in-out infinite;
+}
+
+.tutorial-grid .cell.tutorial-quiz-wrong,
+.tutorial-grid .cell.tutorial-quiz-wrong:hover:not(.given) {
+  background: #fee2e2;
+  animation: tutorial-quiz-shake 0.4s ease-in-out;
+}
+
+.tutorial-grid .candidate.tutorial-quiz-wrong {
+  position: relative;
+  z-index: 2;
+  outline: 2.5px solid #dc2626;
+  border-radius: 999px;
+  animation: tutorial-quiz-shake 0.4s ease-in-out;
+}
+
+@keyframes tutorial-quiz-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-9%);
+  }
+  40%,
+  80% {
+    transform: translateX(9%);
+  }
+}
+
+@keyframes tutorial-quiz-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Answer buttons. */
+.tutorial-quiz-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tutorial-quiz-option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--t-border);
+  border-radius: 0.7rem;
+  background: var(--t-surface);
+  color: var(--t-text);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.tutorial-quiz-option:hover:not(:disabled) {
+  border-color: var(--t-accent);
+  background: var(--t-accent-soft);
+}
+
+.tutorial-quiz-option-label {
+  flex: 1;
+}
+
+.tutorial-quiz-option-mark {
+  font-weight: 800;
+}
+
+.tutorial-quiz-option.right,
+.tutorial-quiz-option.right:disabled {
+  border-color: var(--t-good);
+  background: var(--t-good-soft);
+  color: var(--t-good-text);
+  opacity: 1;
+}
+
+.tutorial-quiz-option.wrong,
+.tutorial-quiz-option.wrong:disabled {
+  border-color: var(--t-bad);
+  background: var(--t-bad-soft);
+  color: var(--t-bad-text);
+  opacity: 0.8;
+  cursor: default;
+}
+
+.tutorial-quiz-option:disabled:not(.right):not(.wrong) {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* "Which candidate of r3c4?" - after a tap on a cell rather than on a mark. */
+.tutorial-quiz-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--t-accent);
+  border-radius: 0.7rem;
+  background: var(--t-accent-soft);
+}
+
+.tutorial-quiz-picker-label {
+  flex: 1 1 100%;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--t-accent-text);
+}
+
+.tutorial-quiz-digit {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--t-accent);
+  border-radius: 0.6rem;
+  background: var(--t-surface);
+  color: var(--t-text);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.tutorial-quiz-digit:hover {
+  background: var(--t-accent);
+  color: #fff;
+}
+
+/* What just happened, in one or two sentences. */
+.tutorial-quiz-feedback {
+  margin: 0;
+  min-height: 3.2em;
+  padding: 0.65rem 0.8rem;
+  border-radius: 0.7rem;
+  border: 1px solid transparent;
+  font-size: 0.98rem;
+  line-height: 1.4;
+}
+
+.tutorial-quiz-feedback.idle {
+  padding-left: 0;
+  color: var(--t-muted);
+}
+
+.tutorial-quiz-feedback.note {
+  border-color: var(--t-border);
+  background: var(--t-surface);
+  color: var(--t-muted);
+}
+
+.tutorial-quiz-feedback.good {
+  border-color: var(--t-good);
+  background: var(--t-good-soft);
+  color: var(--t-good-text);
+}
+
+.tutorial-quiz-feedback.bad {
+  border-color: var(--t-bad);
+  background: var(--t-bad-soft);
+  color: var(--t-bad-text);
+}
+
+.tutorial-quiz-feedback-mark {
+  margin-right: 0.45rem;
+  font-weight: 800;
+}
+
+/* Progress: one dot per question - green if right first time, amber if it
+   took another try. Not buttons, unlike a lesson's step dots. */
+.tutorial-quiz-dots .tutorial-dot.first-try {
+  border-color: var(--t-good);
+  background: var(--t-good);
+}
+
+.tutorial-quiz-dots .tutorial-dot.missed {
+  border-color: #d97706;
+  background: #d97706;
+}
+
+.tutorial-card.tutorial-quiz-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  max-width: 30rem;
+  margin: 1.5rem auto 0;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+
+.tutorial-quiz-summary h3 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.02em;
+}
+
+.tutorial-quiz-summary p {
+  margin: 0;
+  color: var(--t-muted);
+  line-height: 1.45;
+}
+
+.tutorial-quiz-summary-mark {
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  background: var(--t-good-soft);
+  color: var(--t-good);
+  font-size: 2rem;
+  font-weight: 800;
+  animation: tutorial-pop 0.55s ease-out;
+}
+
+.tutorial-quiz-summary .tutorial-controls {
+  justify-content: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-grid .cell.tutorial-quiz-wrong,
+  .tutorial-grid .candidate.tutorial-quiz-wrong,
+  .tutorial-grid .cell.tutorial-quiz-reveal,
+  .tutorial-grid.tutorial-grid-interactive .candidate.tutorial-fresh,
+  .tutorial-quiz-summary-mark {
+    animation: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .tutorial-page {
+    --t-good: #4ade80;
+    --t-good-soft: #10291b;
+    --t-good-text: #bbf7d0;
+    --t-bad: #f87171;
+    --t-bad-soft: #2f1414;
+    --t-bad-text: #fecaca;
+  }
+
+  .tutorial-pill.tutorial-pill-practice {
+    color: var(--t-accent-text);
+    border-color: var(--t-accent);
+  }
+
+  .tutorial-pill.tutorial-pill-practice.active {
+    color: #020617;
+    background: var(--t-accent);
+  }
+
+  .tutorial-quiz-option,
+  .tutorial-quiz-digit {
+    background: var(--t-surface);
+    color: var(--t-text);
+    border-color: var(--t-border);
+  }
+
+  .tutorial-quiz-digit {
+    border-color: var(--t-accent);
+  }
+
+  .tutorial-quiz-digit:hover {
+    color: #020617;
+  }
+}
+
 /* The toolbar button that opens the page (it lives in App.tsx's toolbar). */
 .how-it-works-trigger {
   font-weight: 600;

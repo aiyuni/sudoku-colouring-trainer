@@ -1,7 +1,14 @@
-import { useId } from 'react'
+import { useId, type KeyboardEvent } from 'react'
 import { markedCandidateDigits } from '../sudoku/boardUtils'
 import { candKey, stateForFrame } from './puzzleState'
-import { TUTORIAL_COLOUR_HEX, type CandRef, type PuzzleState, type TutorialColor, type TutorialFrame } from './tutorialTypes'
+import {
+  TUTORIAL_COLOUR_HEX,
+  type CandRef,
+  type PuzzleState,
+  type TutorialCell,
+  type TutorialColor,
+  type TutorialFrame,
+} from './tutorialTypes'
 
 const NINE = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -31,12 +38,31 @@ const COLOUR_CLASS = {
 } as const
 
 
+/** What makes a tutorial board tappable - the practice quizzes (QuizPlayer).
+ * The board stays a picture of a `frame`; this only reports taps and marks
+ * the cells the quiz is talking about. */
+export interface TutorialGridInteraction {
+  onCell: (cell: TutorialCell) => void
+  /** A tap on one pencil mark. Left out where pips are too small to hit (a
+   * touch screen): every tap is then a cell tap, and the quiz asks which
+   * digit was meant. */
+  onCandidate?: (ref: CandRef) => void
+  /** The cell whose digit is being asked for. */
+  selected?: TutorialCell | null
+  /** The last wrong tap - "row,col" or candKey - shaken once. */
+  wrong?: string | null
+  /** Cells already found (green), and a cell given away after misses (ringed). */
+  hitCells?: readonly TutorialCell[]
+  revealCells?: readonly TutorialCell[]
+}
+
 interface TutorialGridProps {
   state: PuzzleState
-  frame: TutorialFrame
+  frame: Omit<TutorialFrame, 'caption'> & { caption?: string }
   /** 'md' fits two side by side; 'lg' is the main picture of a stepper. */
   size?: 'md' | 'lg'
   ariaLabel?: string
+  interaction?: TutorialGridInteraction
 }
 
 /**
@@ -47,7 +73,7 @@ interface TutorialGridProps {
  * few `tutorial-*` classes (dimming, a ring on the newest candidate, a tint
  * over a unit) on top.
  */
-export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: TutorialGridProps) {
+export default function TutorialGrid({ state, frame, size = 'md', ariaLabel, interaction }: TutorialGridProps) {
   const markerId = useId().replace(/[^a-zA-Z0-9_-]/g, '')
   const { board, candidates, placed } = stateForFrame(state, frame)
 
@@ -67,6 +93,9 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
   const outline = cellSet(frame.outlineCells)
   const green = cellSet(frame.greenCells)
   const tint = cellSet(frame.unitCells)
+  const hit = cellSet(interaction?.hitCells)
+  const reveal = cellSet(interaction?.revealCells)
+  const selectedKey = interaction?.selected ? `${interaction.selected[0]},${interaction.selected[1]}` : null
 
   const spotlight = frame.spotlight
   const spotCells = cellSet(spotlight?.cells)
@@ -98,8 +127,10 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
 
   return (
     <div
-      className={['grid', 'grid-white-mode', 'tutorial-grid', `tutorial-grid-${size}`].join(' ')}
-      role="img"
+      className={['grid', 'grid-white-mode', 'tutorial-grid', `tutorial-grid-${size}`, interaction ? 'tutorial-grid-interactive' : '', interaction?.onCandidate ? 'tutorial-grid-pips' : '']
+        .filter(Boolean)
+        .join(' ')}
+      role={interaction ? 'group' : 'img'}
       aria-label={ariaLabel ?? frame.caption}
     >
       {NINE.map((boxIndex) => {
@@ -119,12 +150,31 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
                 outline.has(cellKey) ? 'technique-used' : '',
                 green.has(cellKey) ? 'dragon-technique-cell' : '',
                 tint.has(cellKey) ? 'tutorial-unit' : '',
+                hit.has(cellKey) ? 'tutorial-quiz-hit' : '',
+                reveal.has(cellKey) ? 'tutorial-quiz-reveal' : '',
+                selectedKey === cellKey ? 'tutorial-quiz-selected' : '',
+                interaction?.wrong === cellKey ? 'tutorial-quiz-wrong' : '',
               ]
                 .filter(Boolean)
                 .join(' ')
               const hasCandidates = value === 0 && markedCandidateDigits(candidates[r][c]).length > 0
+              const cellDigits = value === 0 ? markedCandidateDigits(candidates[r][c]) : []
+              const tappable = interaction
+                ? {
+                    role: 'button',
+                    tabIndex: 0,
+                    'aria-label': `r${r + 1}c${c + 1}: ${value !== 0 ? value : cellDigits.length > 0 ? `candidates ${cellDigits.join(' ')}` : 'empty'}`,
+                    onClick: () => interaction.onCell([r, c]),
+                    onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        interaction.onCell([r, c])
+                      }
+                    },
+                  }
+                : {}
               return (
-                <div key={cellKey} className={classes}>
+                <div key={cellKey} className={classes} {...tappable}>
                   {value !== 0 ? (
                     value
                   ) : hasCandidates ? (
@@ -160,9 +210,18 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel }: T
                               look,
                               active && fresh.has(key) ? 'tutorial-fresh' : '',
                               dim ? 'tutorial-dim' : '',
+                              interaction?.wrong === key ? 'tutorial-quiz-wrong' : '',
                             ]
                               .filter(Boolean)
                               .join(' ')}
+                            onClick={
+                              active && interaction?.onCandidate
+                                ? (event) => {
+                                    event.stopPropagation()
+                                    interaction.onCandidate!({ row: r, col: c, digit })
+                                  }
+                                : undefined
+                            }
                           >
                             {active && split && look.includes('technique-dragon-split') && (
                               <>

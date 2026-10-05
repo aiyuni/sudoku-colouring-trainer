@@ -65,7 +65,7 @@ export function decodePuzzleState(boardString: string, removed = '', cluesString
  * instead). */
 export function stateForFrame(
   state: PuzzleState,
-  frame: TutorialFrame,
+  frame: Pick<TutorialFrame, 'applied' | 'solved' | 'eliminated'>,
 ): { board: Board; candidates: CandidateGrid; placed: Set<string> } {
   const placed = new Set<string>()
   if (!frame.applied) {

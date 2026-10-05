@@ -969,7 +969,7 @@ function dragonCaption(move: DragonMove): { badge: string; caption: string } {
       if (m) {
         return {
           badge: 'Result',
-          caption: `${m[1]} has a ${m[3]} candidate and sees a ${m[4]} ${m[2]} in ${m[5]}. One of those two is true either way, so ${m[1]} can't be ${m[2]}.`,
+          caption: `${m[1]} has ${/^[aeiou]/.test(m[3]) ? 'an' : 'a'} ${m[3]} candidate and sees ${/^[aeiou]/.test(m[4]) ? 'an' : 'a'} ${m[4]} ${m[2]} in ${m[5]}. One of those two is true either way, so ${m[1]} can't be ${m[2]}.`,
         }
       }
       return { badge: 'Result', caption: `${cellName(e.row, e.col)} can't be ${e.digit}: it sees an opposite-colour ${e.digit}.` }

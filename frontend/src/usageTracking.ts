@@ -51,6 +51,7 @@ export const AREA_LAYER = {
   dialog: 20,
   tutorial: 30,
   tutorialSection: 31,
+  tutorialPractice: 32,
 } as const
 
 interface PendingEvent {
@@ -61,6 +62,25 @@ interface PendingEvent {
   count: number
   /** Date.now() of the first occurrence in this batch. */
   at: number
+}
+
+/** One answered question of a How It Works practice quiz (QuizPlayer). Unlike
+ * an event these are never merged: each is its own quiz_answers row. */
+export interface QuizAnswer {
+  /** Quiz id, e.g. 'basics/singles' (see quizExamples.ts). */
+  quiz: string
+  /** One pass through the quiz; "Practise again" starts a new run. */
+  run: string
+  question: string
+  kind: string
+  /** 0-based position of the question, and how many the quiz has. */
+  index: number
+  total: number
+  /** Wrong taps/picks before the right one. */
+  misses: number
+  /** The answer was ringed (after two misses) before it was tapped. */
+  revealed: boolean
+  ms: number
 }
 
 interface ActiveArea {
@@ -83,6 +103,8 @@ let lastInteractionAt = 0
 let areaMs = new Map<string, number>()
 let events = new Map<string, PendingEvent>()
 let droppedEvents = 0
+let quizAnswers: Array<QuizAnswer & { at: number }> = []
+const MAX_QUIZ_ANSWERS_PER_BATCH = 60
 // Filled in asynchronously at start (Client Hints are a promise); sent
 // with the page context once ready.
 let device: Record<string, unknown> | null = null
@@ -266,12 +288,14 @@ function flush(final: boolean): void {
   if (droppedEvents > 0) {
     pending.push({ category: 'meta', name: 'Events dropped', label: null, value: null, count: droppedEvents, at: now })
   }
-  if (!hasAreas && pending.length === 0 && contextSent) {
+  if (!hasAreas && pending.length === 0 && quizAnswers.length === 0 && contextSent) {
     return
   }
+  const answered = quizAnswers
   areaMs = new Map()
   events = new Map()
   droppedEvents = 0
+  quizAnswers = []
 
   const includeContext = !contextSent
   const body: Record<string, unknown> = {
@@ -289,6 +313,9 @@ function flush(final: boolean): void {
       count: e.count,
       age: Math.max(0, now - e.at),
     })),
+  }
+  if (answered.length > 0) {
+    body.quiz = answered.map(({ at, ...answer }) => ({ ...answer, age: Math.max(0, now - at) }))
   }
   if (includeContext) {
     body.context = pageContext()
@@ -382,6 +409,15 @@ export function trackEvent(category: string, name: string, label?: string | null
     return
   }
   events.set(key, { category, name: name.slice(0, 120), label: cleanLabel, value: cleanValue, count: 1, at: Date.now() })
+}
+
+/** Records one answered practice-quiz question (stored as a quiz_answers
+ * row: who, which quiz and question, how many wrong tries, how long). */
+export function trackQuizAnswer(answer: QuizAnswer): void {
+  if (!started || quizAnswers.length >= MAX_QUIZ_ANSWERS_PER_BATCH) {
+    return
+  }
+  quizAnswers.push({ ...answer, at: Date.now() })
 }
 
 /** Generic button tracking, so every toolbar item, Auto-solve button,
