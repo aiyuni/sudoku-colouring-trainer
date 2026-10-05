@@ -40,6 +40,11 @@ export interface SolvePathOptions {
   groupedAicEnabled: boolean
   /** "Prefer easier double dragons" (off by default; only with Easy Solve). */
   preferEasierDoubleDragons: boolean
+  /** "Prefer easiest techs within dragon" (on by default; only with Easy Solve). */
+  preferEasiestDragonTechniques: boolean
+  /** "Dragon: require 3+ base Medusa candidates": the smallest starting
+   * Medusa a Dragon may have (0 = no filter). */
+  minBaseMedusaCandidates: number
 }
 
 export interface SolvePathWorkerRequest {
@@ -86,6 +91,8 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
         options.alsAicEnabled,
         options.groupedAicEnabled,
         options.preferEasierDoubleDragons,
+        options.preferEasiestDragonTechniques,
+        options.minBaseMedusaCandidates,
       ),
     }
   } catch (error) {

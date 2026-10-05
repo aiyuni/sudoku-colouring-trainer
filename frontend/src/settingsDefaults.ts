@@ -100,6 +100,13 @@ export interface AppSettings {
    * using easier techniques than every single Dynamic Dragon needs counts as
    * easier than single Dynamic Dragon. */
   preferEasierDoubleDragons: boolean
+  /** Solve Path tab, only while Easy Solve is on: between Dragons of one
+   * kind, the one needing the easiest techniques wins before the shortest. */
+  preferEasiestDragonTechniques: boolean
+  /** Techniques tab: the list shows Dragons of one kind easiest techniques
+   * first instead of shortest first. Its own setting - independent of the
+   * Solve Path's preferEasiestDragonTechniques, neither affects the other. */
+  techniquesListEasiestDragonTechniquesFirst: boolean
   solvePathTimeoutMs: number
   /** Keyboard shortcuts (Settings -> Keyboard shortcuts), see hotkeys.ts. */
   hotkeys: HotkeyBindings
@@ -144,6 +151,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dragonGenerationTimeoutMs: 30_000,
   easySolveEnabled: false,
   preferEasierDoubleDragons: false,
+  preferEasiestDragonTechniques: true,
+  techniquesListEasiestDragonTechniquesFirst: true,
   solvePathTimeoutMs: 12_000,
   hotkeys: DEFAULT_HOTKEYS,
 }

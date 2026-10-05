@@ -30,6 +30,8 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, givens: boolea
     options.alsAicEnabled,
     options.groupedAicEnabled,
     options.preferEasierDoubleDragons,
+    options.preferEasiestDragonTechniques,
+    options.minBaseMedusaCandidates,
   )
 }
 

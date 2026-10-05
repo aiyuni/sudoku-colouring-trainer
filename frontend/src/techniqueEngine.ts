@@ -824,6 +824,25 @@ export function medusaMassCoverage(mass: MassEliminationInstance, candidates: Ca
   return covered
 }
 
+/** Easy Solve's solve path picks the lowest-ranked row and nothing else
+ * (pickEasiestInstance), so buildTechniqueInstances can stop at the first
+ * difficulty tier with a row instead of working out every harder technique
+ * too. The list it returns then holds every row of the rank that gets picked
+ * (rows of one rank are always pushed together, and nothing easier was there
+ * to hide any of them), so the pick is exactly the full list's.
+ *
+ * Why it matters: with every technique on, a state's Dynamic and Double
+ * Dynamic Dragon rows take seconds, and they were computed at every step just
+ * to be outranked by a Locked Candidate or a plain Dragon - about 175 of the
+ * 185 seconds of a user-reported 81-step path (2026-10-04, see
+ * dragon-research/solve-path-perf/). */
+export interface EasiestTierOnly {
+  /** pickEasiestInstance's second argument: an easier Double Dynamic Dragon
+   * then ranks below single Dynamic Dragon, so a state that has Dynamic
+   * Dragon rows needs its Double Dynamic rows too. */
+  preferEasierDoubleDragons: boolean
+}
+
 export function buildTechniqueInstances(
   board: Board,
   candidates: CandidateGrid,
@@ -853,8 +872,36 @@ export function buildTechniqueInstances(
   // path never passes it): a row is no longer hidden because easier rows
   // already make its eliminations, unless those are Basic Techniques rows.
   allPossibleTechniques = false,
+  // Easy Solve's solve path only (see EasiestTierOnly): stop at the first
+  // difficulty tier that has a row.
+  easiestTierOnly: EasiestTierOnly | false = false,
+  // The Techniques tab's own "Prefer easiest techs within dragon" (the list
+  // only; the solve path never passes it - its picker has its own setting and
+  // doesn't read the order): Dynamic and Double Dynamic Dragon rows are
+  // listed easiest techniques first, then shortest, instead of shortest first.
+  easiestDragonTechniquesFirst = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
+  // The order of a batch of Dragon rows of one kind. The key is the one
+  // pickEasiestInstance compares under the Solve Path's setting of the same
+  // name, so a list in this order starts with the Dragon that would pick.
+  const sortDragonRows = (extensions: { moves: DragonMove[] }[]) => {
+    if (!easiestDragonTechniquesFirst) {
+      extensions.sort((a, b) => a.moves.length - b.moves.length)
+      return
+    }
+    const demands = new Map(extensions.map((extension) => [extension, dragonMovesTechniqueDemand(extension.moves)]))
+    extensions.sort((a, b) => {
+      const demandA = demands.get(a)!
+      const demandB = demands.get(b)!
+      return (
+        demandA.hardestGroup - demandB.hardestGroup ||
+        demandA.mostTechniquesInOneStep - demandB.mostTechniquesInOneStep ||
+        a.moves.length - b.moves.length
+      )
+    })
+  }
+  const easiestFound = () => easiestTierOnly !== false && instances.length > 0
   const pushUnlessCovered = (rows: TechniqueInstance[], coveringRows: readonly TechniqueInstance[] = instances) =>
     pushUnlessCoveredByEasier(instances, rows, coveringRows, allPossibleTechniques)
 
@@ -889,6 +936,9 @@ export function buildTechniqueInstances(
       techniqueRank: RANK_SINGLE,
     })
   }
+  if (easiestFound()) {
+    return instances
+  }
 
   for (const locked of lockedCandidateFinder.findInstances(board, candidates)) {
     const typeLabel = locked.type === 'pointing' ? 'Pointing' : 'Claiming'
@@ -907,6 +957,9 @@ export function buildTechniqueInstances(
       solvedCandidates: [],
       techniqueRank: RANK_LOCKED_CANDIDATE,
     })
+  }
+  if (easiestFound()) {
+    return instances
   }
 
   for (const pair of pairFinder.findNakedPairs(board, candidates)) {
@@ -1026,6 +1079,9 @@ export function buildTechniqueInstances(
       techniqueRank: RANK_SUBSET,
     })
   }
+  if (easiestFound()) {
+    return instances
+  }
 
   for (const ur of uniqueRectangleFinder.find(board, candidates)) {
     const explanation = explainUniqueRectangle(ur, candidates)
@@ -1049,6 +1105,9 @@ export function buildTechniqueInstances(
       medusaHighlightCells: [...ur.reasonCells],
       techniqueRank: RANK_UR,
     })
+  }
+  if (easiestFound()) {
+    return instances
   }
 
   // BUG+N: one technique and rank, named by its N in the UI (BUG+1/2/3).
@@ -1082,6 +1141,9 @@ export function buildTechniqueInstances(
       techniqueRank: RANK_BUG_PLUS_N,
     })
   }
+  if (easiestFound()) {
+    return instances
+  }
 
   // Two Type 1 rectangles can rule out the same candidate - one row for it.
   const avoidableRectangleEffects = new Set<string>()
@@ -1109,6 +1171,9 @@ export function buildTechniqueInstances(
       solvedCandidates: [],
       techniqueRank: RANK_AVOIDABLE_RECTANGLE,
     })
+  }
+  if (easiestFound()) {
+    return instances
   }
 
   for (const oddagon of bivalueOddagonFinder.find(board, candidates)) {
@@ -1147,6 +1212,10 @@ export function buildTechniqueInstances(
         techniqueRank: RANK_BIVALUE_ODDAGON,
       })
     }
+  }
+
+  if (easiestFound()) {
+    return instances
   }
 
   // Simple Coloring: two passes so every Rule 1 instance is listed before
@@ -1212,6 +1281,9 @@ export function buildTechniqueInstances(
   }
 
   instances.push(...rule1Instances, ...rule2Instances)
+  if (easiestFound()) {
+    return instances
+  }
 
   // Fish and the short AICs interleave in the difficulty order (X-Wing <
   // Short Single-Digit AIC < Finned X-Wing < [3D Medusa] < Short AIC <
@@ -1267,6 +1339,9 @@ export function buildTechniqueInstances(
   // (see below), but they do hide the harder half's redundant rows.
   middleTier.sort((a, b) => a.techniqueRank - b.techniqueRank)
   pushUnlessCovered(middleTier.filter((instance) => instance.techniqueRank < RANK_MEDUSA))
+  if (easiestFound()) {
+    return instances
+  }
 
   // 3D Medusa: one row per chain, listing everything that chain proves -
   // its mass elimination (rules 1-2, if any) and every rule 3/4/5
@@ -1291,8 +1366,14 @@ export function buildTechniqueInstances(
   }
 
   instances.push(...massMedusaInstances, ...otherMedusaInstances)
+  if (easiestFound()) {
+    return instances
+  }
 
   pushUnlessCovered(middleTier.filter((instance) => instance.techniqueRank > RANK_MEDUSA))
+  if (easiestFound()) {
+    return instances
+  }
 
   // Exotic techniques (Technique Selections -> Exotic Techniques), each at its own rank.
   // Sue-de-Coq: after Finned Swordfish, before Generic AIC. A small one is
@@ -1300,6 +1381,9 @@ export function buildTechniqueInstances(
   // easier one already makes in full isn't listed.
   if (enabledExotic.has('sue de coq')) {
     pushUnlessCovered(sueDeCoqFinder.find(board, candidates).map(buildSueDeCoqInstance))
+  }
+  if (easiestFound()) {
+    return instances
   }
 
   // Generic AIC (chains longer than Short AIC's, up to GENERIC_AIC_MAX_LENGTH
@@ -1312,6 +1396,9 @@ export function buildTechniqueInstances(
         .findGenericAics(board, candidates)
         .map((aic) => buildAicInstance(aic, 'generic-aic', `Generic AIC (Type ${aic.eliminationType}; ${aic.length} links)`)),
     )
+  }
+  if (easiestFound()) {
+    return instances
   }
 
   // Dragon Colouring and Dynamic Dragon Colouring: one instance per stuck
@@ -1331,6 +1418,9 @@ export function buildTechniqueInstances(
   for (const { chainKey, moves } of dragonExtensions) {
     instances.push(buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', chainKey, moves))
   }
+  if (easiestFound()) {
+    return instances
+  }
   // Double Dragon Colouring (off by default): two stuck plain Dragons linked
   // - see computeDoubleDragonExtensions. Ranked between plain and Dynamic.
   if (doubleDragonEnabled) {
@@ -1346,6 +1436,9 @@ export function buildTechniqueInstances(
       instances.push(buildDragonInstance(board, candidates, 'double-dragon', 'Double Dragon Colouring', chainKey, moves))
     }
   }
+  if (easiestFound()) {
+    return instances
+  }
   // Grouped AIC (off by default) ranks just before ALS-xz. A grouped chain
   // very often only reaches what a plain chain, a fish or a locked candidate
   // already does (an Empty Rectangle is one), so a row an easier technique
@@ -1356,6 +1449,9 @@ export function buildTechniqueInstances(
       groupedAicFinder.find(board, candidates).map((aic) => buildAicInstance(aic, 'grouped-aic', 'Grouped AIC')),
       instances.filter((instance) => instance.techniqueRank < RANK_DRAGON),
     )
+  }
+  if (easiestFound()) {
+    return instances
   }
   // ALS-xz (singly linked only) ranks after Generic AIC,
   // plain Dragon and Double Dragon, before Dynamic Dragon. Every ALS-xz is an
@@ -1370,6 +1466,9 @@ export function buildTechniqueInstances(
       // Grouped AIC ranks between the Dragons and ALS-xz, and is not a Dragon.
       instances.filter((instance) => instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_GROUPED_AIC),
     )
+  }
+  if (easiestFound()) {
+    return instances
   }
   // UR-AIC (off by default) ranks just above ALS-xz. A row an easier
   // technique (ALS-xz included) already makes in full isn't listed - except
@@ -1386,6 +1485,9 @@ export function buildTechniqueInstances(
       ),
     )
   }
+  if (easiestFound()) {
+    return instances
+  }
   // ALS-AIC (off by default) ranks just above UR-AIC, and is hidden the
   // same way: by an easier row that makes all its eliminations and is
   // neither a Dragon nor an AIC (Short Single-Digit, Short, Generic AIC or
@@ -1399,6 +1501,9 @@ export function buildTechniqueInstances(
           (instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_ALS_XZ) && !aicRanks.has(instance.techniqueRank),
       ),
     )
+  }
+  if (easiestFound()) {
+    return instances
   }
 
   // The "Disable Dynamic Dragons" setting: plain Dragon becomes the
@@ -1416,9 +1521,15 @@ export function buildTechniqueInstances(
     maxTechniquesPerDragonStep,
     givens,
   )
-  dynamicDragonExtensions.sort((a, b) => a.moves.length - b.moves.length)
+  sortDragonRows(dynamicDragonExtensions)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
     instances.push(buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), chainKey, moves))
+  }
+  // "Prefer easier double dragons" ranks an easier Double Dynamic Dragon
+  // below these rows, and whether one counts as easier is only known once
+  // the Double Dynamic rows are, so that setting needs the rest.
+  if (easiestFound() && !(easiestTierOnly !== false && easiestTierOnly.preferEasierDoubleDragons && doubleDynamicDragonEnabled)) {
+    return instances
   }
   // Double Dynamic Dragon Colouring (off by default, and off with Dynamic
   // Dragons disabled) - see computeDoubleDynamicDragonExtensions.
@@ -1436,7 +1547,7 @@ export function buildTechniqueInstances(
       doubleDragonEnabled,
       givens,
     )
-    doubleDynamicExtensions.sort((a, b) => a.moves.length - b.moves.length)
+    sortDragonRows(doubleDynamicExtensions)
     for (const { chainKey, moves } of doubleDynamicExtensions) {
       instances.push(
         buildDragonInstance(board, candidates, 'double-dynamic-dragon', `Double ${dynamicDragonLabel(moves)}`, chainKey, moves),
@@ -1503,7 +1614,7 @@ export function buildTechniqueInstances(
           doubleDragonEnabled,
           givens,
         )
-        easierExtensions.sort((a, b) => a.moves.length - b.moves.length)
+        sortDragonRows(easierExtensions)
         for (const { chainKey, moves } of easierExtensions) {
           const effect = dragonEffectKey(moves)
           // Already a row (the chain key is the row's id), or the same
@@ -1991,37 +2102,77 @@ export function dragonStepCount(instance: TechniqueInstance): number {
  * `preferEasierDoubleDragons` (the Solve Path's "Prefer easier double
  * dragons"): a Double Dynamic Dragon found with an easier technique set than
  * every single Dynamic Dragon needs (`easierThanSingleDynamicDragon`) counts
- * as easier than single Dynamic Dragon, instead of as the hardest tier. */
+ * as easier than single Dynamic Dragon, instead of as the hardest tier.
+ *
+ * `preferEasiestDragonTechniques` (the Solve Path's "Prefer easiest techs
+ * within dragon"): between Dragons of one rank, what a Dragon asks of the
+ * solver comes before its length - the hardest technique group it uses, then
+ * the most techniques any one of its steps chains (dragonTechniqueDemand) -
+ * and only then the shorter Dragon wins. Off, length decides straight away. */
 export function pickEasiestInstance(
   instances: TechniqueInstance[],
   preferEasierDoubleDragons = false,
+  preferEasiestDragonTechniques = false,
 ): TechniqueInstance | null {
   const rankOf = (instance: TechniqueInstance) =>
     preferEasierDoubleDragons && instance.easierThanSingleDynamicDragon ? RANK_DYNAMIC_DRAGON - 0.5 : instance.techniqueRank
+  // Smaller is easier, compared left to right; most candidates eliminated
+  // settles a full tie.
+  const keyOf = (instance: TechniqueInstance): number[] => {
+    const demand = preferEasiestDragonTechniques ? dragonTechniqueDemand(instance) : { hardestGroup: 0, mostTechniquesInOneStep: 0 }
+    return [rankOf(instance), demand.hardestGroup, demand.mostTechniquesInOneStep, dragonStepCount(instance)]
+  }
+  const compareKeys = (a: number[], b: number[]) => {
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) {
+        return a[i] - b[i]
+      }
+    }
+    return 0
+  }
   let best: TechniqueInstance | null = null
-  let bestRank = Infinity
-  let bestSteps = Infinity
+  let bestKey: number[] = []
   let bestEliminated = -1
   for (const instance of instances) {
-    const rank = rankOf(instance)
-    const steps = dragonStepCount(instance)
-    if (!best || rank < bestRank || (rank === bestRank && steps < bestSteps)) {
-      best = instance
-      bestRank = rank
-      bestSteps = steps
-      bestEliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
+    const key = keyOf(instance)
+    const order = best ? compareKeys(key, bestKey) : -1
+    if (order > 0) {
       continue
     }
-    if (rank === bestRank && steps === bestSteps) {
-      const eliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
-      if (eliminated > bestEliminated) {
-        best = instance
-        bestSteps = steps
-        bestEliminated = eliminated
-      }
+    const eliminated = fullTechniqueEffect(instance).eliminatedCandidates.length
+    if (order < 0 || eliminated > bestEliminated) {
+      best = instance
+      bestKey = key
+      bestEliminated = eliminated
     }
   }
   return best
+}
+
+/** What a Dragon's Extension Rule 3 steps ask of the solver, for "Prefer
+ * easiest techs within dragon": the hardest group of Dragon Configuration's
+ * technique list any step uses (RULE3_TECHNIQUE_GROUPS: 0 Defaults, 1
+ * Advanced, 2 Brutal, 3 Unfair), and the most techniques one single step
+ * chains together (its substeps, the closing colouring aside). Both 0 for a
+ * plain Dragon and for anything that isn't a Dragon; a Double Dragon counts
+ * the steps of both its Dragons. */
+export function dragonTechniqueDemand(instance: TechniqueInstance): { hardestGroup: number; mostTechniquesInOneStep: number } {
+  return dragonMovesTechniqueDemand(instance.moves ?? [])
+}
+
+/** dragonTechniqueDemand for a bare move log (the Techniques list orders its
+ * Dragon rows by it before they are instances). */
+function dragonMovesTechniqueDemand(moves: readonly DragonMove[]): { hardestGroup: number; mostTechniquesInOneStep: number } {
+  let hardestGroup = 0
+  let mostTechniquesInOneStep = 0
+  for (const move of moves) {
+    const techniques = move.dynamicTechniques ?? []
+    mostTechniquesInOneStep = Math.max(mostTechniquesInOneStep, techniques.length)
+    for (const technique of techniques) {
+      hardestGroup = Math.max(hardestGroup, RULE3_TECHNIQUE_GROUPS.findIndex((group) => group.techniques.includes(technique)))
+    }
+  }
+  return { hardestGroup, mostTechniquesInOneStep }
 }
 
 export interface SolvePathStep {
@@ -2133,17 +2284,29 @@ export function buildSolvePath(
   groupedAicEnabled = false,
   // "Prefer easier double dragons": only means anything under Easy Solve.
   preferEasierDoubleDragons = false,
+  // "Prefer easiest techs within dragon": likewise.
+  preferEasiestDragonTechniques = false,
+  // The Techniques list's "Dragon: require 3+ base Medusa candidates" filter
+  // (0 = off): the path then only takes Dragons the list would show.
+  minBaseMedusaCandidates = 0,
 ): SolvePathResult {
   const startedAt = Date.now()
   const steps: SolvePathStep[] = []
   const pickInstance = easySolveEnabled
-    ? (instances: TechniqueInstance[]) => pickEasiestInstance(instances, preferEasierDoubleDragons)
+    ? (instances: TechniqueInstance[]) => pickEasiestInstance(instances, preferEasierDoubleDragons, preferEasiestDragonTechniques)
     : pickGreedyInstance
   const log: string[] = [
     easySolveEnabled
       ? 'Method: "Easy Solve", single-candidate-per-step (no branching/backtracking) - at each step, every ' +
         'currently-applicable technique is evaluated once and whichever is simplest is chosen, regardless of how ' +
-        'much progress it makes (ties broken by fewest Dragon Colouring steps, then most candidates eliminated). ' +
+        'much progress it makes (ties broken by ' +
+        (preferEasiestDragonTechniques
+          ? 'the easiest techniques inside a Dragon - the hardest technique group it uses, then the most techniques ' +
+            'in any one of its steps - then by '
+          : '') +
+        'fewest Dragon Colouring steps, then most candidates eliminated). ' +
+        'Techniques harder than the one chosen are not looked for at that step, so each step counts only the ' +
+        'easiest applicable techniques. ' +
         (preferEasierDoubleDragons
           ? 'A Double Dynamic Dragon that uses easier techniques than every single Dynamic Dragon needs counts as ' +
             'simpler than single Dynamic Dragon. '
@@ -2173,7 +2336,7 @@ export function buildSolvePath(
     const instances = buildTechniqueInstances(
       curBoard,
       curCandidates,
-      0,
+      minBaseMedusaCandidates,
       allowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -2193,6 +2356,9 @@ export function buildSolvePath(
       urAicEnabled,
       alsAicEnabled,
       groupedAicEnabled,
+      false,
+      // The greedy picker compares every row, so it needs the whole list.
+      easySolveEnabled ? { preferEasierDoubleDragons } : false,
     )
     const chosen = pickInstance(instances)
     const stepElapsed = Date.now() - stepStart

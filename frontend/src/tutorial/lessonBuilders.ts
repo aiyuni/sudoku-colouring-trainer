@@ -303,6 +303,85 @@ export function buildNakedPairLesson(id: string, state: PuzzleState, a: Tutorial
   }
 }
 
+// ------------------------------------------------- basics: bilocals & bivalues
+
+/** The two pictures both concept lessons share: the pair, then "not this
+ * one, so that one". Two, not three (one per way round): the Basics tab lays
+ * a lesson's pictures side by side, and a third made these boards smaller
+ * than every other lesson's. Neither is a technique - they are the two kinds
+ * of strong link every colouring is built from - so nothing is applied: the
+ * red/green marks only show the "if". */
+function eitherOrFrames(
+  a: CandRef,
+  b: CandRef,
+  captions: [spot: string, either: string],
+  shared: Partial<TutorialFrame>,
+): TutorialFrame[] {
+  return [
+    { badge: 'Spot it', caption: captions[0], basis: [a, b], ...shared },
+    { badge: 'If one is false', caption: captions[1], eliminated: [a], solved: [b], ...shared },
+  ]
+}
+
+export function buildBilocalLesson(
+  id: string,
+  state: PuzzleState,
+  digit: number,
+  unitKind: UnitKind,
+  unitIndex: number,
+): TutorialLesson {
+  const unit: Unit = { kind: unitKind, index: unitIndex, cells: unitCells(unitKind, unitIndex) }
+  const holders = unit.cells.filter(([r, c]) => state.board[r][c] === 0 && state.candidates[r][c][digit - 1])
+  if (holders.length !== 2) {
+    throw new Error(`${digit} is not bilocal in ${unitPhrase(unit)} of this example.`)
+  }
+  const [first, second] = holders
+  const a = ref(first[0], first[1], digit)
+  const b = ref(second[0], second[1], digit)
+  const nameA = cellName(first[0], first[1])
+  const nameB = cellName(second[0], second[1])
+  return {
+    id,
+    title: 'Bilocal candidates',
+    hint: 'A digit with only two places left in a row, column or box.',
+    state,
+    frames: eitherOrFrames(
+      a,
+      b,
+      [
+        `In ${unitPhrase(unit)}, ${digit} fits in only two cells: ${nameA} and ${nameB}. These two ${digit}s are bilocal candidates: the ${unit.kind} needs a ${digit}, so one of them is always true.`,
+        `If ${nameA} is not ${digit}, ${nameB} must be ${digit} - and vice versa: if ${nameB} is not ${digit}, ${nameA} must be ${digit}.`,
+      ],
+      { unitCells: unit.cells, links: [{ from: a, to: b, kind: 'strong' }], spotlight: { digits: [digit] } },
+    ),
+  }
+}
+
+export function buildBivalueLesson(id: string, state: PuzzleState, cell: TutorialCell): TutorialLesson {
+  const [row, col] = cell
+  const digits = markedCandidateDigits(state.candidates[row][col])
+  if (state.board[row][col] !== 0 || digits.length !== 2) {
+    throw new Error(`${cellName(row, col)} is not a bivalue cell in this example.`)
+  }
+  const [d1, d2] = digits
+  const name = cellName(row, col)
+  return {
+    id,
+    title: 'Bivalue cells',
+    hint: 'A cell with only two candidates left.',
+    state,
+    frames: eitherOrFrames(
+      ref(row, col, d1),
+      ref(row, col, d2),
+      [
+        `${name} has only two candidates left: ${d1} and ${d2}. It is a bivalue cell: every cell needs a digit, so one of them is always true.`,
+        `If ${name} is not ${d1}, it must be ${d2} - and vice versa: if it is not ${d2}, it must be ${d1}.`,
+      ],
+      { outlineCells: [cell], spotlight: { cells: [cell] } },
+    ),
+  }
+}
+
 // --------------------------------------------------------- simple colouring
 
 interface SimpleColouringOptions {
@@ -722,21 +801,24 @@ function medusaConclusionFrames(
     ]
   }
 
-  const rule3 = medusaFinder.findRule3Eliminations(chain, board, candidates)[0]
-  if (rule3) {
-    return [
-      {
-        badge: 'Result',
-        caption: `${cellName(rule3.row, rule3.col)} sees a blue ${rule3.digit} and a yellow ${rule3.digit}, so it can't be ${rule3.digit}.`,
-        coloured,
-        links: [
-          ...arrows,
-          { from: ref(rule3.row, rule3.col, rule3.digit), to: ref(rule3.blueSeen[0], rule3.blueSeen[1], rule3.digit), kind: 'sees' },
-          { from: ref(rule3.row, rule3.col, rule3.digit), to: ref(rule3.yellowSeen[0], rule3.yellowSeen[1], rule3.digit), kind: 'sees' },
-        ],
-        eliminated: [ref(rule3.row, rule3.col, rule3.digit)],
-      },
-    ]
+  // One picture per candidate that sees both colours, each with its own two
+  // dashed lines (all of them at once would be unreadable); the ones already
+  // explained stay red.
+  const rule3 = medusaFinder.findRule3Eliminations(chain, board, candidates)
+  if (rule3.length > 0) {
+    return rule3.map((hit, i) => ({
+      badge: 'Result',
+      caption:
+        `${cellName(hit.row, hit.col)} sees a blue ${hit.digit} (${cellName(...hit.blueSeen)}) and a yellow ${hit.digit} (${cellName(...hit.yellowSeen)}). ` +
+        `One of the two colours is true, so it can't be ${hit.digit}${i > 0 ? ' either' : ''}.`,
+      coloured,
+      links: [
+        ...arrows,
+        { from: ref(hit.row, hit.col, hit.digit), to: ref(hit.blueSeen[0], hit.blueSeen[1], hit.digit), kind: 'sees' as const },
+        { from: ref(hit.row, hit.col, hit.digit), to: ref(hit.yellowSeen[0], hit.yellowSeen[1], hit.digit), kind: 'sees' as const },
+      ],
+      eliminated: rule3.slice(0, i + 1).map((e) => ref(e.row, e.col, e.digit)),
+    }))
   }
   const rule4 = medusaFinder.findRule4Eliminations(chain, candidates)[0]
   if (rule4) {

@@ -133,19 +133,59 @@ export class SudokuAlsXzFinder {
       }
     }
 
-    const found: AlsXzInstance[] = []
-    let pairsChecked = 0
-    for (let i = 0; i < allAls.length && pairsChecked < MAX_ALS_PAIRS; i++) {
-      const a = allAls[i]
-      for (let j = i + 1; j < allAls.length; j++) {
-        const b = allAls[j]
-        pairsChecked++
+    // Which of an ALS's digits can take part in an ALS-xz at all: those with
+    // a candidate somewhere that sees every one of the ALS's own. An RCC needs
+    // that on both sides (the other ALS's X cells are such candidates, and
+    // seeing is mutual), and so does a Z (the eliminated candidate sees both
+    // ALS's Z cells) - so a pair needs two such digits in common, and an ALS
+    // with fewer than two never appears in a result. Exact, and it settles
+    // nearly every pair with two integer ANDs: Dynamic Dragon runs this on
+    // every hypothetical grid it simulates, where the pair loop below was
+    // half of a slow solve path's time (2026-10-04).
+    const usable: Als[] = []
+    const links: number[] = []
+    // Pairs the unfiltered loop would have checked before reaching each
+    // usable ALS, so MAX_ALS_PAIRS stops the search at the same place.
+    const pairsBefore: number[] = []
+    for (let i = 0; i < allAls.length; i++) {
+      const als = allAls[i]
+      let linkMask = 0
+      for (let d = 0; d < BOARD_SIZE; d++) {
+        if (
+          als.digitMask & (1 << d) &&
+          ((als.commonPeers[d * 3] & digitCandidates[d * 3]) |
+            (als.commonPeers[d * 3 + 1] & digitCandidates[d * 3 + 1]) |
+            (als.commonPeers[d * 3 + 2] & digitCandidates[d * 3 + 2])) !==
+            0
+        ) {
+          linkMask |= 1 << d
+        }
+      }
+      if ((linkMask & (linkMask - 1)) === 0) continue
+      usable.push(als)
+      links.push(linkMask)
+      pairsBefore.push(i * allAls.length - (i * (i + 1)) / 2)
+    }
+    // The pair loop reads only these two until a pair passes both tests.
+    const count = usable.length
+    const linkMasks = Int32Array.from(links)
+    const houseMasks = Int32Array.from(usable, (als) => als.houseMask)
+
+    // The reason text is only built for the instances that are kept: most of
+    // what is found here is dropped again below.
+    const found: Array<{ a: Als; b: Als; instance: AlsXzInstance }> = []
+    for (let i = 0; i < count && pairsBefore[i] < MAX_ALS_PAIRS; i++) {
+      const a = usable[i]
+      const aLinks = linkMasks[i]
+      const aHouses = houseMasks[i]
+      for (let j = i + 1; j < count; j++) {
+        // An RCC and a Z, so at least two common (usable) digits.
+        const common = aLinks & linkMasks[j]
+        if ((common & (common - 1)) === 0) continue
         // Both ALS inside one house is a naked set, not an ALS-xz - see the
         // class comment.
-        if (a.houseMask & b.houseMask) continue
-        const common = a.digitMask & b.digitMask
-        // An RCC and a Z, so at least two common digits.
-        if ((common & (common - 1)) === 0) continue
+        if (aHouses & houseMasks[j]) continue
+        const b = usable[j]
 
         for (let x = 0; x < BOARD_SIZE; x++) {
           if (!(common & (1 << x)) || !this.isRestrictedCommon(a, b, x)) continue
@@ -171,12 +211,16 @@ export class SudokuAlsXzFinder {
           if (eliminations.length === 0) continue
           eliminations.sort((p, q) => p.row - q.row || p.col - q.col || p.digit - q.digit)
           found.push({
-            alsA: { cells: a.cells, digits: a.digits },
-            alsB: { cells: b.cells, digits: b.digits },
-            rcc: x + 1,
-            zDigits,
-            eliminations,
-            reasonText: alsXzReasonText(a, b, x + 1, zDigits),
+            a,
+            b,
+            instance: {
+              alsA: { cells: a.cells, digits: a.digits },
+              alsB: { cells: b.cells, digits: b.digits },
+              rcc: x + 1,
+              zDigits,
+              eliminations,
+              reasonText: '',
+            },
           })
         }
       }
@@ -184,8 +228,8 @@ export class SudokuAlsXzFinder {
 
     found.sort(
       (p, q) =>
-        p.alsA.cells.length + p.alsB.cells.length - (q.alsA.cells.length + q.alsB.cells.length) ||
-        q.eliminations.length - p.eliminations.length,
+        p.a.cells.length + p.b.cells.length - (q.a.cells.length + q.b.cells.length) ||
+        q.instance.eliminations.length - p.instance.eliminations.length,
     )
     // A realistic mid-solve grid has dozens of ALS pairs proving overlapping
     // things (a ~1700-state random sweep averaged ~90 per state before this), so an
@@ -193,10 +237,11 @@ export class SudokuAlsXzFinder {
     // makes every one of its eliminations - the exact-duplicate case
     // included. Only against a single instance, never the union of several:
     // that would hide a pair that proves something no one other pair does.
-    const kept: Array<{ instance: AlsXzInstance; keys: Set<string> }> = []
-    for (const instance of found) {
-      const keys = instance.eliminations.map((e) => `${e.row}.${e.col}.${e.digit}`)
+    const kept: Array<{ instance: AlsXzInstance; keys: Set<number> }> = []
+    for (const { a, b, instance } of found) {
+      const keys = instance.eliminations.map((e) => (e.row * BOARD_SIZE + e.col) * BOARD_SIZE + e.digit)
       if (kept.some((k) => keys.every((key) => k.keys.has(key)))) continue
+      instance.reasonText = alsXzReasonText(a, b, instance.rcc, instance.zDigits)
       kept.push({ instance, keys: new Set(keys) })
     }
     return kept.map((k) => k.instance)

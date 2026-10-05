@@ -3,6 +3,8 @@ import { SAMPLE_PUZZLE } from '../sudoku/types'
 import {
   buildBivalueOddagonLesson,
   buildAvoidableRectangleLesson,
+  buildBilocalLesson,
+  buildBivalueLesson,
   buildBugPlusNLesson,
   buildDoubleDragonLesson,
   buildDragonLesson,
@@ -42,6 +44,9 @@ const preludeToMedusa = () =>
       'r6c2-4 r6c2-7 r6c3-2 r7c1-3 r7c2-2 r7c2-3 r7c3-2 r7c4-3 r8c1-2 r8c1-9 r8c4-4 r8c4-8 r8c5-3 r9c2-3 ' +
       'r9c3-3 r9c7-9',
   )
+
+/** The Bilocals and Bivalues sub-tabs' position (the Locked Candidates one). */
+const BILOCAL_BIVALUE_BOARD = '000382010182600354300154028436005180800461500001830460708506200003018000900003800'
 
 /** One sub-tab of a tab that has several techniques (Basics, Abusing
  * Uniqueness): its label, one line about it, and its example(s). */
@@ -97,6 +102,20 @@ export function buildBasicsGroups(): LessonGroup[] {
           [1, 3],
         ),
       ),
+    },
+    // Not techniques but the two ideas every colouring is built from, so they
+    // come last, leading into the colouring tabs. Same position for both.
+    {
+      title: 'Bilocals',
+      blurb: 'A digit with only two places left in a row, column or box: exactly one of the two is true.',
+      // row 5 (index 4), 2 - only r5c2 and r5c9 can hold it
+      lessons: safely(() => buildBilocalLesson('bilocal', decodePuzzleState(BILOCAL_BIVALUE_BOARD), 2, 'row', 4)),
+    },
+    {
+      title: 'Bivalues',
+      blurb: 'A cell with only two candidates left: exactly one of the two is true.',
+      // r7c2 holds only 1 and 4
+      lessons: safely(() => buildBivalueLesson('bivalue', decodePuzzleState(BILOCAL_BIVALUE_BOARD), [6, 1])),
     },
   ]
 }
@@ -575,6 +594,22 @@ export function buildColourLessons(tab: ColourTabId): TutorialLesson[] {
             noLines: true,
           }),
         ),
+        // A mid-solve Sudoku.Coach state. The chain from 6 in r8c1 has two
+        // candidates that each see both colours: 6 in r2c1 (r8c1, r2c9) and
+        // 6 in r3c8 (r3c2, r2c9).
+        ...safely(() =>
+          buildMedusaLesson({
+            id: 'medusa-two-eliminations',
+            title: 'Candidates that see both colours are eliminated',
+            hint: 'If a candidate sees both colours, it can be eliminated.',
+            state: decodePuzzleState(
+              '100056003043090000800043002030560210950421037021030000317980005000310970000670301',
+              'r2c1-7 r2c6-2 r2c7-6 r3c7-6 r4c9-8 r6c8-9 r6c9-8 r8c3-6 r8c3-8 r8c9-6 r9c3-8',
+            ),
+            seed: { row: 7, col: 0, digit: 6 },
+            noLines: true,
+          }),
+        ),
       ]
     case 'dragon':
       return [
@@ -590,8 +625,8 @@ export function buildColourLessons(tab: ColourTabId): TutorialLesson[] {
         ...safely(() =>
           buildDragonLesson({
             id: 'dragon-promotion',
-            title: 'Dragon colours become real',
-            hint: 'When opposite colours meet, both are promoted.',
+            title: 'Dragon colours becomes Medusa colours',
+            hint: 'When opposite Dragon colours meet, both are promoted to their Medusa colours.',
             // Starting Medusa: 6 coloured candidates, one joined through a bivalue cell.
             state: decodePuzzleState('827030000601008300503062000962000831784391000315826749136289457258010693479653000'),
             seed: { row: 0, col: 7, digit: 6 },

@@ -95,8 +95,9 @@ export const HELP_TABS: HelpTab[] = [
             settingKey: 'minBaseMedusaFilter',
             description:
               `ON: the Techniques panel only lists Dragons whose starting Medusa has at least ` +
-              `${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates, i.e. the easily spotted ones. ` +
-              'Auto-solve and Solve Path ignore it.',
+              `${MIN_BASE_MEDUSA_CANDIDATES} coloured candidates, i.e. the easily spotted ones, and the Solve Path ` +
+              'only takes those Dragons (so it can get stuck where a smaller Medusa would have carried on). ' +
+              'Auto-solve and the "Solvable" check under the grid ignore it.',
           },
         ],
       },
@@ -396,6 +397,20 @@ export const HELP_TABS: HelpTab[] = [
               'unless the easier technique is one of the Basic Techniques (locked candidates, naked pairs/triples/quads, hidden pairs).\n\n' +
               'Only the Techniques list changes: the Solve Path, the Solvable check and the Hint are the same either way.',
           },
+          {
+            name: 'Prefer easiest techs within dragon',
+            settingKey: 'techniquesListEasiestDragonTechniquesFirst',
+            description:
+              'The checkbox at the top of the Techniques tab. Decides the order of the Dynamic Dragon rows (and of the ' +
+              'Double Dynamic Dragon rows).\n\n' +
+              'ON: the Dragon that needs the easiest techniques comes first. First, the hardest technique group it uses ' +
+              '(Defaults, Advanced, Brutal, Unfair - the groups of Dragon Configuration\'s technique list). If tied, ' +
+              'the fewest techniques chained in a single step, counting only the Dragon\'s busiest step. If still ' +
+              'tied, the shortest Dragon.\n\n' +
+              'OFF: the shortest Dragon comes first, whatever techniques it needs.\n\n' +
+              'Only the order of the list changes. It is separate from the Solve Path tab\'s checkbox of the same name: ' +
+              'neither affects the other.',
+          },
         ],
       },
     ],
@@ -415,6 +430,18 @@ export const HELP_TABS: HelpTab[] = [
               'candidates eliminated, then the simplest).\n\n' +
               'ON: each step takes the simplest technique regardless of progress; ties go to the shortest Dragon, ' +
               'then most candidates eliminated.',
+          },
+          {
+            name: 'Prefer easiest techs within dragon',
+            settingKey: 'preferEasiestDragonTechniques',
+            description:
+              'Only available while Easy Solve is ON. Decides which Dragon a step takes when several of the same ' +
+              'kind are available - in practice, which Dynamic Dragon.\n\n' +
+              'ON: the Dragon that needs the easiest techniques wins. First, the hardest technique group it uses ' +
+              '(Defaults, Advanced, Brutal, Unfair - the groups of Dragon Configuration\'s technique list). If tied, ' +
+              'the fewest techniques chained in a single step, counting only the Dragon\'s busiest step. If still ' +
+              'tied, the shortest Dragon.\n\n' +
+              'OFF: the shortest Dragon wins, whatever techniques it needs.',
           },
           {
             name: 'Prefer easier double dragons',

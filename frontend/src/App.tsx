@@ -1390,6 +1390,47 @@ function TechniqueLearnButton({
   )
 }
 
+/** A Techniques / Solve Path row's clickable part. A div with the button
+ * role, not a <button>: the row's name and explanation must be selectable
+ * for copying, and Firefox and Safari never let text inside a real button be
+ * selected, whatever user-select says. Looks like a button through
+ * .technique-item[role='button'] in App.css. */
+function TechniqueRowButton({
+  active,
+  onSelect,
+  children,
+}: {
+  active: boolean
+  onSelect: () => void
+  children: ReactNode
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={['technique-item', active ? 'active' : ''].filter(Boolean).join(' ')}
+      aria-pressed={active}
+      onClick={(event) => {
+        // Releasing the mouse after dragging out a selection is a click on
+        // the row too; it must not also select/deselect the row.
+        const selection = window.getSelection()
+        if (selection && !selection.isCollapsed && selection.containsNode(event.currentTarget, true)) {
+          return
+        }
+        onSelect()
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
 interface TechniquePanelProps {
   tab: TechniquePanelTab
   onTabChange: (tab: TechniquePanelTab) => void
@@ -1428,6 +1469,12 @@ interface TechniquePanelProps {
   onToggleEasySolve: () => void
   preferEasierDoubleDragons: boolean
   onTogglePreferEasierDoubleDragons: () => void
+  preferEasiestDragonTechniques: boolean
+  onTogglePreferEasiestDragonTechniques: () => void
+  /** The Techniques tab's own checkbox of that name: the order of the list's
+   * Dragon rows. Independent of the Solve Path's one above. */
+  listEasiestDragonTechniquesFirst: boolean
+  onToggleListEasiestDragonTechniquesFirst: () => void
   solvePathTimeoutMs: number
   onSolvePathTimeoutChange: (event: ChangeEvent<HTMLSelectElement>) => void
   panelRef?: Ref<HTMLDivElement>
@@ -1493,6 +1540,10 @@ function TechniquePanel({
   onToggleEasySolve,
   preferEasierDoubleDragons,
   onTogglePreferEasierDoubleDragons,
+  preferEasiestDragonTechniques,
+  onTogglePreferEasiestDragonTechniques,
+  listEasiestDragonTechniquesFirst,
+  onToggleListEasiestDragonTechniquesFirst,
   solvePathTimeoutMs,
   onSolvePathTimeoutChange,
   panelRef,
@@ -1626,6 +1677,17 @@ function TechniquePanel({
           <button type="button" className="technique-spoiler-toggle" onClick={onToggleTechniquesRevealed}>
             Hide (spoiler view)
           </button>
+          <label
+            className="technique-list-option"
+            title="Order of the Dynamic Dragon rows. On: the Dragon needing the easiest techniques first (the hardest technique group it uses, then the fewest techniques in any one step, then the shortest Dragon). Off: the shortest Dragon first. Separate from the Solve path tab's checkbox of the same name."
+          >
+            <input
+              type="checkbox"
+              checked={listEasiestDragonTechniquesFirst}
+              onChange={onToggleListEasiestDragonTechniquesFirst}
+            />
+            Prefer easiest techs within dragon
+          </label>
           <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
             Click on a technique and click on the "Apply" button to execute the technique.
           </p>
@@ -1636,15 +1698,10 @@ function TechniquePanel({
               const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
               return (
                 <li key={instance.id} className="technique-row">
-                  <button
-                    type="button"
-                    className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
-                    aria-pressed={isActive}
-                    onClick={() => onSelect(instance.id)}
-                  >
+                  <TechniqueRowButton active={isActive} onSelect={() => onSelect(instance.id)}>
                     <span className="technique-name">{instance.name}</span>
                     <span className="technique-notation">{instance.notation}</span>
-                  </button>
+                  </TechniqueRowButton>
                   <DragonAicBadge instance={instance} />
                   <TechniqueLearnButton instance={instance} onLearn={onLearn} />
                   {isActive && moves && (
@@ -1697,8 +1754,8 @@ function TechniquePanel({
                 ))}
               </select>
             </label>
-            {/* The two checkboxes get lines of their own, the second indented
-                under the first: it only exists while Easy Solve is on. */}
+            {/* The checkboxes get lines of their own, the others indented
+                under the first: they only exist while Easy Solve is on. */}
             <label
               className="solve-path-easy-solve"
               title={
@@ -1709,6 +1766,22 @@ function TechniquePanel({
             >
               <input type="checkbox" checked={easySolveEnabled} onChange={onToggleEasySolve} />
               Easiest Path (Easy Solve)
+            </label>
+            <label
+              className={`solve-path-easy-solve solve-path-sub-option${easySolveEnabled ? '' : ' solve-path-option-disabled'}`}
+              title={
+                easySolveEnabled
+                  ? 'Between Dragons of the same kind, the one needing the easiest techniques wins: the hardest technique group it uses, then the fewest techniques in any one step, then the shortest Dragon. Off: the shortest Dragon wins.'
+                  : 'Needs Easiest Path (Easy Solve).'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={preferEasiestDragonTechniques}
+                disabled={!easySolveEnabled}
+                onChange={onTogglePreferEasiestDragonTechniques}
+              />
+              Prefer easiest techs within dragon
             </label>
             <label
               className={`solve-path-easy-solve solve-path-sub-option${easySolveEnabled ? '' : ' solve-path-option-disabled'}`}
@@ -1778,17 +1851,12 @@ function TechniquePanel({
                   const stepIndex = moves ? Math.min(dragonStepIndex, moves.length - 1) : 0
                   return (
                     <li key={`${step.instance.id}-${index}`} className="technique-row">
-                      <button
-                        type="button"
-                        className={['technique-item', isActive ? 'active' : ''].filter(Boolean).join(' ')}
-                        aria-pressed={isActive}
-                        onClick={() => onSelectSolvePathStep(index)}
-                      >
+                      <TechniqueRowButton active={isActive} onSelect={() => onSelectSolvePathStep(index)}>
                         <span className="technique-name">
                           Step {index + 1}: {step.instance.name}
                         </span>
                         <span className="technique-notation">{step.instance.notation}</span>
-                      </button>
+                      </TechniqueRowButton>
                       <DragonAicBadge instance={step.instance} />
                       <TechniqueLearnButton instance={step.instance} onLearn={onLearn} />
                       {isActive && moves && (
@@ -2287,6 +2355,16 @@ export default function App() {
   const [preferEasierDoubleDragons, setPreferEasierDoubleDragons] = useState(
     initialSettings.easySolveEnabled && initialSettings.preferEasierDoubleDragons,
   )
+  // Unlike the one above, this keeps its value while Easy Solve is off (it
+  // is ON by default, so it should be on when Easy Solve is switched on).
+  const [preferEasiestDragonTechniques, setPreferEasiestDragonTechniques] = useState(
+    initialSettings.preferEasiestDragonTechniques,
+  )
+  // The Techniques tab's checkbox of the same name: the list's own setting,
+  // independent of the Solve Path's one (neither affects the other).
+  const [listEasiestDragonTechniquesFirst, setListEasiestDragonTechniquesFirst] = useState(
+    initialSettings.techniquesListEasiestDragonTechniquesFirst,
+  )
   const [solvePathTimeoutMs, setSolvePathTimeoutMs] = useState(initialSettings.solvePathTimeoutMs)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
     initialSettings.dynamicDragonAutoSolveIncludesAics,
@@ -2619,6 +2697,7 @@ export default function App() {
       givens,
       minBaseMedusaFilter,
       allPossibleTechniques,
+      listEasiestDragonTechniquesFirst,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -2644,6 +2723,7 @@ export default function App() {
       givens,
       minBaseMedusaFilter,
       allPossibleTechniques,
+      listEasiestDragonTechniquesFirst,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -2720,11 +2800,14 @@ export default function App() {
         analysis.alsAicEnabled,
         analysis.groupedAicEnabled,
         analysis.allPossibleTechniques,
+        false,
+        analysis.listEasiestDragonTechniquesFirst,
       ),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
       analysis.allPossibleTechniques,
+      analysis.listEasiestDragonTechniquesFirst,
       analysis.enabledFish,
       analysis.enabledExotic,
       analysis.alsXzEnabled,
@@ -2912,6 +2995,8 @@ export default function App() {
       dragonGenerationTimeoutMs,
       easySolveEnabled,
       preferEasierDoubleDragons,
+      preferEasiestDragonTechniques,
+      techniquesListEasiestDragonTechniquesFirst: listEasiestDragonTechniquesFirst,
       solvePathTimeoutMs,
       hotkeys,
     }),
@@ -2954,6 +3039,8 @@ export default function App() {
       dragonGenerationTimeoutMs,
       easySolveEnabled,
       preferEasierDoubleDragons,
+      preferEasiestDragonTechniques,
+      listEasiestDragonTechniquesFirst,
       solvePathTimeoutMs,
       hotkeys,
     ],
@@ -3201,7 +3288,11 @@ export default function App() {
   // Every setting the Solve Path search (buildSolvePath) takes, in the plain
   // shape it's posted to its Web Worker in - shared by the solvability check
   // below and the Solve Path tab's Generate.
-  const solvePathOptions = useMemo(
+  // Without the "Dragon: require 3+ base Medusa candidates" filter: what the
+  // "Solvable" check uses (the filter is about which Dragons are shown and
+  // taken, not about whether the puzzle can be solved). The Solve Path's own
+  // options, with the filter, are solvePathOptions just below.
+  const solvabilityOptions = useMemo(
     (): SolvePathOptions => ({
       allowedRule3Techniques: [...effectiveAllowedRule3Techniques],
       shortAicEnabled,
@@ -3224,9 +3315,12 @@ export default function App() {
       alsAicEnabled,
       groupedAicEnabled,
       preferEasierDoubleDragons: easySolveEnabled && preferEasierDoubleDragons,
+      preferEasiestDragonTechniques: easySolveEnabled && preferEasiestDragonTechniques,
+      minBaseMedusaCandidates: 0,
     }),
     [
       preferEasierDoubleDragons,
+      preferEasiestDragonTechniques,
       enabledFish,
       enabledExotic,
       alsXzEnabled,
@@ -3249,6 +3343,11 @@ export default function App() {
       dynamicDragonDisabled,
     ],
   )
+  const solvePathOptions = useMemo(
+    (): SolvePathOptions =>
+      minBaseMedusaFilter ? { ...solvabilityOptions, minBaseMedusaCandidates: MIN_BASE_MEDUSA_CANDIDATES } : solvabilityOptions,
+    [solvabilityOptions, minBaseMedusaFilter],
+  )
 
   // The expensive third part of the solvability status (see
   // puzzleSolveResult / candidatesAccurate further up): the Solve Path
@@ -3262,9 +3361,9 @@ export default function App() {
   const solvabilityRequest = useMemo(
     () =>
       puzzleSolveResult.status === 'solved' && candidatesAccurate
-        ? { board, candidates: freshAutofill, givens, options: solvePathOptions }
+        ? { board, candidates: freshAutofill, givens, options: solvabilityOptions }
         : null,
-    [board, freshAutofill, givens, puzzleSolveResult, candidatesAccurate, solvePathOptions],
+    [board, freshAutofill, givens, puzzleSolveResult, candidatesAccurate, solvabilityOptions],
   )
   const bruteSolvePath = useWorkerSolvePath(solvabilityRequest)
 
@@ -4347,6 +4446,8 @@ export default function App() {
     setOptimizeDynamicDragons(DEFAULT_SETTINGS.optimizeDynamicDragons)
     setEasySolveEnabled(DEFAULT_SETTINGS.easySolveEnabled)
     setPreferEasierDoubleDragons(DEFAULT_SETTINGS.preferEasierDoubleDragons)
+    setPreferEasiestDragonTechniques(DEFAULT_SETTINGS.preferEasiestDragonTechniques)
+    setListEasiestDragonTechniquesFirst(DEFAULT_SETTINGS.techniquesListEasiestDragonTechniquesFirst)
     setSolvePathTimeoutMs(DEFAULT_SETTINGS.solvePathTimeoutMs)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
     setMaxTechniquesPerDragonStep(DEFAULT_SETTINGS.maxTechniquesPerDragonStep)
@@ -4399,6 +4500,14 @@ export default function App() {
 
   function togglePreferEasierDoubleDragons() {
     setPreferEasierDoubleDragons((current) => !current)
+  }
+
+  function togglePreferEasiestDragonTechniques() {
+    setPreferEasiestDragonTechniques((current) => !current)
+  }
+
+  function toggleListEasiestDragonTechniquesFirst() {
+    setListEasiestDragonTechniquesFirst((current) => !current)
   }
 
   function onDragonGenerationTimeoutChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -6882,6 +6991,10 @@ export default function App() {
       onToggleEasySolve={toggleEasySolveEnabled}
       preferEasierDoubleDragons={preferEasierDoubleDragons}
       onTogglePreferEasierDoubleDragons={togglePreferEasierDoubleDragons}
+      preferEasiestDragonTechniques={preferEasiestDragonTechniques}
+      onTogglePreferEasiestDragonTechniques={togglePreferEasiestDragonTechniques}
+      listEasiestDragonTechniquesFirst={listEasiestDragonTechniquesFirst}
+      onToggleListEasiestDragonTechniquesFirst={toggleListEasiestDragonTechniquesFirst}
       solvePathTimeoutMs={solvePathTimeoutMs}
       onSolvePathTimeoutChange={onSolvePathTimeoutChange}
       panelRef={techniquePanelRef}

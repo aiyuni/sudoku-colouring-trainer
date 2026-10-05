@@ -2161,6 +2161,15 @@ html.app-busy .busy-cancel,
   flex-basis: 100%;
 }
 
+.technique-list-option {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  margin: 0.4rem 0;
+}
+
 .solve-path-sub-option {
   margin-top: -0.2rem;
   padding-left: 1.3rem;
@@ -2235,6 +2244,22 @@ html.app-busy .busy-cancel,
   gap: 0.15rem;
   padding: 0.45rem 0.6rem;
   text-align: left;
+}
+
+/* A Techniques / Solve Path row (TechniqueRowButton in App.tsx): a div, so
+   its text can be selected and copied, given the look of the `button` rule
+   it used to get as a real button. */
+.technique-item[role='button'] {
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.1;
+  cursor: pointer;
+  user-select: text;
 }
 
 .technique-item.active {
@@ -3008,6 +3033,12 @@ button.primary {
 
   .solve-path-stale-warning {
     color: #fbbf24;
+  }
+
+  .technique-item[role='button'] {
+    background: #1e293b;
+    border-color: #334155;
+    color: #e2e8f0;
   }
 
   .technique-item.active {
