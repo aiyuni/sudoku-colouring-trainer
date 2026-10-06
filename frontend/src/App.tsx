@@ -1650,10 +1650,17 @@ function TechniqueRowButton({
   )
 }
 
+/** The Techniques list while a correct digit is missing from a cell's
+ * candidates: one shared empty array, so the memos reading it stay put. */
+const NO_TECHNIQUE_INSTANCES: TechniqueInstance[] = []
+
 interface TechniquePanelProps {
   tab: TechniquePanelTab
   onTabChange: (tab: TechniquePanelTab) => void
   instances: TechniqueInstance[]
+  /** A cell's correct digit is no longer among its candidates: the list is
+   * replaced by a note saying so (`instances` is empty then). */
+  wrongCandidates: boolean
   /** How many rows the "3+ base Medusa candidates" filter hid, counted only
    * when it left the list empty (see hiddenByMedusaFilterCount in App). */
   hiddenByMedusaFilterCount: number
@@ -1733,6 +1740,7 @@ function TechniquePanel({
   onTabChange,
   instances,
   hiddenByMedusaFilterCount,
+  wrongCandidates,
   activeId,
   onSelect,
   techniquesRevealed,
@@ -1864,7 +1872,14 @@ function TechniquePanel({
         </div>
       </div>
       <div className="technique-panel-body">
-      {tab === 'techniques' ? (
+      {tab === 'techniques' && wrongCandidates ? (
+        // Shown whether or not the list is revealed: it gives no move away.
+        <p className="technique-empty technique-wrong-candidates" role="alert">
+          <strong>There are wrong candidates on the grid.</strong> A cell's correct digit has been removed from its
+          candidates, so the techniques list is hidden - anything found from these candidates couldn't be trusted. Undo
+          the removal, or click "Autofill all" under Candidates.
+        </p>
+      ) : tab === 'techniques' ? (
         // Spoiler view: hidden until the user asks, so the list doesn't give
         // away the next move. Not even the count is shown while hidden.
         !techniquesRevealed ? (
@@ -3021,9 +3036,17 @@ export default function App() {
     }
   }, [analysisPending, liveAnalysisInputs, analysis])
 
+  // Nothing is listed while a cell's correct digit has been removed from its
+  // candidates (by request): the finders trust the marks as given, so every
+  // row would be reasoned from a wrong grid - and applying one digs the hole
+  // deeper. The panel and the Hint popup say so instead (`wrongCandidates`).
+  // candidatesAccurate is live while `analysis` is a frame behind; for that
+  // one frame the two may disagree, which shows nothing worse than a blink.
   const techniqueInstances = useMemo(
     () =>
-      buildTechniqueInstances(
+      !candidatesAccurate
+        ? NO_TECHNIQUE_INSTANCES
+        : buildTechniqueInstances(
         analysis.board,
         analysis.candidates,
         analysis.minBaseMedusaFilter ? MIN_BASE_MEDUSA_CANDIDATES : 0,
@@ -3053,6 +3076,7 @@ export default function App() {
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
+      candidatesAccurate,
       analysis.allPossibleTechniques,
       analysis.listEasiestDragonTechniquesFirst,
       analysis.enabledFish,
@@ -3089,7 +3113,7 @@ export default function App() {
   // the Dragon work on every change.
   const hiddenByMedusaFilterCount = useMemo(
     () =>
-      !analysis.minBaseMedusaFilter || techniqueInstances.length > 0
+      !candidatesAccurate || !analysis.minBaseMedusaFilter || techniqueInstances.length > 0
         ? 0
         : buildTechniqueInstances(
             analysis.board,
@@ -3117,6 +3141,7 @@ export default function App() {
           ).length,
     // Same inputs as techniqueInstances (which it also reads).
     [
+      candidatesAccurate,
       techniqueInstances,
       analysis.enabledFish,
       analysis.enabledExotic,
@@ -7337,6 +7362,7 @@ export default function App() {
       tab={techniquePanelTab}
       onTabChange={onTechniquePanelTabChange}
       instances={techniqueInstances}
+      wrongCandidates={!candidatesAccurate}
       hiddenByMedusaFilterCount={hiddenByMedusaFilterCount}
       activeId={activeTechniqueId}
       onSelect={onSelectTechnique}
@@ -8350,6 +8376,7 @@ export default function App() {
       {hintView && (
         <HintModal
           hint={hintView.hint}
+          wrongCandidates={!candidatesAccurate}
           revealed={hintView.revealed}
           onNextHint={onNextHint}
           onClose={() => setHintView(null)}

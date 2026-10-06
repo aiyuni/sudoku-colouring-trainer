@@ -6,6 +6,9 @@ import { AREA_LAYER, useAnalyticsArea } from './usageTracking'
 interface HintModalProps {
   /** Null: no technique applies to the grid right now. */
   hint: TechniqueHint | null
+  /** With no hint: a cell's correct digit is missing from its candidates, so
+   * the Techniques list is hidden and there is nothing to hint at. */
+  wrongCandidates?: boolean
   /** How many of `hint.steps` are shown (at least 1). */
   revealed: number
   onNextHint: () => void
@@ -18,7 +21,7 @@ interface HintModalProps {
  * hint at a time (see hints.ts for what each one says). Centred over a
  * dimmed backdrop like ConfirmDialog; closes on the X, the Close button,
  * Escape, or a click on the backdrop. */
-export default function HintModal({ hint, revealed, onNextHint, onClose, onOpenTutorial }: HintModalProps) {
+export default function HintModal({ hint, wrongCandidates = false, revealed, onNextHint, onClose, onOpenTutorial }: HintModalProps) {
   useAnalyticsArea('Hint', AREA_LAYER.dialog)
   const titleId = useId()
   const nextButtonRef = useRef<HTMLButtonElement>(null)
@@ -83,7 +86,12 @@ export default function HintModal({ hint, revealed, onNextHint, onClose, onOpenT
           </button>
         </div>
         <div className="confirm-body">
-          {hint === null ? (
+          {hint === null && wrongCandidates ? (
+            <p>
+              There are wrong candidates on the grid: a cell's correct digit has been removed from its candidates, so
+              no hint can be trusted. Undo the removal, or click "Autofill all" under Candidates.
+            </p>
+          ) : hint === null ? (
             <p>
               No technique applies to the grid right now. Either the solver can't find one, or the puzzle doesn't have
               full candidates (click "Autofill all" under Candidates).
