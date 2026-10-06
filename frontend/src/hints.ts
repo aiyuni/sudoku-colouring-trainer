@@ -589,7 +589,7 @@ export function medusaColouringSteps(board: Board, candidates: CandidateGrid, co
  * look at, then the move's own explanation (`rename`d to the user's paint
  * colours). */
 export function dragonMoveSteps(move: DragonMove, rename: (text: string) => string): HintStep[] {
-  const conclusion = ['mass-elimination', 'rule3', 'rule4', 'rule5', 'solution'].includes(move.kind)
+  const conclusion = ['mass-elimination', 'rule3', 'rule4', 'rule5', 'two-sided-colour', 'two-sided', 'solution'].includes(move.kind)
   if (conclusion) {
     const refs = [...move.eliminated, ...move.solved]
     const where =

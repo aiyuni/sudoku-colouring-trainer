@@ -1,6 +1,7 @@
 import { cloneBoard, cloneCandidates } from './boardUtils'
 import { foldDragonMoves } from './dragonReplay'
 import {
+  isDynamicDragonMove,
   SudokuDragonFinder,
   type DragonCandidateRef,
   type DragonMove,
@@ -270,7 +271,7 @@ export class SudokuDragonTargetFinder {
         maxTechniquesPerStep: options.maxTechniquesPerStep,
         givens: options.givens,
       })
-      if (dynamic && dynamic.moves.some((move) => move.kind === 'extension-rule3')) {
+      if (dynamic && dynamic.moves.some(isDynamicDragonMove)) {
         consider('dynamic', chainKey, dynamic.moves)
       }
     }
@@ -302,7 +303,7 @@ export class SudokuDragonTargetFinder {
           givens: options.givens,
         },
       })) {
-        if (!plainPairs.has(pairKey(first, second)) && moves.some((move) => move.kind === 'extension-rule3')) {
+        if (!plainPairs.has(pairKey(first, second)) && moves.some(isDynamicDragonMove)) {
           consider('double-dynamic', pairKey(first, second), moves)
         }
       }

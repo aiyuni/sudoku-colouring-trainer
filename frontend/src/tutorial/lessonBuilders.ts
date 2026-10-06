@@ -7,7 +7,9 @@ import { SudokuColorFinder } from '../sudoku/SudokuColorFinder'
 import {
   DEFAULT_RULE3_TECHNIQUES,
   dragonColourLabel,
+  isDynamicDragonMove,
   SudokuDragonFinder,
+  type DragonCandidateRef,
   type DragonColor,
   type DragonMove,
   type Rule3Technique,
@@ -978,6 +980,12 @@ function dragonCaption(move: DragonMove): { badge: string; caption: string } {
       return { badge: 'Result', caption: shortenMassReason(move.description) }
     case 'solution':
       return { badge: 'Solved', caption: 'The colouring covers every empty cell: it is the solution.' }
+    case 'two-sided-colour':
+      // Both sides force one candidate: it takes both colours...
+      return { badge: 'Both sides', caption: move.description }
+    case 'two-sided':
+      // ...so it is placed.
+      return { badge: 'Result', caption: move.description }
     case 'dragon-link':
       // Double Dragon only - buildDoubleDragonLesson words its own link
       // frames, and only falls back to this if the finder's wording changes.
@@ -1050,15 +1058,28 @@ function dragonFrame(moves: DragonMove[], index: number, lastIndex: number): Tut
  * Dragon comes after the first, in its own colours, so a candidate both
  * Dragons colour is split first-Dragon bottom-left, as on the board. */
 function colouredFromFold(fold: ReturnType<typeof foldDragonMoves>): ColouredCand[] {
+  // A two-sided candidate is listed in both sides' colours (a split pip).
+  const both = new Map(fold.bothSidesCandidates.map((c) => [`${c.row},${c.col},${c.digit}`, c]))
+  const tutorialColour = (c: (typeof fold.bothSidesCandidates)[number], i: 0 | 1): TutorialColor => {
+    const colour = c.colors[i]
+    if (!c.secondDragon) return colour
+    return colour === 'blue' ? 'pink' : colour === 'darkBlue' ? 'purple' : colour === 'yellow' ? 'limeGreen' : 'darkGreen'
+  }
+  const twoSided: ColouredCand[] = Array.from(both.values()).flatMap((c) => [
+    { row: c.row, col: c.col, digit: c.digit, color: tutorialColour(c, 0) },
+    { row: c.row, col: c.col, digit: c.digit, color: tutorialColour(c, 1) },
+  ])
+  const notBoth = (c: DragonCandidateRef) => !both.has(`${c.row},${c.col},${c.digit}`)
   return [
-    ...fold.blueCandidates.map((c) => ({ ...c, color: 'blue' as const })),
-    ...fold.yellowCandidates.map((c) => ({ ...c, color: 'yellow' as const })),
-    ...fold.darkBlueCandidates.map((c) => ({ ...c, color: 'darkBlue' as const })),
-    ...fold.orangeCandidates.map((c) => ({ ...c, color: 'orange' as const })),
-    ...fold.pinkCandidates.map((c) => ({ ...c, color: 'pink' as const })),
-    ...fold.limeGreenCandidates.map((c) => ({ ...c, color: 'limeGreen' as const })),
-    ...fold.purpleCandidates.map((c) => ({ ...c, color: 'purple' as const })),
-    ...fold.darkGreenCandidates.map((c) => ({ ...c, color: 'darkGreen' as const })),
+    ...twoSided,
+    ...fold.blueCandidates.filter(notBoth).map((c) => ({ ...c, color: 'blue' as const })),
+    ...fold.yellowCandidates.filter(notBoth).map((c) => ({ ...c, color: 'yellow' as const })),
+    ...fold.darkBlueCandidates.filter(notBoth).map((c) => ({ ...c, color: 'darkBlue' as const })),
+    ...fold.orangeCandidates.filter(notBoth).map((c) => ({ ...c, color: 'orange' as const })),
+    ...fold.pinkCandidates.filter(notBoth).map((c) => ({ ...c, color: 'pink' as const })),
+    ...fold.limeGreenCandidates.filter(notBoth).map((c) => ({ ...c, color: 'limeGreen' as const })),
+    ...fold.purpleCandidates.filter(notBoth).map((c) => ({ ...c, color: 'purple' as const })),
+    ...fold.darkGreenCandidates.filter(notBoth).map((c) => ({ ...c, color: 'darkGreen' as const })),
   ]
 }
 
@@ -1123,7 +1144,7 @@ export function buildDoubleDragonLesson(options: DoubleDragonOptions): TutorialL
     optimizeDynamic: dynamic,
     dynamic: limits ?? undefined,
   })
-  if (!result || (dynamic && !result.moves.some((m) => m.kind === 'extension-rule3'))) {
+  if (!result || (dynamic && !result.moves.some(isDynamicDragonMove))) {
     throw new Error('Double Dragon Colouring finds nothing for this pair of Medusas in this example.')
   }
   const moves = result.moves

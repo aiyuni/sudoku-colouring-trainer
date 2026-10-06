@@ -12,6 +12,7 @@ import { SudokuBivalueOddagonFinder } from './sudoku/SudokuBivalueOddagonFinder'
 import { bugPlusNName, bugPlusNEliminationsText, bugPlusNReasonText, SudokuBugPlusNFinder } from './sudoku/SudokuBugPlusNFinder'
 import { SudokuColorFinder } from './sudoku/SudokuColorFinder'
 import {
+  isDynamicDragonMove,
   SudokuDragonFinder,
   DEFAULT_RULE3_TECHNIQUES,
   dragonColourLabel,
@@ -135,6 +136,11 @@ export interface TechniqueInstance {
    * highlighting statically - the colors/eliminations/solves shown come
    * from folding moves[0..step] together, not from the fields above. */
   moves?: DragonMove[]
+  /** Dev-only "AIC equivalent Dragon" note in App: an equivalent Medusa or
+   * Dragon shown in place of a chain carries the chain's own eliminations
+   * here, so the grid can ring them (as the chain's targets) while the
+   * colouring builds up. Set nowhere else. */
+  aicTargetCandidates?: TechniqueCandidateRef[]
   /** This instance's difficulty tier - see the RANK_* constants below. Used
    * by the Solve Path search: the default search tie-breaks an equal-
    * eliminations choice on it, and "Easy Solve" sorts on it directly. */
@@ -562,7 +568,7 @@ export function computeDoubleDynamicDragonExtensions(
     dynamic: { allowedRule3Techniques, aicLimitPerStep, maxTechniquesPerStep, givens },
   })) {
     const key = `${chainKey(first)}~${chainKey(second)}`
-    if (plainPairs.has(key) || !moves.some((move) => move.kind === 'extension-rule3')) {
+    if (plainPairs.has(key) || !moves.some(isDynamicDragonMove)) {
       continue
     }
     const effect = dragonEffectKey(moves)

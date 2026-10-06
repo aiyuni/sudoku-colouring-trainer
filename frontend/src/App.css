@@ -1619,6 +1619,18 @@ html.app-busy .busy-cancel,
   transform: translateY(-50%) rotate(-45deg);
 }
 
+/* Dev-only "AIC equivalent Dragon": the chain's own eliminations, ringed
+   while its equivalent Medusa/Dragon is on the grid - a dashed ring in the
+   AIC colour, so it reads as "the chain removes this", over whatever colour
+   or red mark the pip has at the step on screen. */
+.candidate.aic-elimination-target {
+  position: relative;
+  border-radius: 999px;
+  outline: 2px dashed var(--aic-node-color);
+  outline-offset: 0;
+  z-index: 1;
+}
+
 /* A manually painted candidate colour. The colour itself is drawn by
    child .paint-layer spans (renderCandidatePaint in App.tsx) sitting
    behind the digit: isolation gives the pip its own stacking context so
@@ -2317,6 +2329,66 @@ html.app-busy .busy-cancel,
   text-decoration: line-through;
 }
 
+/* The reverse badges, on a chain row: which colouring does the chain's work,
+   and which short form of one. The wrapper takes the place of the badge
+   above; each chip is drawn like it, and its colour says which technique. */
+.dragon-aic-badge.aic-dragon-badges {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.aic-dragon-chip {
+  padding: 0.12rem 0.3rem;
+  border: 1px solid;
+  border-radius: 0.35rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+
+.aic-dragon-badge-medusa {
+  border-color: #0284c7;
+  background: #0284c7;
+}
+
+.aic-dragon-badge-dragon {
+  border-color: #b45309;
+  background: #b45309;
+}
+
+.aic-dragon-badge-dynamic {
+  color: #b45309;
+  background: #fffbeb;
+  border-color: #b45309;
+  border-style: dashed;
+}
+
+.aic-dragon-chip.aic-dragon-badge-partial {
+  color: #b45309;
+  background: transparent;
+  border-style: dotted;
+  border-width: 2px;
+  padding: 0.07rem 0.25rem;
+}
+
+.aic-dragon-badge-none {
+  color: #6b7280;
+  background: transparent;
+  border-color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.aic-dragon-option + .aic-dragon-option,
+.aic-dragon-note > .dragon-aic-text + .aic-dragon-option,
+.aic-dragon-note > * + .dragon-aic-text {
+  margin-top: 0.45rem;
+}
+
 .technique-row > .dragon-aic-badge {
   position: absolute;
   top: 0.45rem;
@@ -2333,6 +2405,15 @@ html.app-busy .busy-cancel,
 
 .technique-row:has(> .dragon-aic-badge):has(> .technique-learn-button) > .technique-item {
   padding-right: 4.3rem;
+}
+
+/* Two badges need more room beside the row's text than one. */
+.technique-row:has(> .aic-dragon-badges) > .technique-item {
+  padding-right: 6.2rem;
+}
+
+.technique-row:has(> .aic-dragon-badges):has(> .technique-learn-button) > .technique-item {
+  padding-right: 7.8rem;
 }
 
 /* Dragon Colouring's move-by-move player - expands below its row in the

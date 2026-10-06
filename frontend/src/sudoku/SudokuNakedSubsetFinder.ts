@@ -48,8 +48,8 @@ export class SudokuNakedSubsetFinder {
   ): { triples: NakedSubsetInstance[]; quads: NakedSubsetInstance[] } {
     const triples: NakedSubsetInstance[] = []
     const quads: NakedSubsetInstance[] = []
-    const seenTriples = new Set<string>()
-    const seenQuads = new Set<string>()
+    const seenTriples = new Map<string, NakedSubsetInstance>()
+    const seenQuads = new Map<string, NakedSubsetInstance>()
 
     for (const unit of sudokuUnits()) {
       const unsolvedCells = unit.filter(([row, col]) => board[row][col] === 0)
@@ -87,7 +87,7 @@ export class SudokuNakedSubsetFinder {
   }
 
   private findNakedSubsets(board: Board, candidates: CandidateGrid, size: 3 | 4): NakedSubsetInstance[] {
-    const seen = new Set<string>()
+    const seen = new Map<string, NakedSubsetInstance>()
     const instances: NakedSubsetInstance[] = []
 
     for (const unit of sudokuUnits()) {
@@ -113,7 +113,7 @@ export class SudokuNakedSubsetFinder {
     eligibleCells: Cell[],
     unsolvedCells: Cell[],
     candidates: CandidateGrid,
-    seen: Set<string>,
+    seen: Map<string, NakedSubsetInstance>,
     out: NakedSubsetInstance[],
   ): void {
     for (const combo of this.combinations(eligibleCells, size)) {
@@ -144,18 +144,28 @@ export class SudokuNakedSubsetFinder {
       }
 
       // The same N cells can turn up via more than one unit (e.g. three
-      // cells spanning one row and also all sitting in one box) - dedupe
-      // so the panel doesn't list the identical subset twice.
+      // cells spanning one row and also all sitting in one box): one
+      // instance, so the panel doesn't list the identical subset twice,
+      // holding both units' eliminations. (Until 2026-10-05 the second
+      // unit's were dropped with the duplicate - a triple in a row and a box
+      // never cleared the rest of the box - which is also why an ALS-AIC
+      // restating such a triple stayed listed beside it.)
       const key = `${combo
         .map(([r, c]) => `${r}.${c}`)
         .sort()
         .join('-')}|${digits.join(',')}`
-      if (seen.has(key)) {
+      const known = seen.get(key)
+      if (known) {
+        for (const elimination of eliminations) {
+          if (!known.eliminations.some((e) => e.row === elimination.row && e.col === elimination.col && e.digit === elimination.digit)) {
+            known.eliminations.push(elimination)
+          }
+        }
         continue
       }
-      seen.add(key)
-
-      out.push({ size, cells: [...combo], digits, eliminations })
+      const instance: NakedSubsetInstance = { size, cells: [...combo], digits, eliminations }
+      seen.set(key, instance)
+      out.push(instance)
     }
   }
 

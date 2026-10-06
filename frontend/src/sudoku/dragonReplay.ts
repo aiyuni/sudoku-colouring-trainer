@@ -24,12 +24,19 @@ export function foldDragonMoves(moves: DragonMove[], stepIndex: number, includeC
   const secondColorByKey = new Map<string, { row: number; col: number; digit: number; color: DragonColor }>()
   const eliminatedCandidates: DragonCandidateRef[] = []
   const solvedCandidates: DragonCandidateRef[] = []
+  // The two-sided rule's colour step: one candidate in both sides' colours
+  // (drawn as a split pip; a later placement - its solved green - wins).
+  const bothSidesByKey = new Map<string, DragonCandidateRef & { colors: readonly [DragonColor, DragonColor]; secondDragon: boolean }>()
 
   const lastIndex = Math.min(stepIndex, moves.length - 1) - (includeCurrentMove ? 0 : 1)
   for (let i = 0; i <= lastIndex; i++) {
     const move = moves[i]
     for (const n of move.colored) {
       ;(move.secondDragon ? secondColorByKey : colorByKey).set(`${n.row},${n.col},${n.digit}`, n)
+    }
+    if (move.bothSides) {
+      const [a, b] = move.bothSides
+      bothSidesByKey.set(`${a.row},${a.col},${a.digit}`, { row: a.row, col: a.col, digit: a.digit, colors: [a.color, b.color], secondDragon: !!move.secondDragon })
     }
     eliminatedCandidates.push(...move.eliminated)
     solvedCandidates.push(...move.solved)
@@ -71,5 +78,6 @@ export function foldDragonMoves(moves: DragonMove[], stepIndex: number, includeC
     darkGreenCandidates,
     eliminatedCandidates,
     solvedCandidates,
+    bothSidesCandidates: Array.from(bothSidesByKey.values()),
   }
 }

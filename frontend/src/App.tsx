@@ -32,6 +32,7 @@ import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
 import {
+  isDynamicDragonMove,
   type DragonColor,
   type DragonExtendOptions,
   type DragonMove,
@@ -41,6 +42,7 @@ import {
 } from './sudoku/SudokuDragonFinder'
 import { ALL_FISH_TECHNIQUES, FISH_TECHNIQUE_NAMES, type FishTechnique } from './sudoku/SudokuFishFinder'
 import { foldDragonMoves } from './sudoku/dragonReplay'
+import { SudokuAicDragonConverter, type AicChainShape, type AicDragonFailure, type AicDragonSearch } from './sudoku/SudokuAicDragonConverter'
 import { dragonAicSummary, dragonAicText, isDragonEliminationMove, type DragonAicStatus, type DragonAicSummary } from './sudoku/SudokuDragonAicConverter'
 import { aicChainView } from './sudoku/SudokuShortAicFinder'
 import {
@@ -178,8 +180,20 @@ function isTypingTarget(target: EventTarget | null): boolean {
 const solver = new SudokuSolver()
 const generator = new SudokuGenerator()
 const dragonTargetFinder = new SudokuDragonTargetFinder()
+const aicDragonConverter = new SudokuAicDragonConverter()
+/** The Dynamic Dragon techniques that are themselves chains. An AIC's
+ * equivalent Dragon is searched without them: a Dynamic Dragon that calls on
+ * the chain itself as a helper would explain nothing. */
+const AIC_RULE3_TECHNIQUES: ReadonlySet<Rule3Technique> = new Set<Rule3Technique>([
+  'short single-digit aic',
+  'short aic',
+  'generic aic',
+  'grouped aic',
+  'ur-aic',
+  'als-aic',
+])
 const importer = new PuzzleImporter()
-const APP_VERSION = 'v0.8.7-beta'
+const APP_VERSION = 'v0.8.8-beta'
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -351,6 +365,24 @@ const DRAGON_HIGHLIGHT_HEX = {
   'technique-darkgreen': '#3d5c0e',
 } as const
 type DragonHighlightClass = keyof typeof DRAGON_HIGHLIGHT_HEX
+
+/** A Dragon colour's highlight class (a Double Dragon's second Dragon in its
+ * own colours). */
+function dragonHighlightClass(color: DragonColor, secondDragon: boolean): DragonHighlightClass {
+  const first: Record<DragonColor, DragonHighlightClass> = {
+    blue: 'technique-blue',
+    yellow: 'technique-yellow',
+    darkBlue: 'technique-darkblue',
+    orange: 'technique-orange',
+  }
+  const second: Record<DragonColor, DragonHighlightClass> = {
+    blue: 'technique-pink',
+    yellow: 'technique-limegreen',
+    darkBlue: 'technique-purple',
+    orange: 'technique-darkgreen',
+  }
+  return (secondDragon ? second : first)[color]
+}
 
 /** A candidate coloured by both of a Double Dragon's Dragons: the first
  * Dragon's colour bottom-left, the second's top-right - the same diagonal
@@ -751,6 +783,191 @@ function DragonAicNote() {
   )
 }
 
+/** An AIC row's equivalent Dragon (SudokuAicDragonConverter) - the reverse of
+ * the note above, and dev-only like it: the Dragon built from the chain
+ * itself, so it follows the chain exactly or there is none. Worked out as soon
+ * as a chain row is selected (a few ms), on the Techniques tab only, whose
+ * rows are found on the live grid. */
+/** What a chain row's badge says: the easiest colouring that does the
+ * chain's work - a 3D Medusa, a plain Dragon, a Dynamic Dragon - or none. */
+type AicDragonStatus = 'medusa' | 'dragon' | 'dynamic' | 'none'
+type AicDragonResult =
+  /** `label`: what the checkbox shows - a Dragon, or the 3D Medusa that
+   * already does the chain's work. */
+  | {
+      kind: 'found'
+      status: Exclude<AicDragonStatus, 'none'>
+      instance: TechniqueInstance
+      summary: string
+      label: string
+      /** A Dragon that has to colour candidates the chain doesn't use (off
+       * its own candidates and, for an ALS-AIC, its ALS cells): a partial
+       * equivalent, by request - removing more than the chain doesn't make
+       * one partial. Never set for a Medusa. */
+      partial?: true
+    }
+  | { kind: 'none'; status: 'none'; text: string }
+/** Both answers for one chain row. `full`: a real 3D Medusa (the whole
+ * component) or a real Dragon (from a stuck Medusa). `short`: the dev-only
+ * cut-down forms - a Medusa coloured only along the chain, a Dragon started
+ * from one strong link - which exist far more often and stay on the chain's
+ * own candidates (SudokuAicDragonConverter.findShort). */
+interface AicDragonResults {
+  full: AicDragonResult
+  short: AicDragonResult
+}
+type AicDragonVariant = keyof AicDragonResults
+/** What the grid shows for the selected chain row. */
+type AicDragonShown = 'chain' | AicDragonVariant
+/** `note`: the selected chain row's box - null for any other selection.
+ * `resultsOf`: what a row's badges say; undefined while that isn't worked
+ * out yet, or for a row that isn't a chain on the live grid. */
+interface AicDragonContextValue {
+  note: AicDragonNoteView | null
+  resultsOf: (instance: TechniqueInstance) => AicDragonResults | undefined
+}
+interface AicDragonNoteView {
+  /** The id of the selected AIC row - the one row the note is shown under. */
+  sourceId: string
+  results: AicDragonResults
+  shown: AicDragonShown
+  onShow: (shown: AicDragonShown) => void
+  stepIndex: number
+  onDragonStep: (delta: number) => void
+  substepIndex: number | null
+  onSubstep: (delta: number) => void
+}
+const AicDragonContext = createContext<AicDragonContextValue | null>(null)
+/** localStorage: the dev-only switch for the feature (dev server only). */
+const AIC_DRAGON_DEV_KEY = 'sudoku-solver.dev.aicDragon'
+/** Is `instance` drawn as a chain - any AIC kind (short, generic, grouped,
+ * UR-AIC, ALS-AIC, and the named patterns), never a Dragon? */
+function isAicInstance(instance: TechniqueInstance): boolean {
+  return !instance.moves && (instance.aicLinks?.length ?? 0) > 0
+}
+/** A chain row as its nodes in order (a grouped node is several candidates)
+ * and which of its links are strong - what its equivalent Dragon is built
+ * from. */
+function aicInstanceShape(instance: TechniqueInstance): AicChainShape {
+  const links = instance.aicLinks ?? []
+  const nodeOf = (ref: { row: number; col: number; digit: number }, cells: ReadonlyArray<readonly [number, number]> | undefined) =>
+    cells ? cells.map(([row, col]) => ({ row, col, digit: ref.digit })) : [ref]
+  return {
+    nodes: links.length === 0 ? [] : [nodeOf(links[0].from, links[0].fromCells), ...links.map((link) => nodeOf(link.to, link.toCells))],
+    strong: links.map((link) => link.kind === 'strong'),
+    // An ALS-AIC row's used cells are its almost locked sets' cells: a
+    // candidate coloured in one of them is not "off the chain".
+    ...(instance.id.startsWith('alsaic-') ? { alsCells: instance.usedCells } : {}),
+  }
+}
+const AIC_DRAGON_FAILURE_TEXT: Record<AicDragonFailure, string> = {
+  'no-medusa-link':
+    "none of the chain's strong links is a 3D Medusa link between two single candidates (a digit with two places left, or a cell with two candidates), so there is no Medusa to start a Dragon from.",
+  'medusa-resolves':
+    "the 3D Medusa through the chain's strong links is not stuck - it already proves something on its own, though not all of this chain's eliminations - and a Dragon only starts from a stuck Medusa.",
+  unreachable:
+    "Dragon's rules can't colour the chain's candidates one after another. Either a link is not one a Dragon can follow (a group, a UR or an ALS, with no enabled Dynamic Dragon technique standing in for it), or the chain doubles back on itself, so following one side breaks down before its end.",
+  'not-covered':
+    "the chain's candidates can be coloured, but its eliminations don't follow from that colouring (an end that is a group of cells can't be coloured, for one).",
+}
+
+const AIC_DRAGON_BADGE: Record<AicDragonVariant, Record<AicDragonStatus, { text: string; title: string }>> = {
+  full: {
+    medusa: { text: 'MED', title: 'Equivalent 3D Medusa: a 3D Medusa through this chain already makes its eliminations' },
+    dragon: { text: 'DRG', title: 'Equivalent Dragon: a plain Dragon Colouring follows this chain exactly' },
+    dynamic: { text: 'DYN', title: 'Equivalent Dynamic Dragon: a Dynamic Dragon Colouring follows this chain exactly' },
+    none: { text: 'DRG', title: 'No equivalent: neither a 3D Medusa nor a Dragon follows this chain' },
+  },
+  short: {
+    medusa: { text: 'S-MED', title: "Equivalent Short Medusa: colouring only the strong links between the chain's two ends makes its eliminations" },
+    dragon: { text: 'S-DRG', title: "Equivalent Short Dragon: a Dragon started from one of the chain's strong links follows it exactly" },
+    dynamic: { text: 'S-DYN', title: "Equivalent Short Dynamic Dragon: a Dynamic Dragon started from one of the chain's strong links follows it exactly" },
+    none: { text: 'S-DRG', title: 'No short equivalent: neither a Short Medusa nor a Short Dragon follows this chain' },
+  },
+}
+
+/** A chain row's "is there an equivalent Medusa or Dragon" badges, just left
+ * of its ? - the reverse of DragonAicBadge, in the same place (a row is a
+ * chain or a Dragon, never both): one for the real technique, one for its
+ * short form. Nothing while the feature is off, for any other technique, or
+ * until the row has been converted (App does that in the background). */
+function AicDragonBadge({ instance }: { instance: TechniqueInstance }) {
+  const results = useContext(AicDragonContext)?.resultsOf(instance)
+  if (!results) {
+    return null
+  }
+  return (
+    <span className="dragon-aic-badge aic-dragon-badges">
+      {(['full', 'short'] as const).map((variant) => {
+        const result = results[variant]
+        const badge = AIC_DRAGON_BADGE[variant][result.status]
+        const partial = result.kind === 'found' && result.partial
+        const title = partial
+          ? `Partial ${badge.title.charAt(0).toLowerCase()}${badge.title.slice(1).replace(/ follows (this chain|it) exactly/, " follows this chain, but has to colour candidates the chain doesn't use")}`
+          : badge.title
+        return (
+          <span
+            key={variant}
+            className={`aic-dragon-chip aic-dragon-badge-${result.status}${partial ? ' aic-dragon-badge-partial' : ''}`}
+            role="img"
+            aria-label={title}
+            title={title}
+          >
+            {partial ? `≈${badge.text}` : badge.text}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+function AicDragonNote({ instance }: { instance: TechniqueInstance }) {
+  const context = useContext(AicDragonContext)?.note
+  if (!context || context.sourceId !== instance.id) {
+    return null
+  }
+  const shownResult = context.shown === 'chain' ? null : context.results[context.shown]
+  const moves = shownResult?.kind === 'found' ? shownResult.instance.moves : undefined
+  // The step player goes under the note, not inside it: it is styled for the
+  // row's own background, not the note's.
+  return (
+    <>
+      <div className="dragon-aic-note aic-dragon-note">
+        {(['full', 'short'] as const).map((variant) => {
+          const result = context.results[variant]
+          return result.kind === 'none' ? (
+            <p key={variant} className="dragon-aic-text">
+              {result.text}
+            </p>
+          ) : (
+            <div key={variant} className="aic-dragon-option">
+              <label className="dragon-aic-toggle">
+                <input
+                  type="checkbox"
+                  checked={context.shown === variant}
+                  onChange={(event) => context.onShow(event.target.checked ? variant : 'chain')}
+                />
+                {result.label}
+              </label>
+              {/* The explanation only for the one being shown, by request. */}
+              {context.shown === variant && <p className="dragon-aic-text">{result.summary}</p>}
+            </div>
+          )
+        })}
+      </div>
+      {moves && (
+        <DragonStepper
+          moves={moves}
+          stepIndex={Math.min(context.stepIndex, moves.length - 1)}
+          onDragonStep={context.onDragonStep}
+          substepIndex={context.substepIndex}
+          onSubstep={context.onSubstep}
+        />
+      )}
+    </>
+  )
+}
+
 /** The forward/rewind player under a Dragon Colouring row: steps through
  * the move log one move at a time, with that move's own explanation.
  *
@@ -929,6 +1146,7 @@ function TechniqueFocusView({
           {moves && <span className="technique-focus-summary">{instance.notation}</span>}
         </span>
         <DragonAicBadge instance={instance} />
+        <AicDragonBadge instance={instance} />
         <TechniqueLearnButton instance={instance} onLearn={onLearn} />
         <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
           Apply
@@ -937,6 +1155,7 @@ function TechniqueFocusView({
       {/* Keyed on the step, so each step's text starts scrolled to its top. */}
       <div className="technique-focus-text" key={`${stepIndex}-${resolvedSubstepIndex}`}>
         {!moves && <p className="technique-notation">{instance.notation}</p>}
+        <AicDragonNote instance={instance} />
         {move && <p className="dragon-player-description">{move.description}</p>}
         {move && <DragonAicNote />}
         {substeps && (
@@ -1703,6 +1922,7 @@ function TechniquePanel({
                     <span className="technique-notation">{instance.notation}</span>
                   </TechniqueRowButton>
                   <DragonAicBadge instance={instance} />
+                  <AicDragonBadge instance={instance} />
                   <TechniqueLearnButton instance={instance} onLearn={onLearn} />
                   {isActive && moves && (
                     <DragonStepper
@@ -1713,6 +1933,7 @@ function TechniquePanel({
                       onSubstep={onDragonSubstep}
                     />
                   )}
+                  {isActive && <AicDragonNote instance={instance} />}
                 </li>
               )
             })}
@@ -2192,6 +2413,32 @@ export default function App() {
       return !enabled
     })
   }
+  // The reverse feature - an AIC row's equivalent Dragon - is dev-only in the
+  // same way, with its own switch. `aicDragonShown` says what the grid shows
+  // for a selected chain row: the chain (the default, so selecting a row
+  // still shows the chain first), its equivalent, or its short equivalent
+  // (session-only).
+  const [aicDragonDevEnabled, setAicDragonDevEnabled] = useState(() => {
+    if (!import.meta.env.DEV) {
+      return false
+    }
+    try {
+      return localStorage.getItem(AIC_DRAGON_DEV_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggleAicDragonDev = () => {
+    setAicDragonDevEnabled((enabled) => {
+      try {
+        localStorage.setItem(AIC_DRAGON_DEV_KEY, enabled ? '0' : '1')
+      } catch {
+        // Not remembered, that's all.
+      }
+      return !enabled
+    })
+  }
+  const [aicDragonShown, setAicDragonShown] = useState<AicDragonShown>('chain')
   const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
   // Techniques tab spoiler view: hidden by default, stays revealed until the
   // user hides it again (session only, not persisted).
@@ -2931,7 +3178,7 @@ export default function App() {
         : null,
     [techniquePanelTab, autocompleteResult, autocompleteResultIsCurrent],
   )
-  const highlightedTechnique =
+  const selectedTechnique =
     techniquePanelTab === 'solve-path'
       ? (activeSolvePathIndex !== null ? (solvePath?.steps[activeSolvePathIndex]?.instance ?? null) : null)
       : techniquePanelTab === 'find'
@@ -2939,6 +3186,165 @@ export default function App() {
         : techniquePanelTab === 'autocomplete'
           ? autocompleteInstance
           : activeTechnique
+  // A selected AIC row whose equivalent Dragon is being shown (dev only): the
+  // grid, the step player and the colours then follow that Dragon instead of
+  // the chain. Apply still applies the row itself.
+  const aicDragonSource =
+    aicDragonDevEnabled && techniquePanelTab === 'techniques' && selectedTechnique && isAicInstance(selectedTechnique)
+      ? selectedTechnique
+      : null
+  // Built from the chain itself (SudokuAicDragonConverter): the plain Dragon
+  // that follows it, else - unless Dynamic Dragons are disabled - a Dynamic
+  // one under the current Dynamic settings minus the AIC kinds.
+  const computeAicDragon = useCallback((source: TechniqueInstance): AicDragonResults => {
+    const shape = aicInstanceShape(source)
+    const eliminations = source.eliminatedCandidates
+    const options = {
+      dynamicEnabled: !dynamicDragonDisabled,
+      allowedRule3Techniques: new Set([...effectiveAllowedRule3Techniques].filter((t) => !AIC_RULE3_TECHNIQUES.has(t))),
+      aicLimitPerStep: aicLimitPerDragonStep,
+      maxTechniquesPerStep: maxTechniquesPerDragonStep,
+      givens,
+    }
+    const candidateText = (node: AicChainShape['nodes'][number]) => `${node[0].digit}${cellRef(node[0].row, node[0].col)}`
+    const linkText = (link: number) => `${candidateText(shape.nodes[link])} = ${candidateText(shape.nodes[link + 1])}`
+    const total = new Set(shape.nodes.flat().map((c) => `${c.row},${c.col},${c.digit}`)).size
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+    const removes = (extras: number) =>
+      extras === 0 ? 'It removes exactly what the chain removes.' : `It also removes ${plural(extras, 'other candidate')}.`
+
+    const describe = (variant: AicDragonVariant, { best, medusa, failure }: AicDragonSearch): AicDragonResult => {
+      const short = variant === 'short'
+      // A Medusa that already makes the chain's eliminations by itself comes
+      // first, by request - it is the easier technique - even when a Dragon
+      // from another of the chain's links exists too.
+      const built = medusa ? buildMedusaChainInstance(medusa.medusa, board, candidates) : null
+      if (medusa && built) {
+        return {
+          kind: 'found',
+          status: 'medusa',
+          label: short ? 'Show equivalent Short Medusa' : 'Show equivalent 3D Medusa',
+          instance: {
+            ...(short ? { ...built.instance, id: `short-${built.instance.id}`, name: `Short Medusa (${built.instance.name})` } : built.instance),
+            aicTargetCandidates: eliminations,
+          },
+          summary: [
+            short
+              ? `Partial Medusa doing the work.`
+              : `${built.instance.name}: Full-breadth Medusa for reference.`,
+            `It colours ${medusa.coloured} of the chain's ${plural(total, 'candidate')}.`,
+            medusa.medusaExtras > 0
+              ? `It also colours ${plural(medusa.medusaExtras, 'candidate')} that ${medusa.medusaExtras === 1 ? 'is' : 'are'} not on the chain${short ? ' (the chain itself is not joined by strong links all the way)' : ''}.`
+              : '',
+            removes(medusa.extras.length),
+          ]
+            .filter(Boolean)
+            .join(' '),
+        }
+      }
+      if (!best) {
+        return {
+          kind: 'none',
+          status: 'none',
+          text: short
+            ? `No Short Medusa or Short Dragon either: ${failure === 'no-medusa-link' ? AIC_DRAGON_FAILURE_TEXT['no-medusa-link'] : AIC_DRAGON_FAILURE_TEXT[failure === 'not-covered' ? 'not-covered' : 'unreachable']}`
+            : `No Dragon follows this chain exactly: ${AIC_DRAGON_FAILURE_TEXT[failure ?? 'unreachable']}`,
+        }
+      }
+      const base = best.kind === 'dragon' ? 'Dragon Colouring' : dynamicDragonLabel(best.moves)
+      const name = short ? `Short ${base}` : base
+      const offChain = short ? best.offChain : best.medusaExtras
+      // Anything coloured outside the chain's own candidates (and an
+      // ALS-AIC's ALS cells) - the Medusa's extras included - makes it partial.
+      const partial = best.offChain > 0
+      return {
+        kind: 'found',
+        status: best.kind,
+        ...(partial ? { partial: true as const } : {}),
+        label: `Show ${partial ? 'partial ' : ''}equivalent ${short ? 'Short ' : ''}Dragon`,
+        instance: {
+          ...buildDragonInstance(board, candidates, best.kind === 'dragon' ? 'dragon' : 'dynamic-dragon', name, best.chainKey, best.moves),
+          // The chain's eliminations are ringed on the grid while the
+          // colouring builds up (not a yellow cell border, by request: that
+          // is what an ALS outline looks like).
+          aicTargetCandidates: eliminations,
+        },
+        summary: [
+          short
+            ? `${name}, ${plural(best.moves.length, 'step')}: Utilizes the strong link ${linkText(best.seedLink)} for the medusa, then immediately starts the extensions.`
+            : `${name}, ${plural(best.moves.length, 'step')}, Utilizes a stuck medusa, and starting the extensions from the strong link ${linkText(best.seedLink)}.`,
+          `${best.coloured} of the chain's ${plural(total, 'candidate')} end up coloured; the rest are the ones each extension rules out.`,
+          partial ? `A partial equivalent: it colours ${plural(best.offChain, 'candidate')} the chain doesn't use.` : '',
+          offChain > 0 && !partial
+            ? short
+              ? `${plural(offChain, 'candidate')} off the chain ${offChain === 1 ? 'is' : 'are'} coloured too.`
+              : `The Medusa also colours ${plural(offChain, 'candidate')} that ${offChain === 1 ? 'is' : 'are'} not on the chain.`
+            : '',
+          best.furtherExtensions > 0 ? `It needed ${plural(best.furtherExtensions, 'more extension')} after the chain's own candidates.` : '',
+          removes(best.extras.length),
+        ]
+          .filter(Boolean)
+          .join(' '),
+      }
+    }
+    return {
+      full: describe('full', aicDragonConverter.find(board, candidates, shape, eliminations, options)),
+      short: describe('short', aicDragonConverter.findShort(board, candidates, shape, eliminations, options)),
+    }
+  }, [
+    board,
+    candidates,
+    dynamicDragonDisabled,
+    effectiveAllowedRule3Techniques,
+    aicLimitPerDragonStep,
+    maxTechniquesPerDragonStep,
+    givens,
+  ])
+  // Each chain row is converted once and kept by its instance (a new grid or
+  // new settings make new instances; `by` guards the frame in which the list
+  // is still the previous grid's).
+  const aicDragonResults = useRef(new WeakMap<TechniqueInstance, { by: typeof computeAicDragon; result: AicDragonResults }>())
+  const aicDragonFor = useCallback(
+    (source: TechniqueInstance): AicDragonResults => {
+      const known = aicDragonResults.current.get(source)
+      if (known && known.by === computeAicDragon) {
+        return known.result
+      }
+      const result = computeAicDragon(source)
+      aicDragonResults.current.set(source, { by: computeAicDragon, result })
+      return result
+    },
+    [computeAicDragon],
+  )
+  const aicDragonResult = useMemo(() => (aicDragonSource ? aicDragonFor(aicDragonSource) : null), [aicDragonSource, aicDragonFor])
+  // The badges of every chain row in the Techniques list, worked out one row
+  // per task after the list is on screen (a few ms each, dozens of rows).
+  const [aicDragonStatusVersion, setAicDragonStatusVersion] = useState(0)
+  useEffect(() => {
+    if (!aicDragonDevEnabled) {
+      return
+    }
+    const pending = techniqueInstances.filter(isAicInstance)
+    let cancelled = false
+    let timer = 0
+    const next = (at: number) => {
+      if (cancelled || at >= pending.length) {
+        return
+      }
+      if (aicDragonResults.current.get(pending[at])?.by !== computeAicDragon) {
+        aicDragonFor(pending[at])
+        setAicDragonStatusVersion((version) => version + 1)
+      }
+      timer = window.setTimeout(() => next(at + 1), 0)
+    }
+    timer = window.setTimeout(() => next(0), 0)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [aicDragonDevEnabled, techniqueInstances, computeAicDragon, aicDragonFor])
+  const aicDragonShownResult = aicDragonResult && aicDragonShown !== 'chain' ? aicDragonResult[aicDragonShown] : null
+  const highlightedTechnique = aicDragonShownResult?.kind === 'found' ? aicDragonShownResult.instance : selectedTechnique
 
   // Usage analytics (usageTracking.ts): which part of the solver the user
   // is in - the dock tab on a touch layout, else the Techniques-panel tab
@@ -2948,8 +3354,8 @@ export default function App() {
       ? `Solver › ${COMPACT_SECTIONS.find((section) => section.id === compactSection)?.label ?? compactSection}`
       : techniquePanelTab === 'techniques' && !techniquesRevealed
         ? 'Solver › Playing (techniques hidden)'
-        : highlightedTechnique
-          ? `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]} › ${techniqueTrackingName(highlightedTechnique.name)}`
+        : selectedTechnique
+          ? `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]} › ${techniqueTrackingName(selectedTechnique.name)}`
           : `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]}`
   useAnalyticsArea(solverArea, AREA_LAYER.solver)
   // Every setting as one AppSettings snapshot: saved so a reopened tab
@@ -3258,6 +3664,31 @@ export default function App() {
       statusOf: (moves) => dragonAicSummaries.current.get(moves)?.summary.status,
     }
   }, [dragonAicDevEnabled, dragonAic, dragonAicShown, dragonAicStatusVersion])
+  // The selected AIC row's "equivalent Dragon" note (dev only); null for any
+  // other selection, which is what hides the note everywhere else.
+  // A new value per version, so the badges re-render as rows are converted.
+  void aicDragonStatusVersion
+  const aicDragonView: AicDragonContextValue | null = aicDragonDevEnabled
+    ? {
+        note:
+          aicDragonSource && aicDragonResult
+            ? {
+                sourceId: aicDragonSource.id,
+                results: aicDragonResult,
+                shown: aicDragonShown,
+                onShow: onShowAicDragon,
+                stepIndex: dragonStepIndex,
+                onDragonStep,
+                substepIndex: dragonSubstepIndex,
+                onSubstep: onDragonSubstep,
+              }
+            : null,
+        resultsOf: (instance) => {
+          const known = aicDragonResults.current.get(instance)
+          return known && known.by === computeAicDragon ? known.result : undefined
+        },
+      }
+    : null
 
   // The AIC chain overlay: which links to draw, and where (straight or how
   // curved - see aicLinkLayout.ts). Memoized because the layout scores
@@ -4594,6 +5025,12 @@ export default function App() {
     )
   }
 
+  function onShowAicDragon(shown: AicDragonShown) {
+    setAicDragonShown(shown)
+    setDragonStepIndex(0)
+    setDragonSubstepIndex(null)
+  }
+
   /** The Find tab's Find button: the search below always runs with Exhaustive
    * and Optimize Dragons on, over every stuck chain, so it can take a while. */
   function runFindTargetedDragon() {
@@ -4854,7 +5291,7 @@ export default function App() {
     // Named like the Techniques list's rows: a Dynamic Dragon after the
     // techniques its Extension Rule 3 steps used, and one that never needed
     // Rule 3 is just a (plain) Dragon.
-    const usesRule3 = moves.some((move) => move.kind === 'extension-rule3')
+    const usesRule3 = moves.some(isDynamicDragonMove)
     const built = usesRule3
       ? buildDragonInstance(board, candidates, 'dynamic-dragon', dynamicDragonLabel(moves), outcome.chainKey, moves)
       : buildDragonInstance(board, candidates, 'dragon', 'Dragon Colouring', outcome.chainKey, moves)
@@ -6774,6 +7211,13 @@ export default function App() {
                 Dragon equivalent AIC: {dragonAicDevEnabled ? 'ON' : 'OFF'} (dev only)
               </button>
             )}
+            {/* Dev server only: an AIC row's "Find equivalent Dragon" (see
+                SudokuAicDragonConverter) - hidden everywhere while off. */}
+            {import.meta.env.DEV && (
+              <button type="button" className="dropdown-item" aria-pressed={aicDragonDevEnabled} onClick={toggleAicDragonDev}>
+                AIC equivalent Dragon: {aicDragonDevEnabled ? 'ON' : 'OFF'} (dev only)
+              </button>
+            )}
           </div>
           <div className="dropdown-divider" />
           {/* Keyboard input moved out of Settings: it is now the "Use as
@@ -7127,6 +7571,15 @@ export default function App() {
                             (ref) => ref.row === r && ref.col === c && ref.digit === digit,
                           ) ??
                             false)
+                        // Dev-only equivalent Medusa/Dragon of a chain row:
+                        // the chain's own eliminations, ringed so they
+                        // stay findable while the colouring builds up.
+                        const isAicTarget =
+                          active &&
+                          (highlightedTechnique?.aicTargetCandidates?.some(
+                            (ref) => ref.row === r && ref.col === c && ref.digit === digit,
+                          ) ??
+                            false)
                         // Double Dragon: coloured by both Dragons (the
                         // first's colour stays when the second absorbs it).
                         const firstDragonColour: DragonHighlightClass | null = isTechniqueBlue
@@ -7138,10 +7591,23 @@ export default function App() {
                               : isTechniqueOrange
                                 ? 'technique-orange'
                                 : null
+                        // The two-sided rule: one candidate coloured by both
+                        // sides (until it is placed).
+                        const bothSides =
+                          active && dragonHighlight
+                            ? dragonHighlight.bothSidesCandidates.find((ref) => ref.row === r && ref.col === c && ref.digit === digit)
+                            : undefined
                         const dragonSplit =
-                          firstDragonColour && secondDragonColour && !isTechniqueEliminated && !isTechniqueSolved
-                            ? ([firstDragonColour, secondDragonColour] as const)
-                            : null
+                          isTechniqueEliminated || isTechniqueSolved
+                            ? null
+                            : bothSides
+                              ? ([
+                                  dragonHighlightClass(bothSides.colors[0], bothSides.secondDragon),
+                                  dragonHighlightClass(bothSides.colors[1], bothSides.secondDragon),
+                                ] as const)
+                              : firstDragonColour && secondDragonColour
+                                ? ([firstDragonColour, secondDragonColour] as const)
+                                : null
                         const isTechniqueColored =
                           isTechniqueUsed ||
                           isTechniqueEliminated ||
@@ -7181,6 +7647,7 @@ export default function App() {
                               !dragonSplit ? (secondDragonColour ?? '') : '',
                               isTechniqueAic ? 'technique-aic' : '',
                               isTechniqueHypotheticalElimination ? 'technique-hypothetical-elimination' : '',
+                              isAicTarget ? 'aic-elimination-target' : '',
                               paint ? 'candidate-painted' : '',
                               active && paintColor ? 'paint-target' : '',
                             ]
@@ -7969,6 +8436,7 @@ export default function App() {
     }
     return (
       <DragonAicContext.Provider value={dragonAicView}>
+      <AicDragonContext.Provider value={aicDragonView}>
       <main
         className={[
           'page',
@@ -8023,12 +8491,14 @@ export default function App() {
         </nav>
         {overlays}
       </main>
+      </AicDragonContext.Provider>
       </DragonAicContext.Provider>
     )
   }
 
   return (
     <DragonAicContext.Provider value={dragonAicView}>
+      <AicDragonContext.Provider value={aicDragonView}>
     <main className="page" onKeyDown={onKeyDown} onKeyUp={onKeyUp} onPaste={onScopedPaste}>
       {header}
 
@@ -8068,6 +8538,7 @@ export default function App() {
 
       {overlays}
     </main>
-    </DragonAicContext.Provider>
+    </AicDragonContext.Provider>
+      </DragonAicContext.Provider>
   )
 }

@@ -149,7 +149,9 @@ interface Edge {
  * A cells (the loop's normal eliminations are the open chains through the
  * ALS link, found anyway). In general the missing digit is one of those the
  * ends rule out, so every other digit is locked. A closure counts as using
- * the ALS, so the chain itself may be plain.
+ * the ALS, so the chain itself may be plain. Only when the two ends rule out
+ * different digits, though: a digit both rule out is the chain's own
+ * elimination, after which the ALS is just a locked set (see closures()).
  *
  * Search: Generic AIC's breadth-first search over (node, used an ALS yet)
  * states, any odd length from 1 to ALS_AIC_MAX_LENGTH, so each start/end
@@ -344,6 +346,17 @@ export class SudokuAlsAicFinder {
       for (const [k, smallMask] of small) {
         const largeMask = large.get(k)
         if (largeMask === undefined) {
+          continue
+        }
+        // Both ends rule out the same digit: that is an ordinary AIC
+        // elimination (each of its ALS cells sees both ends), and with it made
+        // the ALS is a plain locked set - a separate, later move (a naked
+        // pair/triple), not part of this chain. Only a closure whose ends rule
+        // out different digits needs the chain, so only that one is reported
+        // (by request, 2026-10-05: 6r3c5 =ALS= 7r3c2 - ... = 6r8c4 used to
+        // claim 7r3c2 through {4,6,7} in r3c4, r3c7, which is just "r3c4 is
+        // not 6, then the naked pair {4,7}").
+        if (smallMask & largeMask) {
           continue
         }
         const als = allAls[k]

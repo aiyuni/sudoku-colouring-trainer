@@ -67,6 +67,25 @@ export type DragonMoveKind =
    * is coloured into the second Dragon's side as its dragon colour. See
    * SudokuDragonFinder.extendDouble. */
   | 'dragon-link'
+  /** The two-sided rule, in two moves (by request: the colouring first, then
+   * the conclusion). 'two-sided-colour': a candidate both sides force (one
+   * side has coloured it and the other's own rules colour it too, or both
+   * do) is given the second side's colour as well - `bothSides` holds its
+   * two colours (drawn as a split pip), `colored` stays empty, nothing is
+   * eliminated. When a forcing step was an Extension Rule 3 one, its
+   * dynamicTechniques/substeps/aicChains come with this move. 'two-sided':
+   * the next move - one side is always true, so the candidate is true
+   * (`solved`), and `eliminated` is everything placing it removes. A
+   * conclusion like Rules 3-5. See findTwoSidedMove. */
+  | 'two-sided-colour'
+  | 'two-sided'
+
+/** Whether a move rests on Extension Rule 3 - an extension-rule3 move, or a
+ * two-sided conclusion one side reached through it. What makes a Dragon
+ * Dynamic. */
+export function isDynamicDragonMove(move: DragonMove): boolean {
+  return move.kind === 'extension-rule3' || (move.kind === 'two-sided-colour' && (move.dynamicTechniques?.length ?? 0) > 0)
+}
 
 /** extend()'s options. `dynamic` turns on Dynamic Dragon Colouring:
  * Extension Rule 3, which reaches further than Rules 1-2 by simulating
@@ -130,6 +149,10 @@ export interface DragonExtendOptions {
    * with as few extensions as the search can find. Much costlier than plain
    * Optimize - see OPTIMIZE_MAX_RULE3_SIMULATIONS. */
   optimizeDynamic?: boolean
+  /** The two-sided rule (2026-10-05, by request): a candidate both sides
+   * force is true - see findTwoSidedMove. Defaults to true; false is exactly
+   * the behaviour before the rule existed (kept for equivalence checks). */
+  twoSided?: boolean
 }
 
 export interface DragonCandidateRef {
@@ -147,6 +170,9 @@ export interface DragonMove {
   kind: DragonMoveKind
   description: string
   colored: DragonNode[]
+  /** 'two-sided-colour' only: the candidate in each side's colour (the colour
+   * it already had first), drawn as a split pip until it is placed. */
+  bothSides?: readonly [DragonNode, DragonNode]
   eliminated: DragonCandidateRef[]
   solved: DragonCandidateRef[]
   /** mass-elimination and solution only: the medusa colour a same-side
@@ -1297,6 +1323,11 @@ export class SudokuDragonFinder {
     board: Board,
     candidates: CandidateGrid,
     options: DragonExtendOptions = {},
+    /** AIC equivalent Dragon only (SudokuAicDragonConverter, dev-only): the
+     * uncoloured candidates the check may colour on its own when no
+     * extension reaches a painted one - see findSteppingStone. Autocomplete
+     * Dragon never passes it: there every coloured candidate is the user's. */
+    steppingStone?: (candidate: DragonCandidateRef) => boolean,
   ): { kind: 'invalid'; problems: string[] } | { kind: 'checked'; checkedMoves: number; result: DragonResult | null } {
     const nodeMap = new Map<string, DragonNode>()
     const seed: DragonNode[] = medusaChain.candidates.map((c) => ({ row: c.row, col: c.col, digit: c.digit, color: c.color }))
@@ -1426,6 +1457,9 @@ export class SudokuDragonFinder {
           }
         }
       }
+      if (!accepted && steppingStone) {
+        accepted = this.findSteppingStone(nodeMap, pending, board, candidates, steppingStone, options, rule3Techniques)
+      }
       if (!accepted) {
         break
       }
@@ -1468,6 +1502,79 @@ export class SudokuDragonFinder {
 
     const checkedMoves = moves.length
     return { kind: 'checked', checkedMoves, result: this.extendFromState(nodeMap, moves, board, candidates, options) }
+  }
+
+  /**
+   * continueColouring's stepping stone (the AIC equivalent Dragon only): an
+   * extension - Dragon's own, so the colouring stays valid - that colours an
+   * allowed candidate no one painted. An ALS-AIC needs it: its ALS link is,
+   * in Dragon terms, a step through the set's other digits ("light blue
+   * leaves r7c5 only 7, so r7c1 only 9"), and those aren't chain nodes, so
+   * nobody paints them. A stone after which some painted candidate has a
+   * plain step is preferred; otherwise the first, plain before Extension
+   * Rule 3 (the caller prunes the stones it turns out not to need).
+   */
+  private findSteppingStone(
+    nodeMap: Map<string, DragonNode>,
+    pending: ReadonlyMap<string, DragonNode>,
+    board: Board,
+    candidates: CandidateGrid,
+    allowed: (candidate: DragonCandidateRef) => boolean,
+    options: DragonExtendOptions,
+    rule3Techniques: ReadonlySet<Rule3Technique>,
+  ): DragonMove | null {
+    const plainFor = (nodes: Map<string, DragonNode>, primary: PrimaryColor) => [
+      ...this.extensionRule1Moves(nodes, board, candidates, primary, Infinity),
+      ...this.extensionRule2Moves(nodes, board, candidates, primary, Infinity),
+      ...this.extensionHiddenSingleMoves(nodes, board, candidates, primary, Infinity),
+    ]
+    const isStone = (move: DragonMove) => {
+      const [n] = move.colored
+      if (!n) {
+        return false
+      }
+      const key = nodeKey(n.row, n.col, n.digit)
+      return !nodeMap.has(key) && !pending.has(key) && allowed(n)
+    }
+    const opensPainted = (move: DragonMove) => {
+      const [n] = move.colored
+      const next = new Map(nodeMap)
+      next.set(nodeKey(n.row, n.col, n.digit), n)
+      return (['blue', 'yellow'] as const).some((primary) =>
+        plainFor(next, primary).some((m) => {
+          const [c] = m.colored
+          const painted = pending.get(nodeKey(c.row, c.col, c.digit))
+          return painted !== undefined && sideOf(painted.color) === sideOf(c.color)
+        }),
+      )
+    }
+    const plain = (['blue', 'yellow'] as const).flatMap((primary) => plainFor(nodeMap, primary)).filter(isStone)
+    const plainPick = plain.find(opensPainted) ?? plain[0]
+    if (plainPick || !options.dynamic) {
+      return plainPick ?? null
+    }
+    for (const limit of [1, Infinity]) {
+      const rule3 = (['blue', 'yellow'] as const)
+        .flatMap((primary) =>
+          this.extensionRule3Moves(
+            nodeMap,
+            board,
+            candidates,
+            primary,
+            rule3Techniques,
+            options.aicLimitPerStep ?? true,
+            options.maxTechniquesPerStep ?? Infinity,
+            options.givens ?? null,
+            limit,
+          ),
+        )
+        .filter(isStone)
+      const pick = rule3.find(opensPainted) ?? rule3[0]
+      if (pick) {
+        return pick
+      }
+    }
+    return null
   }
 
   /** extend()'s whole run, from a colouring already in `nodeMap` whose moves
@@ -1521,6 +1628,7 @@ export class SudokuDragonFinder {
     const aicLimitPerStep = options.aicLimitPerStep ?? true
     const maxTechniquesPerStep = options.maxTechniquesPerStep ?? Infinity
     const givens = options.givens ?? null
+    const twoSided = options.twoSided ?? true
 
     if (options.optimize) {
       return this.extendOptimized(
@@ -1536,6 +1644,7 @@ export class SudokuDragonFinder {
         givens,
         options.optimizeDynamic ?? false,
         linked,
+        twoSided,
       )
     }
 
@@ -1577,7 +1686,7 @@ export class SudokuDragonFinder {
         this.findExtensionHiddenSingleMove(nodeMap, board, workingCandidates, primary) ??
         (linked ? this.findDragonLinkMove(nodeMap, linked, primary, workingCandidates) : null) ??
         (options.dynamic
-          ? this.findExtensionRule3Move(
+          ? this.rule3Extension(
               nodeMap,
               board,
               workingCandidates,
@@ -1586,9 +1695,32 @@ export class SudokuDragonFinder {
               aicLimitPerStep,
               maxTechniquesPerStep,
               givens,
+              twoSided,
             )
           : null)
       sideNothing[side] = found ? null : { sideNodes, version: candidatesVersion }
+      return found
+    }
+
+    // The two-sided rule (findTwoSidedMove) needs everything each side's
+    // plain rules would colour from its own cells alone - including what the
+    // other side has already coloured, which the extension rules skip. A pure
+    // function of that side's colouring (and the working candidates), so it
+    // is kept per side colouring and only recomputed when one changes.
+    let forcedCache = new Map<string, DragonMove[]>()
+    let forcedCacheVersion = candidatesVersion
+    const forcedBySide = (primary: PrimaryColor): DragonMove[] => {
+      if (forcedCacheVersion !== candidatesVersion) {
+        forcedCache = new Map()
+        forcedCacheVersion = candidatesVersion
+      }
+      const own = this.ownSide(nodeMap, sideOfPrimary(primary))
+      const key = `${primary}|${colouringSignature(own)}`
+      let found = forcedCache.get(key)
+      if (!found) {
+        found = this.plainForcedMoves(own, board, workingCandidates, primary)
+        forcedCache.set(key, found)
+      }
       return found
     }
 
@@ -1653,7 +1785,15 @@ export class SudokuDragonFinder {
       // once the extension is fully exhausted - as soon as one is
       // available, stop growing the chain further and surface it, rather
       // than colouring dozens more (unneeded) candidates first.
-      const eliminationMoves = this.findEliminationMoves(Array.from(nodeMap.values()), board, workingCandidates)
+      let eliminationMoves = this.findEliminationMoves(Array.from(nodeMap.values()), board, workingCandidates)
+      // No elimination: a candidate both sides force is the next conclusion
+      // (handled exactly like a Rule 3-5 one from here on).
+      if (twoSided && eliminationMoves.length === 0) {
+        const twoSidedMoves = this.findTwoSidedMove(nodeMap, forcedBySide('blue'), forcedBySide('yellow'), board, workingCandidates)
+        if (twoSidedMoves) {
+          eliminationMoves = twoSidedMoves
+        }
+      }
       // A mass elimination proves a whole side false, so it ends the
       // technique outright, exhaustive or not: nothing is left to colour.
       const isMassElimination = eliminationMoves.length === 1 && eliminationMoves[0].kind === 'mass-elimination'
@@ -1728,6 +1868,26 @@ export class SudokuDragonFinder {
         // which case those stand and only the dead-end tail is dropped.
         return continuing ? { moves: moves.slice(0, lastEliminationEnd) } : null
       }
+      if (move.kind === 'two-sided-colour') {
+        // Extension Rule 3 forced a candidate the other side has coloured: a
+        // conclusion, taken like any other (see the elimination branch above).
+        const twoSidedMoves = this.splitTwoSided(move)
+        moves.push(...twoSidedMoves)
+        if (!exhaustive) {
+          return { moves }
+        }
+        lastEliminationEnd = moves.length
+        if (workingCandidates === candidates) {
+          workingCandidates = cloneCandidates(candidates)
+        }
+        for (const { row, col, digit } of twoSidedMoves.flatMap((m) => m.eliminated)) {
+          workingCandidates[row][col][digit - 1] = false
+        }
+        strongLinkGraph = null
+        candidatesVersion++
+        continuing = true
+        continue
+      }
       for (const n of move.colored) {
         nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
       }
@@ -1794,6 +1954,7 @@ export class SudokuDragonFinder {
     givens: GivenMask | null,
     optimizeDynamic: boolean,
     linked: LinkedDragonState | null,
+    twoSided: boolean,
   ): DragonResult | null {
     // Same meaning as in extend(): fixed within a phase, changed only when
     // an exhaustive-mode elimination is applied between phases.
@@ -1822,7 +1983,7 @@ export class SudokuDragonFinder {
       this.findExtensionHiddenSingleMove(state.nodeMap, board, workingCandidates, primary) ??
       (linked ? this.findDragonLinkMove(state.nodeMap, linked, primary, workingCandidates) : null) ??
       (dynamic
-        ? this.findExtensionRule3Move(
+        ? this.rule3Extension(
             state.nodeMap,
             board,
             workingCandidates,
@@ -1831,6 +1992,7 @@ export class SudokuDragonFinder {
             aicLimitPerStep,
             maxTechniquesPerStep,
             givens,
+            twoSided,
           )
         : null)
 
@@ -1876,7 +2038,19 @@ export class SudokuDragonFinder {
         if (continuing && applyPromotion(state)) {
           continue
         }
-        const eliminationMoves = this.findEliminationMoves(Array.from(state.nodeMap.values()), board, workingCandidates)
+        let eliminationMoves = this.findEliminationMoves(Array.from(state.nodeMap.values()), board, workingCandidates)
+        // Same as extend(): with no elimination, a candidate both sides force.
+        // What a side forces is its plain extensions plus every Rule 3 move
+        // the search has met for it (rule3Known), so the search reaches
+        // two-sided conclusions as it reaches eliminations - and takes the
+        // shallowest.
+        if (twoSided && eliminationMoves.length === 0) {
+          const forced = (primary: PrimaryColor) => [...sideEntry(state, primary).cached.plain, ...state.rule3Known[sideOfPrimary(primary)]]
+          const twoSidedMoves = this.findTwoSidedMove(state.nodeMap, forced('blue'), forced('yellow'), board, workingCandidates)
+          if (twoSidedMoves) {
+            eliminationMoves = twoSidedMoves
+          }
+        }
         const isMassElimination = eliminationMoves.length === 1 && eliminationMoves[0].kind === 'mass-elimination'
         if (eliminationMoves.length > 0 && (!exhaustive || isMassElimination)) {
           return { kind: 'final', moves: eliminationMoves }
@@ -1942,6 +2116,11 @@ export class SudokuDragonFinder {
         if (!move) {
           return null
         }
+        if (move.kind === 'two-sided-colour') {
+          // Extension Rule 3 forced a candidate the other side has coloured.
+          const twoSidedMoves = this.splitTwoSided(move)
+          return { state, outcome: exhaustive ? { kind: 'elimination', moves: twoSidedMoves } : { kind: 'final', moves: twoSidedMoves }, turn: oppositePrimary(extended), extensions }
+        }
         applyExtension(state, move)
         extensions++
         turn = oppositePrimary(extended)
@@ -1987,29 +2166,21 @@ export class SudokuDragonFinder {
         !markedCandidateDigits(workingCandidates[n.row][n.col]).some((d) => state.nodeMap.has(nodeKey(n.row, n.col, d)))
       )
     }
-    const allExtensions = (state: OptimizeState, primary: PrimaryColor, everyRule3: boolean): DragonMove[] => {
+    /** This side's own colouring and its cache entry (created with its plain
+     * extensions on first use). */
+    const sideEntry = (state: OptimizeState, primary: PrimaryColor) => {
       const side = sideOfPrimary(primary)
-      const own = new Map(Array.from(state.nodeMap).filter(([, n]) => sideOf(n.color) === side))
+      const own = this.ownSide(state.nodeMap, side)
       const cacheKey = `${side}|${colouringSignature(own)}`
       let cached = sideExtensionCache.get(cacheKey)
       if (!cached) {
-        const plain: DragonMove[] = []
-        const found = new Set<string>()
-        for (const move of [
-          ...this.extensionRule1Moves(own, board, workingCandidates, primary, Infinity),
-          ...this.extensionRule2Moves(own, board, workingCandidates, primary, Infinity),
-          ...this.extensionHiddenSingleMoves(own, board, workingCandidates, primary, Infinity),
-        ]) {
-          const [n] = move.colored
-          const key = nodeKey(n.row, n.col, n.digit)
-          if (!found.has(key)) {
-            found.add(key)
-            plain.push(move)
-          }
-        }
-        cached = { plain, rule3: undefined }
+        cached = { plain: this.plainForcedMoves(own, board, workingCandidates, primary), rule3: undefined }
         sideExtensionCache.set(cacheKey, cached)
       }
+      return { side, own, cached }
+    }
+    const allExtensions = (state: OptimizeState, primary: PrimaryColor, everyRule3: boolean): DragonMove[] => {
+      const { side, own, cached } = sideEntry(state, primary)
       const moves = cached.plain.filter((move) => usableIn(state, move))
       // Double Dragon: the Dragon link is one more branch. Computed per state
       // (cheap), since it skips everything either side has coloured.
@@ -2165,6 +2336,220 @@ export class SudokuDragonFinder {
       everyRule3SimulationsLeft = OPTIMIZE_MAX_RULE3_SIMULATIONS_LATER_PHASES
       continuing = true
     }
+  }
+
+  /** One side's nodes on their own. */
+  private ownSide(nodeMap: Map<string, DragonNode>, side: Side): Map<string, DragonNode> {
+    return new Map(Array.from(nodeMap).filter(([, n]) => sideOf(n.color) === side))
+  }
+
+  /** Every candidate this side's plain rules (Rule 1, Rule 2, hidden single)
+   * would colour from `own` - its nodes alone, so including candidates the
+   * other side has coloured - one move per candidate, the simplest rule's
+   * explanation kept. Optimize's per-side extension list, and what the
+   * two-sided rule compares. */
+  private plainForcedMoves(own: Map<string, DragonNode>, board: Board, candidates: CandidateGrid, primary: PrimaryColor): DragonMove[] {
+    const plain: DragonMove[] = []
+    const found = new Set<string>()
+    for (const move of [
+      ...this.extensionRule1Moves(own, board, candidates, primary, Infinity),
+      ...this.extensionRule2Moves(own, board, candidates, primary, Infinity),
+      ...this.extensionHiddenSingleMoves(own, board, candidates, primary, Infinity),
+    ]) {
+      const [n] = move.colored
+      const key = nodeKey(n.row, n.col, n.digit)
+      if (!found.has(key)) {
+        found.add(key)
+        plain.push(move)
+      }
+    }
+    return plain
+  }
+
+  /**
+   * Extension Rule 3 for a side - the default loop's and the baseline's last
+   * resort. With the two-sided rule it simulates from the side's own nodes
+   * only, so a candidate it forces that the other side has already coloured
+   * is not skipped but reported: both sides force it, a two-sided
+   * conclusion. Otherwise (or if what it forces is uncoloured) it is the
+   * plain extension it always was - the simulation (its hypothetical board)
+   * is built from the side's own nodes either way; only the skip differs.
+   */
+  private rule3Extension(
+    nodeMap: Map<string, DragonNode>,
+    board: Board,
+    candidates: CandidateGrid,
+    primary: PrimaryColor,
+    allowedTechniques: ReadonlySet<Rule3Technique>,
+    aicLimitPerStep: boolean,
+    maxTechniquesPerStep: number,
+    givens: GivenMask | null,
+    twoSided: boolean,
+  ): DragonMove | null {
+    if (!twoSided) {
+      return this.findExtensionRule3Move(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, maxTechniquesPerStep, givens)
+    }
+    const own = this.ownSide(nodeMap, sideOfPrimary(primary))
+    const move = this.findExtensionRule3Move(own, board, candidates, primary, allowedTechniques, aicLimitPerStep, maxTechniquesPerStep, givens)
+    if (!move) {
+      return null
+    }
+    const [n] = move.colored
+    const other = nodeMap.get(nodeKey(n.row, n.col, n.digit))
+    if (!other) {
+      return move
+    }
+    const [colourMove, conclusion] = this.buildTwoSidedMoves(n, [move], other, board, candidates)
+    // Already placed (Exhaustive carries on past its own conclusions): the
+    // extension this side would have taken without the rule, as before.
+    if (conclusion.eliminated.length === 0) {
+      return this.findExtensionRule3Move(nodeMap, board, candidates, primary, allowedTechniques, aicLimitPerStep, maxTechniquesPerStep, givens)
+    }
+    // Returned where an extension is expected: the conclusion rides along
+    // (splitTwoSided takes it off again).
+    this.pendingConclusions.set(colourMove, conclusion)
+    return colourMove
+  }
+
+  /** Conclusions of two-sided colour moves rule3Extension returned in place
+   * of an extension, until the caller takes them (splitTwoSided). */
+  private readonly pendingConclusions = new WeakMap<DragonMove, DragonMove>()
+
+  /** A two-sided colour move rule3Extension returned, with its conclusion. */
+  private splitTwoSided(colourMove: DragonMove): DragonMove[] {
+    const conclusion = this.pendingConclusions.get(colourMove)
+    return conclusion ? [colourMove, conclusion] : [colourMove]
+  }
+
+  /**
+   * The two-sided rule (2026-10-05, by request; the case the old notes
+   * called "a deduction left unused"): a candidate that both sides force is
+   * true, since one side always is. Two ways to see it - one side has
+   * coloured it and the other side's own rules would colour it too, or both
+   * would colour it and neither has yet. Dragon's extension rules skip a
+   * candidate that is already coloured, so this compares `forcedA`/`forcedB`,
+   * each side's forced candidates from its own nodes alone (plainForcedMoves,
+   * plus Optimize's known Rule 3 moves). Side A's list first, then B's, then
+   * the shared uncoloured ones - deterministic. Null if none.
+   */
+  private findTwoSidedMove(
+    nodeMap: Map<string, DragonNode>,
+    forcedA: readonly DragonMove[],
+    forcedB: readonly DragonMove[],
+    board: Board,
+    candidates: CandidateGrid,
+  ): DragonMove[] | null {
+    for (const [side, forced] of [
+      ['A', forcedA],
+      ['B', forcedB],
+    ] as const) {
+      for (const move of forced) {
+        const [n] = move.colored
+        const other = nodeMap.get(nodeKey(n.row, n.col, n.digit))
+        if (other && sideOf(other.color) !== side) {
+          const twoSidedMoves = this.buildTwoSidedMoves(n, [move], other, board, candidates)
+          // One that removes nothing is already placed (Exhaustive carries on
+          // past its own conclusions) - not a new conclusion.
+          if (twoSidedMoves[1].eliminated.length > 0) {
+            return twoSidedMoves
+          }
+        }
+      }
+    }
+    const byKey = new Map(forcedB.map((move) => [nodeKey(move.colored[0].row, move.colored[0].col, move.colored[0].digit), move]))
+    for (const move of forcedA) {
+      const [n] = move.colored
+      const key = nodeKey(n.row, n.col, n.digit)
+      const fromB = byKey.get(key)
+      if (fromB && !nodeMap.has(key)) {
+        const twoSidedMoves = this.buildTwoSidedMoves(n, [move, fromB], null, board, candidates)
+        if (twoSidedMoves[1].eliminated.length > 0) {
+          return twoSidedMoves
+        }
+      }
+    }
+    return null
+  }
+
+  /** The two-sided rule's two moves for `candidate`, forced by `forcing` (one
+   * move when `already` - its colour on the other side - is given; one per
+   * side otherwise): first it takes the forcing side's colour as well (a
+   * split pip, nothing eliminated), then - one side is always true - it is
+   * placed: `eliminated` is everything that removes (its cell's other
+   * candidates, the digit from its peers), so Apply and Exhaustive's
+   * continuation work as for any conclusion. */
+  private buildTwoSidedMoves(
+    candidate: DragonCandidateRef,
+    forcing: readonly DragonMove[],
+    already: DragonNode | null,
+    board: Board,
+    candidates: CandidateGrid,
+  ): [DragonMove, DragonMove] {
+    const { row, col, digit } = candidate
+    const name = `${digit}${cellRef(row, col)}`
+    const eliminated: DragonCandidateRef[] = []
+    for (let d = 1; d <= BOARD_SIZE; d++) {
+      if (d !== digit && candidates[row][col][d - 1]) {
+        eliminated.push({ row, col, digit: d })
+      }
+    }
+    const seen = new Set<string>()
+    const boxRow = Math.floor(row / BOX_SIZE) * BOX_SIZE
+    const boxCol = Math.floor(col / BOX_SIZE) * BOX_SIZE
+    const peers: Array<[number, number]> = []
+    for (let i = 0; i < BOARD_SIZE; i++) {
+      peers.push([row, i], [i, col], [boxRow + Math.floor(i / BOX_SIZE), boxCol + (i % BOX_SIZE)])
+    }
+    for (const [r, c] of peers) {
+      const key = cellKey(r, c)
+      if ((r === row && c === col) || seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      if (board[r][c] === 0 && candidates[r][c][digit - 1]) {
+        eliminated.push({ row: r, col: c, digit })
+      }
+    }
+    // Its two colours: the one it already has (or the first side's), then
+    // the forcing side's.
+    const forcedColour = (move: DragonMove) => move.colored[0]
+    const bothSides: [DragonNode, DragonNode] = already
+      ? [already, forcedColour(forcing[0])]
+      : [forcedColour(forcing[0]), forcedColour(forcing[1])]
+    const [first, second] = bothSides.map((n) => colorLabel(n.color))
+    const why = forcing.map((move) => move.description).join(' ')
+    // A Rule 3 forcing step keeps its technique detail, so the colouring
+    // reads (and is labelled, and is played substep by substep) like the
+    // Dynamic step it is.
+    const dynamicStep = forcing.find((move) => move.kind === 'extension-rule3')
+    const colourMove: DragonMove = {
+      id: '',
+      kind: 'two-sided-colour',
+      description: already
+        ? `${why} ${name} is already ${first}, so it is now both ${first} and ${second}: both sides force it.`
+        : `${why} So ${name} is both ${first} and ${second}: both sides force it.`,
+      colored: [],
+      bothSides,
+      eliminated: [],
+      solved: [],
+      ...(dynamicStep
+        ? {
+            dynamicTechniques: dynamicStep.dynamicTechniques,
+            dynamicTechniqueCells: dynamicStep.dynamicTechniqueCells,
+            aicChains: dynamicStep.aicChains,
+            substeps: dynamicStep.substeps,
+          }
+        : {}),
+    }
+    const conclusion: DragonMove = {
+      id: '',
+      kind: 'two-sided',
+      description: `${name} is both ${first} and ${second}, and one side is always true - so ${cellRef(row, col)} is ${digit}, and every other ${digit} that sees it goes.`,
+      colored: [],
+      eliminated,
+      solved: [{ row, col, digit }],
+    }
+    return [colourMove, conclusion]
   }
 
   /** After a promotion, checks whether either newly-primary candidate has
