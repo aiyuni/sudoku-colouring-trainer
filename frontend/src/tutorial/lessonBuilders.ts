@@ -1159,7 +1159,7 @@ export function buildDoubleDragonLesson(options: DoubleDragonOptions): TutorialL
   const sharedNote =
     shared.length === 0
       ? ''
-      : ` ${joinPhrases(shared.map((c) => `${c.digit}${cellName(c.row, c.col)}`))} ${shared.length === 1 ? 'is' : 'are'} in both Dragons, so ${shared.length === 1 ? 'it shows' : 'they show'} both colours.`
+      : ` ${joinPhrases(shared.map((c) => `${c.digit}${cellName(c.row, c.col)}`))} ${shared.length === 1 ? 'is' : 'are'} in both the 1st Dragon set and the 2nd Medusa set, so ${shared.length === 1 ? 'it shows' : 'they show'} both colours.`
   const helpers = helperPhrase(first.moves)
   const kind = dynamic ? 'Dynamic Dragon' : 'Dragon'
   const frames: TutorialFrame[] = [
@@ -1233,7 +1233,7 @@ function dragonLinkFrames(move: DragonMove, before: ColouredCand[], after: Colou
     {
       badge: 'Dragon link',
       caption:
-        `The two Dragons meet: ${ownName} (${ownLabel}) and ${theirsName} (${theirsLabel}) ${why}, so they can't both be true. ` +
+        `The 1st dragon set and the 2nd medusa set meet: ${ownName} (${ownLabel}) and ${theirsName} (${theirsLabel}) ${why}, so they can't both be true. ` +
         `If ${x} is true, ${ownName} is true and ${theirsName} is false - so ${s} is false, which makes ${sPrime} true.`,
       coloured: before,
       fresh: [own, theirs],

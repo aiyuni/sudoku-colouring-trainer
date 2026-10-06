@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AREA_LAYER, useAnalyticsArea } from '../usageTracking'
+import ColourKey from './ColourKey'
 import QuizPlayer from './QuizPlayer'
 import { buildColourQuiz, buildGroupQuiz, quizIdFor } from './quizExamples'
 import { useQuizzesDone } from './quizProgress'
@@ -14,7 +15,7 @@ import {
   type LessonGroup,
 } from './tutorialExamples'
 import type { TutorialTabId } from './tutorialLinks'
-import { TUTORIAL_COLOUR_HEX, type TutorialColor, type TutorialLesson } from './tutorialTypes'
+import type { TutorialLesson } from './tutorialTypes'
 import './tutorial.css'
 
 type TabId = TutorialTabId
@@ -55,106 +56,6 @@ const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
       "Shortcuts (primarily Unique Rectangles) that rely on a proper puzzle having exactly one solution: a pattern that would allow two solutions can never happen, so whatever prevents it must be true. Uniqueness is never needed to solve a puzzle - you can always solve it without these - so this whole section consists of optional yet rewarding techniques.",
   },
 ]
-
-// What each look on the board means - shown under the player, and only the
-// ones the current example actually uses.
-type LegendKind = TutorialColor | 'split' | 'eliminated' | 'solved' | 'link' | 'helper'
-const LEGEND_TEXT: Record<LegendKind, { label: string; note?: string }> = {
-  blue: { label: 'Blue' },
-  yellow: { label: 'Yellow' },
-  darkBlue: { label: 'Dark blue', note: 'true if light blue is' },
-  orange: { label: 'Orange', note: 'true if yellow is' },
-  pink: { label: 'Pink', note: 'second Dragon' },
-  limeGreen: { label: 'Lime green', note: 'second Dragon' },
-  purple: { label: 'Purple', note: 'true if pink is' },
-  darkGreen: { label: 'Dark green', note: 'true if lime green is' },
-  split: { label: 'Two colours', note: 'coloured by both Dragons' },
-  eliminated: { label: 'Eliminated' },
-  solved: { label: 'Answer' },
-  link: { label: 'Link' },
-  helper: { label: 'Helper technique' },
-}
-
-function legendFor(lesson: TutorialLesson): LegendKind[] {
-  const used = new Set<LegendKind>()
-  for (const frame of lesson.frames) {
-    const seen = new Set<string>()
-    for (const c of frame.coloured ?? []) {
-      used.add(c.color)
-      const key = `${c.row},${c.col},${c.digit}`
-      if (seen.has(key)) used.add('split')
-      seen.add(key)
-    }
-    if (frame.eliminated?.length) used.add('eliminated')
-    if (frame.solved?.length) used.add('solved')
-    if (frame.links?.some((l) => l.kind === 'strong')) used.add('link')
-    if (frame.greenCells?.length) used.add('helper')
-  }
-  const order: LegendKind[] = [
-    'blue',
-    'yellow',
-    'darkBlue',
-    'orange',
-    'pink',
-    'limeGreen',
-    'purple',
-    'darkGreen',
-    'split',
-    'link',
-    'eliminated',
-    'solved',
-    'helper',
-  ]
-  return order.filter((kind) => used.has(kind))
-}
-
-/** The first candidate the lesson draws in two colours, as [first Dragon,
- * second Dragon] - the key's split swatch shows that pair. */
-function firstSplitPair(lesson: TutorialLesson): [TutorialColor, TutorialColor] | null {
-  for (const frame of lesson.frames) {
-    const seen = new Map<string, TutorialColor>()
-    for (const c of frame.coloured ?? []) {
-      const key = `${c.row},${c.col},${c.digit}`
-      const earlier = seen.get(key)
-      if (earlier) return [earlier, c.color]
-      seen.set(key, c.color)
-    }
-  }
-  return null
-}
-
-function Legend({ lesson }: { lesson: TutorialLesson }) {
-  // Dragon lessons talk about "light blue" next to "dark blue".
-  const hasDragonColours = lesson.frames.some((f) => f.coloured?.some((c) => c.color === 'darkBlue' || c.color === 'orange'))
-  const items = legendFor(lesson)
-  const split = firstSplitPair(lesson)
-  if (items.length === 0) return null
-  return (
-    <ul className="tutorial-legend" aria-label="Colour key">
-      {items.map((kind) => {
-        const { label, note } = LEGEND_TEXT[kind]
-        const text = kind === 'blue' && hasDragonColours ? 'Light blue' : label
-        return (
-          <li key={kind}>
-            <span
-              className={`tutorial-swatch tutorial-swatch-${kind}`}
-              style={
-                kind === 'split' && split
-                  ? { background: `linear-gradient(to top right, ${TUTORIAL_COLOUR_HEX[split[0]]} 50%, ${TUTORIAL_COLOUR_HEX[split[1]]} 50%)` }
-                  : undefined
-              }
-              aria-hidden="true"
-            />
-            <span>
-              {text}
-              {note && <span className="tutorial-legend-note"> - {note}</span>}
-            </span>
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
 
 interface LessonPlayerProps {
   lesson: TutorialLesson
@@ -230,7 +131,7 @@ export function LessonPlayer({ lesson, initialStep = 0, onPractice }: LessonPlay
             </button>
           )}
         </div>
-        <Legend lesson={lesson} />
+        <ColourKey frames={lesson.frames} />
       </div>
     </section>
   )

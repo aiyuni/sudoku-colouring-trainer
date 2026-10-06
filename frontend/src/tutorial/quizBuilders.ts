@@ -1166,4 +1166,117 @@ export function conceptQuestion(
   return choice(id, 'Quick pick', prompt, lesson.state, frame, options)
 }
 
+// The first Dragon's dragon colours and the Medusa colour each follows from;
+// the second Dragon's two Medusa colours and their own dragon colours.
+const FIRST_DRAGON_SIDE: Partial<Record<TutorialColor, TutorialColor>> = { darkBlue: 'blue', orange: 'yellow' }
+const SECOND_MEDUSA_OTHER: Partial<Record<TutorialColor, TutorialColor>> = { pink: 'limeGreen', limeGreen: 'pink' }
+const SECOND_DRAGON_COLOUR: Partial<Record<TutorialColor, TutorialColor>> = { pink: 'purple', limeGreen: 'darkGreen' }
+
+/**
+ * Double Dragon Colouring's quiz, by request: nothing but how the two
+ * Dragons' colours relate, asked on a candidate that carries a first-Dragon
+ * dragon colour D (true whenever its Medusa colour M is) and a second-Medusa
+ * colour Y at once. With X the second Medusa's other colour:
+ *
+ *   D and Y are one candidate, so neither need be true;
+ *   that candidate true => Y true => X false;   M true => X false;
+ *   X true => M false (the same fact read backwards - the Dragon link);
+ *   X false =/=> M true (a true D candidate doesn't prove M).
+ *
+ * The last two are the pair people mix up, which is why both are asked.
+ * `frame` is the lesson picture with both Dragons coloured; a position
+ * without such a candidate throws, so it gets no quiz.
+ */
+export function doubleDragonRelationQuestions(lesson: TutorialLesson, frame: QuizFrame): ChoiceQuestion[] {
+  const coloured = frame.coloured ?? []
+  const firstOf = (c: ColouredCand) => coloured.find((o) => candKey(o) === candKey(c) && FIRST_DRAGON_SIDE[o.color] !== undefined)
+  const second = required(
+    coloured.find((c) => SECOND_MEDUSA_OTHER[c.color] !== undefined && firstOf(c) !== undefined),
+    'a candidate with a first-Dragon dragon colour and a second-Medusa colour',
+  )
+  const first = required(firstOf(second), 'its first-Dragon colour')
+  const side = required(FIRST_DRAGON_SIDE[first.color], 'the Medusa colour of the dragon colour')
+  const other = required(SECOND_MEDUSA_OTHER[second.color], "the second Medusa's other colour")
+  const d = COLOUR_NAME[first.color]
+  const m = COLOUR_NAME[side]
+  const mOther = COLOUR_NAME[side === 'blue' ? 'yellow' : 'blue']
+  const mOtherDragon = COLOUR_NAME[side === 'blue' ? 'orange' : 'darkBlue']
+  const y = COLOUR_NAME[second.color]
+  const x = COLOUR_NAME[other]
+  const xDragon = COLOUR_NAME[required(SECOND_DRAGON_COLOUR[other], 'its dragon colour')]
+  const where = `${second.digit} in ${cellName(second.row, second.col)}`
+  const shown: QuizFrame = { ...frame, fresh: [{ row: second.row, col: second.col, digit: second.digit }] }
+  const ask = (id: string, prompt: string, options: QuizOption[]) => choice(id, 'Quick pick', prompt, lesson.state, shown, options)
+  return [
+    ask(
+      'same-candidate',
+      `The circled ${where} has two colours: ${d} from the first Dragon set and ${y} from the second Medusa set. Can we assume that one of ${d} and ${y} must always be true?`,
+      [
+        {
+          label: 'No',
+          correct: true,
+          why: `Both colours are on the same candidate, so here they are true together or false together. If the ${where} is false, ${x} is the true colour of the second Dragon and ${mOther} the true colour of the first.`,
+        },
+        {
+          label: 'Yes',
+          why: `That holds for the two colours of one Medusa: ${x} and ${y}, or light blue and yellow. ${capital(d)} and ${y} are on the same candidate here, and that candidate may well be false.`,
+        },
+      ],
+    ),
+    ask('dragon-colour-and-other', `${capital(x)} is the second Medusa's other colour. If the ${d} ${where} is true, what does that say about ${x}?`, [
+      {
+        label: `${capital(x)} is false`,
+        swatch: other,
+        correct: true,
+        why: `That ${second.digit} is ${y} as well, so ${y} is true - and exactly one of ${x} and ${y} is true, so ${x} is false.`,
+      },
+      { label: `${capital(x)} is true`, swatch: other, why: `That ${second.digit} is ${y} as well, and ${x} and ${y} are never both true.` },
+      { label: 'Nothing', why: `That ${second.digit} is ${y} as well, which settles the second Dragon: ${y} is true, so ${x} is not.` },
+    ]),
+    ask(
+      'medusa-colour-and-other',
+      `${capital(d)} is ${m}'s dragon colour: every ${d} candidate is true whenever ${m} is true. So if ${m} is true, what does that say about ${x}?`,
+      [
+        {
+          label: `${capital(x)} is false`,
+          swatch: other,
+          correct: true,
+          why: `If ${m} is true, the ${d} ${where} is true. It is ${y} as well, so ${y} is true and ${x} is false.`,
+        },
+        {
+          label: `${capital(x)} is true`,
+          swatch: other,
+          why: `${capital(m)} makes the ${d} ${where} true, and that ${second.digit} is ${y} - the opposite of ${x}.`,
+        },
+        {
+          label: 'Nothing',
+          why: `${capital(m)} makes the ${d} ${where} true, and that ${second.digit} is ${y}, so the second Dragon is settled too.`,
+        },
+      ],
+    ),
+    ask('other-true', `Now turn it around. If ${x} is true, can we say that ${m} is false?`, [
+      {
+        label: 'Yes',
+        correct: true,
+        why: `It is the same fact read backwards: if ${m} were true, ${x} would be false. So when ${x} is true, ${m} is false and ${mOther} is true - which is why every ${mOther} and ${mOtherDragon} candidate can be coloured ${xDragon} as well.`,
+      },
+      {
+        label: 'No',
+        why: `If ${m} were true, the ${where} would be true and ${x} false. So ${x} and ${m} can't both be true: when ${x} is true, ${m} is false.`,
+      },
+    ]),
+    ask('other-false', `And the other way: if ${x} is false, can we say that ${m} is true?`, [
+      {
+        label: 'No',
+        correct: true,
+        why: `If ${x} is false, ${y} is true, so the ${where} is true. But ${d} only follows from ${m} - a true ${d} candidate doesn't prove ${m}. ${capital(mOther)} could still be the true colour.`,
+      },
+      {
+        label: 'Yes',
+        why: `${capital(x)} being false does make the ${where} true, but that doesn't make ${m} true: a dragon colour's candidate can be true while its Medusa colour is false. All we know is that ${d} is true whenever ${m} is.`,
+      },
+    ]),
+  ]
+}
+
 export { cellName as quizCellName, digitsAt as quizDigitsAt, list as quizList }

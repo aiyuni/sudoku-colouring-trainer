@@ -8,6 +8,7 @@ import {
   buildSimpleColouringQuestions,
   buildSinglesQuestions,
   conceptQuestion,
+  doubleDragonRelationQuestions,
   dragonColourQuestion,
   dragonResultQuestion,
   patternCellsQuestion,
@@ -31,7 +32,8 @@ import type { TutorialLesson } from './tutorialTypes'
  * board + removed-marks form tutorialExamples.ts uses. Every other quiz is
  * asked on its lesson's own position: a hand-written concept question (the
  * tables below), then questions read off the lesson's frames. Dragon,
- * Dynamic and Double Dragon are deliberately kept to quick picks, by request.
+ * Dynamic and Double Dragon are deliberately kept to quick picks, by request;
+ * Double Dragon's are all about how the two Dragons' colours relate.
  *
  * To quiz a different position, change the board string (and the digit or
  * seed that says where to look). Like a lesson, a question whose position
@@ -427,46 +429,6 @@ function uniquenessQuestions(group: LessonGroup): QuizQuestion[] {
 const NOTHING_GUESSED =
   'Nothing is guessed: each side is followed on its own, and only a contradiction, or something both sides agree on, is ever used.'
 
-const DOUBLE: Record<string, { prompt: string; options: QuizOption[] }> = {
-  'Double Plain Dragon Colouring': {
-    prompt: 'A second Dragon (pink and lime green) joins the first. What is a Dragon link between them?',
-    options: [
-      {
-        label: 'A second-Dragon candidate and a first-Dragon candidate that can\'t both be true',
-        correct: true,
-        why: 'So if the second Dragon\'s side is true, that first-Dragon side is false - which makes the first Dragon\'s other side true.',
-      },
-      { label: 'Two candidates that must both be true', why: 'A link is the opposite: two candidates that can\'t both be true (same cell, or the same digit in one unit).' },
-      { label: 'A strong link inside one Medusa', why: 'That is ordinary colouring. A Dragon link joins the two Dragons to each other.' },
-    ],
-  },
-  'Double Dynamic Dragon Colouring example 1': {
-    prompt: 'Pink is linked against light blue: a pink candidate and a light blue one can\'t both be true. Which first-Dragon candidates does pink absorb?',
-    options: [
-      {
-        label: 'The yellow and orange ones',
-        swatch: 'yellow',
-        correct: true,
-        why: 'If pink is true, light blue is false, so yellow is true - and so is everything that follows from yellow (orange). They get purple, pink\'s dragon colour.',
-      },
-      { label: 'The light blue and dark blue ones', swatch: 'blue', why: 'Those are the side pink rules out, not the side it implies.' },
-      { label: 'None', why: 'With light blue ruled out, the first Dragon\'s other side must be true whenever pink is.' },
-    ],
-  },
-  'Double Dynamic Dragon Colouring example 2': {
-    prompt: 'What may a Double Dynamic Dragon use that a plain Double Dragon may not?',
-    options: [
-      {
-        label: 'Other techniques, with a colour assumed true, to keep either Dragon going',
-        correct: true,
-        why: 'Exactly as in a single Dynamic Dragon: a naked pair, a locked candidate and the like appear once a side is assumed true, and force the next candidate.',
-      },
-      { label: 'A third Medusa', why: 'It is still two Dragons. What changes is what each one may use to extend.' },
-      { label: 'A guess when it gets stuck', why: NOTHING_GUESSED },
-    ],
-  },
-}
-
 function dragonQuestions(lessons: TutorialLesson[]): QuizQuestion[] {
   const [first, second] = lessons
   if (!first) return []
@@ -508,17 +470,17 @@ function dynamicQuestions(lessons: TutorialLesson[]): QuizQuestion[] {
   ]
 }
 
+/** Only the plain Double Dragon sub-tab has a quiz, by request: the Double
+ * Dynamic examples add nothing to what it asks (how the two Dragons' colours
+ * relate), so they have no Practice pill. */
+const DOUBLE_QUIZ_TITLE = 'Double Plain Dragon Colouring'
+
 function doubleQuestions(group: LessonGroup): QuizQuestion[] {
-  const spec = DOUBLE[group.title]
   const [lesson] = group.lessons
-  if (!spec || !lesson) return []
+  if (group.title !== DOUBLE_QUIZ_TITLE || !lesson) return []
   // Shown over the picture with both Dragons coloured.
   const { caption: _caption, badge: _badge, ...shown } = lesson.frames[Math.min(1, lesson.frames.length - 1)]
-  return [
-    ...safely(() => conceptQuestion(lesson, 'concept', spec.prompt, spec.options, { ...shown, fresh: undefined })),
-    ...safely(() => dragonColourQuestion(lesson, 'which-colour', ['purple', 'darkGreen'])),
-    ...safely(() => dragonResultQuestion(lesson, `result-${lesson.id}`)),
-  ]
+  return safely(() => doubleDragonRelationQuestions(lesson, shown))
 }
 
 // ---- the page's entry points ----

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { markedCandidateDigits } from '../sudoku/boardUtils'
 import { AREA_LAYER, trackEvent, trackQuizAnswer, useAnalyticsArea } from '../usageTracking'
+import ColourKey from './ColourKey'
 import { candKey } from './puzzleState'
 import { markQuizDone } from './quizProgress'
 import type { Quiz, QuizFrame, QuizQuestion } from './quizTypes'
@@ -248,6 +249,12 @@ function QuestionView({ question, number, total, earlier, onAnswered, onNext }: 
           ? 'Tap a candidate (a small digit) on the board.'
           : 'Tap a cell on the board, then pick its candidate.'
   const need = question.kind === 'choice' ? 1 : question.need
+  // The key covers the answer picture too (and a colouring question's whole
+  // chain), so it doesn't change the moment the question is answered.
+  const keyFrames = useMemo(
+    () => [question.frame, question.doneFrame, ...(question.kind === 'colour' ? [{ coloured: question.chain }] : [])],
+    [question],
+  )
 
   return (
     <section className="tutorial-player tutorial-quiz" aria-label={`Practice question ${number} of ${total}`}>
@@ -340,6 +347,7 @@ function QuestionView({ question, number, total, earlier, onAnswered, onNext }: 
             {number === total ? 'Finish ✓' : 'Next →'}
           </button>
         </div>
+        <ColourKey frames={keyFrames} coloursOnly />
       </div>
     </section>
   )
