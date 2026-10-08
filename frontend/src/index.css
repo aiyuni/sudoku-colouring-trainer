@@ -1,15 +1,27 @@
+@import './themes.css';
+
 :root {
   font-family: 'Segoe UI', system-ui, sans-serif;
   line-height: 1.45;
-  color: #0f172a;
-  background: #f8fafc;
-  color-scheme: light dark;
+  color: var(--n-900);
+  background: var(--n-50);
+  color-scheme: light;
 }
 
+:root:where([data-scheme="dark"]) {
+  color: var(--n-200);
+  background: var(--n-950);
+  color-scheme: dark;
+}
+
+/* Until theme.ts has put the theme on <html> (just before the app's first
+   render) the page follows the system setting, so a dark system doesn't
+   flash white while it loads. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-scheme]) {
     color: #e2e8f0;
     background: #020617;
+    color-scheme: dark;
   }
 }
 

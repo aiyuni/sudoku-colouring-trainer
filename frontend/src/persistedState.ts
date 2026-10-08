@@ -1,5 +1,6 @@
 import { ALL_RULE3_TECHNIQUES } from './sudoku/SudokuDragonFinder'
 import { readHotkeyBindings } from './hotkeys'
+import { isThemeId } from './theme'
 import { CLASSIC_CONSTRAINTS, describeConstraintProblem, normalizeConstraints, type SudokuConstraints } from './sudoku/SudokuConstraints'
 import type { Board, CandidateColorGrid, CandidateGrid } from './sudoku/types'
 import {
@@ -124,6 +125,9 @@ function readSetting<K extends keyof AppSettings>(key: K, value: unknown): AppSe
       break
     case 'solvePathTimeoutMs':
       result = SOLVE_PATH_TIMEOUT_OPTIONS.some((option) => option.ms === value) ? value : undefined
+      break
+    case 'theme':
+      result = isThemeId(value) ? value : undefined
       break
     case 'hotkeys':
       result = readHotkeyBindings(value)

@@ -1,0 +1,344 @@
+/* Colour themes (Settings -> Theme; theme.ts sets data-theme / data-scheme on
+   <html>).
+
+   Two layers. data-scheme is "light" or "dark": every rule that used to sit
+   in an `@media (prefers-color-scheme: dark)` block is now written
+   `:where([data-scheme="dark"]) ...` (the :where keeps its specificity what
+   it was inside the media query), so a theme can be dark on a light system
+   and the other way round. data-theme is the theme's own name; a named theme
+   is one of the two schemes with the neutral tokens below, and the grid's
+   own variables (App.css), swapped for its palette.
+
+   The tokens are the app's neutral colours only - the slate scale the page,
+   panels, borders and text are drawn in, and the few grays. Accent blues and
+   every technique highlight colour are deliberately not tokens: a colour that
+   means "eliminated" or "chain side" must be the same in every theme. */
+:root {
+  --n-50: #f8fafc;
+  --n-100: #f1f5f9;
+  --n-200: #e2e8f0;
+  --n-300: #cbd5e1;
+  --n-400: #94a3b8;
+  --n-500: #64748b;
+  --n-600: #475569;
+  --n-700: #334155;
+  --n-800: #1e293b;
+  /* Two raised-panel shades the dark scheme uses between 800 and 900. */
+  --n-825: #1a2434;
+  --n-850: #16233a;
+  --n-900: #0f172a;
+  --n-950: #020617;
+
+  --g-50: #f9fafb;
+  --g-100: #f3f4f6;
+  --g-200: #e5e7eb;
+  --g-300: #d1d5db;
+  --g-400: #9ca3af;
+  --g-500: #6b7280;
+  --g-600: #4b5563;
+  --g-700: #374151;
+  --g-800: #1f2937;
+  --g-900: #111827;
+
+  /* A white *background* (panels, menus, inputs). White text is not a
+     token - it sits on coloured buttons and stays white. */
+  --surface: #fff;
+}
+
+/* Named themes draw the grays from their own neutral scale. */
+:root:is(
+    [data-theme='sepia'],
+    [data-theme='solarized-light'],
+    [data-theme='solarized-dark'],
+    [data-theme='nord'],
+    [data-theme='dracula'],
+    [data-theme='midnight'],
+    [data-theme='dragon'],
+    [data-theme='medusa'],
+    [data-theme='rainbow']
+  ) {
+  --g-50: var(--n-50);
+  --g-100: var(--n-100);
+  --g-200: var(--n-200);
+  --g-300: var(--n-300);
+  --g-400: var(--n-400);
+  --g-500: var(--n-500);
+  --g-600: var(--n-600);
+  --g-700: var(--n-700);
+  --g-800: var(--n-800);
+  --g-900: var(--n-900);
+}
+
+/* ---- Light themes. Their grid is light already, so "Light mode for grid"
+   (.grid-white-mode, also every How It Works grid) gets the theme's grid
+   too instead of the plain white one. ---- */
+
+:root[data-theme='sepia'] {
+  --surface: #fbf4e4;
+  --n-50: #f4ecd8;
+  --n-100: #efe5cf;
+  --n-200: #e3d7bd;
+  --n-300: #d3c4a4;
+  --n-400: #a8977a;
+  --n-500: #8a7960;
+  --n-600: #6f5f49;
+  --n-700: #5b4636;
+  --n-800: #43342a;
+  --n-825: #3f3027;
+  --n-850: #3a2c23;
+  --n-900: #2f241c;
+  --n-950: #1f1711;
+}
+
+:root[data-theme='sepia'],
+:root[data-theme='sepia'] .grid.grid-white-mode {
+  --grid-line-thick: #5b4636;
+  --grid-line-thin: #d3c4a4;
+  --grid-bg: #fbf4e4;
+  --grid-bg-hover: #f1e6cc;
+  --grid-bg-selected: #d6e3ee;
+  --grid-bg-spotlight: #fde68a;
+  --grid-selected-outline: #2563eb;
+  --grid-number-given: #2f241c;
+  --grid-number-user: #1f5a9e;
+  --grid-candidate: #7d6c55;
+}
+
+:root[data-theme='solarized-light'] {
+  --surface: #fdf6e3;
+  --n-50: #f7f0dc;
+  --n-100: #eee8d5;
+  --n-200: #e0dac6;
+  --n-300: #cfc9b4;
+  --n-400: #93a1a1;
+  --n-500: #839496;
+  --n-600: #657b83;
+  --n-700: #586e75;
+  --n-800: #073642;
+  --n-825: #05333f;
+  --n-850: #04313c;
+  --n-900: #002b36;
+  --n-950: #00222b;
+}
+
+:root[data-theme='solarized-light'],
+:root[data-theme='solarized-light'] .grid.grid-white-mode {
+  --grid-line-thick: #586e75;
+  --grid-line-thin: #d3cbb7;
+  --grid-bg: #fdf6e3;
+  --grid-bg-hover: #eee8d5;
+  --grid-bg-selected: #d5e5f0;
+  --grid-bg-spotlight: #f5dc8a;
+  --grid-selected-outline: #268bd2;
+  --grid-number-given: #002b36;
+  --grid-number-user: #1b6fb0;
+  --grid-candidate: #657b83;
+}
+
+/* ---- Dark themes. "Light mode for grid" still gives the plain white grid,
+   as it does in Dark; untick it for the theme's own grid. ---- */
+
+:root[data-theme='solarized-dark'] {
+  --n-50: #fdf6e3;
+  --n-100: #f5efdc;
+  --n-200: #eee8d5;
+  --n-300: #b3bfbd;
+  --n-400: #839496;
+  --n-500: #657b83;
+  --n-600: #3f5d66;
+  --n-700: #1a4a56;
+  --n-800: #073642;
+  --n-825: #05333f;
+  --n-850: #04313c;
+  --n-900: #002b36;
+  --n-950: #00222b;
+
+  --grid-line-thick: #657b83;
+  --grid-line-thin: #0f4654;
+  --grid-bg: #002b36;
+  --grid-bg-hover: #073642;
+  --grid-bg-selected: #0d4a6b;
+  --grid-bg-spotlight: #4a3a00;
+  --grid-selected-outline: #268bd2;
+  --grid-number-given: #eee8d5;
+  --grid-number-user: #4db5e8;
+  --grid-candidate: #839496;
+}
+
+:root[data-theme='nord'] {
+  --n-50: #f5f7fa;
+  --n-100: #eceff4;
+  --n-200: #e5e9f0;
+  --n-300: #d8dee9;
+  --n-400: #9aa5b8;
+  --n-500: #6d7a96;
+  --n-600: #4c566a;
+  --n-700: #434c5e;
+  --n-800: #3b4252;
+  --n-825: #363d4c;
+  --n-850: #333a48;
+  --n-900: #2e3440;
+  --n-950: #242933;
+
+  --grid-line-thick: #7b88a1;
+  --grid-line-thin: #434c5e;
+  --grid-bg: #2e3440;
+  --grid-bg-hover: #3b4252;
+  --grid-bg-selected: #3d5a80;
+  --grid-bg-spotlight: #5a4a1f;
+  --grid-selected-outline: #88c0d0;
+  --grid-number-given: #eceff4;
+  --grid-number-user: #88c0d0;
+  --grid-candidate: #9aa5b8;
+}
+
+:root[data-theme='dracula'] {
+  --n-50: #fcfcf9;
+  --n-100: #f8f8f2;
+  --n-200: #eeeee8;
+  --n-300: #d0d2e0;
+  --n-400: #9ea3c0;
+  --n-500: #6272a4;
+  --n-600: #565a75;
+  --n-700: #44475a;
+  --n-800: #343746;
+  --n-825: #303241;
+  --n-850: #2d2f3d;
+  --n-900: #282a36;
+  --n-950: #1e1f29;
+
+  --grid-line-thick: #6272a4;
+  --grid-line-thin: #44475a;
+  --grid-bg: #282a36;
+  --grid-bg-hover: #343746;
+  --grid-bg-selected: #4a3f6b;
+  --grid-bg-spotlight: #5c4a1a;
+  --grid-selected-outline: #bd93f9;
+  --grid-number-given: #f8f8f2;
+  --grid-number-user: #8be9fd;
+  --grid-candidate: #9ea3c0;
+}
+
+/* True black, for OLED screens. */
+:root[data-theme='midnight'] {
+  --n-50: #fafafa;
+  --n-100: #f4f4f5;
+  --n-200: #e4e4e7;
+  --n-300: #d4d4d8;
+  --n-400: #a1a1aa;
+  --n-500: #6e6e76;
+  --n-600: #45454b;
+  --n-700: #2b2b30;
+  --n-800: #1a1a1d;
+  --n-825: #141416;
+  --n-850: #111113;
+  --n-900: #0b0b0c;
+  --n-950: #000;
+
+  --grid-line-thick: #6b6b6b;
+  --grid-line-thin: #2a2a2a;
+  --grid-bg: #000;
+  --grid-bg-hover: #141414;
+  --grid-bg-selected: #10294a;
+  --grid-bg-spotlight: #4a2f0a;
+  --grid-selected-outline: #60a5fa;
+  --grid-number-given: #f5f5f5;
+  --grid-number-user: #5aa2f5;
+  --grid-candidate: #9a9a9a;
+}
+
+/* Dragon: embers and gold. */
+:root[data-theme='dragon'] {
+  --n-50: #fdf7ee;
+  --n-100: #f9efe2;
+  --n-200: #f3e3d3;
+  --n-300: #e6c9b8;
+  --n-400: #c49a8a;
+  --n-500: #94655a;
+  --n-600: #6b3a34;
+  --n-700: #452222;
+  --n-800: #2b1515;
+  --n-825: #251212;
+  --n-850: #221010;
+  --n-900: #1c0d0d;
+  --n-950: #120808;
+
+  --grid-line-thick: #d4a017;
+  --grid-line-thin: #4a2424;
+  --grid-bg: #1a0c0c;
+  --grid-bg-hover: #2b1515;
+  --grid-bg-selected: #5c2a12;
+  --grid-bg-spotlight: #5a4208;
+  --grid-selected-outline: #f5b301;
+  --grid-number-given: #fbe8c8;
+  --grid-number-user: #ffa940;
+  --grid-candidate: #c49a8a;
+}
+
+/* Medusa: sea green and stone. */
+:root[data-theme='medusa'] {
+  --n-50: #f5faf8;
+  --n-100: #ebf5f1;
+  --n-200: #dcece6;
+  --n-300: #c2dcd2;
+  --n-400: #8fb5a8;
+  --n-500: #5c8a7c;
+  --n-600: #356356;
+  --n-700: #1f4539;
+  --n-800: #132c25;
+  --n-825: #10261f;
+  --n-850: #0e231d;
+  --n-900: #0b1d18;
+  --n-950: #06130f;
+
+  --grid-line-thick: #5fae8f;
+  --grid-line-thin: #1f4539;
+  --grid-bg: #0b1d18;
+  --grid-bg-hover: #132c25;
+  --grid-bg-selected: #14506b;
+  --grid-bg-spotlight: #4a4208;
+  --grid-selected-outline: #4fd1c5;
+  --grid-number-given: #e6f5ef;
+  --grid-number-user: #7ee0b5;
+  --grid-candidate: #8fb5a8;
+}
+
+/* Rainbow: the Light theme with a pastel rainbow behind the page and a
+   rainbow for the title and the grid's thick lines. A light theme, so its
+   grid is used with "Light mode for grid" on as well. */
+:root[data-theme='rainbow'] {
+  --rainbow: linear-gradient(90deg, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7);
+  background: linear-gradient(
+      135deg,
+      #ffe4e6 0%,
+      #ffedd5 17%,
+      #fef9c3 33%,
+      #dcfce7 50%,
+      #cffafe 67%,
+      #dbeafe 83%,
+      #f3e8ff 100%
+    )
+    fixed;
+}
+
+:root[data-theme='rainbow'],
+:root[data-theme='rainbow'] .grid.grid-white-mode {
+  --grid-line-thin: #d4d4e0;
+  --grid-bg: #fff;
+  --grid-number-given: #111827;
+  --grid-number-user: #7c3aed;
+}
+
+/* .grid's own background and border are its thick lines (App.css). */
+:root[data-theme='rainbow'] .grid {
+  background: linear-gradient(135deg, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7) border-box;
+  border-color: transparent;
+}
+
+:root[data-theme='rainbow'] h1:has(.app-version) {
+  width: fit-content;
+  background: var(--rainbow);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}

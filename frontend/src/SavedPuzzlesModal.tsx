@@ -211,7 +211,7 @@ export default function SavedPuzzlesModal({
               </p>
             ) : (
               <p className="saved-puzzles-note">
-                Digits, candidates and colours are all saved - in this browser, on this device only.
+                Digits, candidates and colours are all saved.
               </p>
             )}
             {error && (

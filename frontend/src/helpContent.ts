@@ -375,6 +375,12 @@ export const HELP_TABS: HelpTab[] = [
             settingKey: 'gridWhiteMode',
             description: "Light or dark colour scheme for the grid.",
           },
+          {
+            name: 'Theme',
+            settingKey: 'theme',
+            description:
+              "The colours of the whole page: System default (follows your device's light or dark setting), Light, Dark, Sepia, Solarized Light, Solarized Dark, Nord, Dracula, Midnight (true black), Dragon, Medusa or Rainbow. In a dark theme the grid stays white while \"Light mode for grid\" is on; turn that off to see the theme's own grid.",
+          },
         ],
       },
       {

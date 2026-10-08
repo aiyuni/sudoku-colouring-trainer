@@ -1,5 +1,6 @@
 import { DEFAULT_RULE3_TECHNIQUES, type Rule3Technique } from './sudoku/SudokuDragonFinder'
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
+import { THEME_OPTIONS, type ThemeId } from './theme'
 import { DEFAULT_HOTKEYS, HOTKEY_ACTIONS, HOTKEY_LABELS, formatHotkey, type HotkeyBindings } from './hotkeys'
 
 /** Every user-adjustable setting, with its default. This is the single
@@ -16,6 +17,9 @@ export interface AppSettings {
   showStrongLinks: boolean
   showBivalueCells: boolean
   gridWhiteMode: boolean
+  /** Settings -> Theme: the page's colours (theme.ts). 'system' follows the
+   * device's light/dark setting. */
+  theme: ThemeId
   minBaseMedusaFilter: boolean
   /** Settings -> "Entropy: colour cells by group" (Variant page, Entropy
    * puzzles only): cells narrowed to one or two of the low / middle / high
@@ -121,6 +125,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showStrongLinks: false,
   showBivalueCells: false,
   gridWhiteMode: true,
+  theme: 'system',
   minBaseMedusaFilter: false,
   entropyGroupMarking: false,
   allPossibleTechniques: false,
@@ -289,6 +294,9 @@ export function describeDefault(key: keyof AppSettings): string {
   }
   if (key === 'keyboardMode') {
     return value === 'solution' ? 'Solution' : 'Candidates'
+  }
+  if (key === 'theme') {
+    return THEME_OPTIONS.find((option) => option.id === value)?.label ?? String(value)
   }
   if (key === 'dragonGenerationTimeoutMs') {
     return DRAGON_GENERATION_TIMEOUT_OPTIONS.find((option) => option.ms === value)?.label ?? `${Number(value) / 1000} seconds`

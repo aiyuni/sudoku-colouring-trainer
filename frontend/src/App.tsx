@@ -82,6 +82,7 @@ import {
 import HelpModal from './HelpModal'
 import WelcomeModal from './WelcomeModal'
 import HintModal from './HintModal'
+import { THEME_OPTIONS, applyTheme, isThemeId } from './theme'
 import {
   buildTechniqueHint,
   checkMedusaPaint,
@@ -2648,6 +2649,9 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   const [showStrongLinks, setShowStrongLinks] = useState(initialSettings.showStrongLinks)
   const [showBivalueCells, setShowBivalueCells] = useState(initialSettings.showBivalueCells)
   const [gridWhiteMode, setGridWhiteMode] = useState(initialSettings.gridWhiteMode)
+  const [theme, setTheme] = useState(initialSettings.theme)
+  // A layout effect, so the first paint is already in the chosen theme.
+  useLayoutEffect(() => applyTheme(theme), [theme])
   const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(initialSettings.minBaseMedusaFilter)
   const [entropyGroupMarking, setEntropyGroupMarking] = useState(initialSettings.entropyGroupMarking)
   const [allPossibleTechniques, setAllPossibleTechniques] = useState(initialSettings.allPossibleTechniques)
@@ -3614,6 +3618,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       showStrongLinks,
       showBivalueCells,
       gridWhiteMode,
+      theme,
       minBaseMedusaFilter,
       entropyGroupMarking,
       allPossibleTechniques,
@@ -3659,6 +3664,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       showStrongLinks,
       showBivalueCells,
       gridWhiteMode,
+      theme,
       minBaseMedusaFilter,
       entropyGroupMarking,
       allPossibleTechniques,
@@ -4917,6 +4923,12 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     setGridWhiteMode((current) => !current)
   }
 
+  function onThemeChange(event: ChangeEvent<HTMLSelectElement>) {
+    if (isThemeId(event.target.value)) {
+      setTheme(event.target.value)
+    }
+  }
+
   /** 'naked pair' has no checkbox - it's always allowed - so this is never
    * called with it, but the check stays as a safety net against a future
    * checkbox for it being added by mistake. */
@@ -5058,6 +5070,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     setShowStrongLinks(DEFAULT_SETTINGS.showStrongLinks)
     setShowBivalueCells(DEFAULT_SETTINGS.showBivalueCells)
     setGridWhiteMode(DEFAULT_SETTINGS.gridWhiteMode)
+    setTheme(DEFAULT_SETTINGS.theme)
     setMinBaseMedusaFilter(DEFAULT_SETTINGS.minBaseMedusaFilter)
     setEntropyGroupMarking(DEFAULT_SETTINGS.entropyGroupMarking)
     setAllPossibleTechniques(DEFAULT_SETTINGS.allPossibleTechniques)
@@ -8421,6 +8434,19 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
             >
               <input type="checkbox" checked={gridWhiteMode} onChange={toggleGridWhiteMode} />
               Light mode for grid
+            </label>
+            <label
+              className="menu-select"
+              title="The colours of the whole page. System default follows your device's light or dark setting."
+            >
+              Theme
+              <select value={theme} onChange={onThemeChange}>
+                {THEME_OPTIONS.map(({ id, label }) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
           <div className="dropdown-divider" />
