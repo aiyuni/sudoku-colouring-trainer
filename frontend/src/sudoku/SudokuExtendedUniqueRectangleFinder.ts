@@ -1,3 +1,4 @@
+import { hasDiagonals, isStandardLayout, uniquenessHolds } from './SudokuConstraints'
 import type { CandidateElimination } from './SudokuPairFinder'
 import type { Cell } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
@@ -221,6 +222,14 @@ const digitsOf = (mask: number) => [1, 2, 3, 4, 5, 6, 7, 8, 9].filter((d) => mas
  */
 export class SudokuExtendedUniqueRectangleFinder {
   find(board: Board, candidates: CandidateGrid): ExtendedUrInstance[] {
+    // The 6-cell patterns are built for the standard 3x3 boxes (allPatterns),
+    // and like every deadly pattern they need a puzzle without Killer cages
+    // (or the Anti-Knight rule). On an X-Sudoku a pattern would also have to
+    // keep clear of the diagonals; the precomputed patterns don't know them,
+    // so the technique is simply off there.
+    if (!isStandardLayout() || !uniquenessHolds() || hasDiagonals()) {
+      return []
+    }
     const masks = new Array<number>(81).fill(0)
     for (let row = 0; row < 9; row++) {
       for (let col = 0; col < 9; col++) {

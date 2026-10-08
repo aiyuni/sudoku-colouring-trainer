@@ -1,6 +1,6 @@
 import { markedCandidateDigits } from './boardUtils'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import type { Cell } from './SudokuUnits'
+import { BOARD_SIZE } from './SudokuRules'
+import { boxCells, boxOf, type Cell } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 export interface CandidateElimination {
@@ -107,15 +107,10 @@ export class SudokuPairFinder {
         addUnlessPair(row, colA)
       }
     }
-    const boxRowA = Math.floor(rowA / BOX_SIZE)
-    const boxColA = Math.floor(colA / BOX_SIZE)
-    if (boxRowA === Math.floor(rowB / BOX_SIZE) && boxColA === Math.floor(colB / BOX_SIZE)) {
-      const boxRow = boxRowA * BOX_SIZE
-      const boxCol = boxColA * BOX_SIZE
-      for (let dr = 0; dr < BOX_SIZE; dr++) {
-        for (let dc = 0; dc < BOX_SIZE; dc++) {
-          addUnlessPair(boxRow + dr, boxCol + dc)
-        }
+    const box = boxOf(rowA, colA)
+    if (box === boxOf(rowB, colB)) {
+      for (const [row, col] of boxCells(box)) {
+        addUnlessPair(row, col)
       }
     }
 

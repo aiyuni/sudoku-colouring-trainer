@@ -26,6 +26,10 @@ import { foldDragonMoves } from './sudoku/dragonReplay'
 import { formatCandidate, listEffectiveEliminations, type TargetProblem } from './sudoku/SudokuDragonTargetFinder'
 import { FISH_TECHNIQUE_NAMES, SudokuFishFinder, type FishInstance, type FishTechnique } from './sudoku/SudokuFishFinder'
 import { SudokuHiddenPairFinder } from './sudoku/SudokuHiddenPairFinder'
+import { killerEliminationsText, SudokuKillerCageFinder, type KillerCageInstance } from './sudoku/SudokuKillerCageFinder'
+import { SudokuEntropyFinder, type EntropySquareInstance } from './sudoku/SudokuEntropyFinder'
+import { SudokuVariantLockedFinder, type VariantLockedInstance } from './sudoku/SudokuVariantLockedFinder'
+import { SudokuKillerRule45Finder, type KillerRule45Instance } from './sudoku/SudokuKillerRule45Finder'
 import { SudokuLockedCandidateFinder } from './sudoku/SudokuLockedCandidateFinder'
 import {
   type ChainColor,
@@ -36,6 +40,7 @@ import {
 import { SudokuNakedSubsetFinder } from './sudoku/SudokuNakedSubsetFinder'
 import { SudokuPairFinder } from './sudoku/SudokuPairFinder'
 import { BOARD_SIZE, SudokuRules } from './sudoku/SudokuRules'
+import { sameBox } from './sudoku/SudokuUnits'
 import { SudokuGenericAicFinder } from './sudoku/SudokuGenericAicFinder'
 import {
   aicChainText,
@@ -86,6 +91,11 @@ export const bivalueOddagonFinder = new SudokuBivalueOddagonFinder()
 export const colorFinder = new SudokuColorFinder()
 export const medusaFinder = new SudokuMedusaFinder()
 export const dragonFinder = new SudokuDragonFinder()
+// Variant solver only: a Classic grid has no cages, so these find nothing there.
+export const killerCageFinder = new SudokuKillerCageFinder()
+export const variantLockedFinder = new SudokuVariantLockedFinder()
+export const entropyFinder = new SudokuEntropyFinder()
+export const killerRule45Finder = new SudokuKillerRule45Finder()
 
 // A 3x3 grid of 3x3 boxes; reused for both the box index and the cell
 // index within a box, since both range over the same nine values.
@@ -145,6 +155,13 @@ export interface TechniqueInstance {
    * by the Solve Path search: the default search tie-breaks an equal-
    * eliminations choice on it, and "Easy Solve" sorts on it directly. */
   techniqueRank: number
+  /** Variant solver only: set on a deduction that comes from a constraint a
+   * Classic Sudoku doesn't have (a Killer cage's sum, an X-Sudoku diagonal,
+   * an Anti-Knight knight's move, an Entropy 2x2 square), so the Techniques
+   * list can say so. Every
+   * other row is a Classic technique - on a Jigsaw, run on its regions in
+   * place of the boxes. */
+  variantConstraint?: 'killer' | 'x-sudoku' | 'anti-knight' | 'entropy'
   /** Double Dynamic Dragon only: a row found with an easier Dynamic Dragon
    * technique set than every single Dynamic Dragon on the grid needs (see
    * pushEasierDoubleDynamicDragons). The Solve Path's "Prefer easier double
@@ -170,7 +187,24 @@ export interface TechniqueInstance {
  * Give its instances a rank here too, in its place in the difficulty order -
  * see CLAUDE.md's "Adding a technique" note. */
 export const RANK_SINGLE = 0
+// Killer cages (Variant solver only; nothing on a Classic grid ever has these
+// ranks). Fractions, so the Classic tiers keep their numbers: what a cage's
+// sum says about its own cells is the first thing a Killer solver looks at,
+// right after singles (a cage with one empty cell left *is* a single, rank
+// 0); a digit a cage must hold, and the Rule of 45, sit around Locked
+// Candidates - all of them Basics (<= RANK_SUBSET).
+export const RANK_CAGE_COMBINATIONS = 0.5
+// Entropy (Variant page): what one 2x2 square says about its own four cells
+// (SudokuEntropyFinder) - the rule itself applied to the candidates, so the
+// first thing to look at after singles, like a cage's combinations.
+export const RANK_ENTROPY_SQUARE = 0.75
 export const RANK_LOCKED_CANDIDATE = 1
+// X-Sudoku / Anti-Knight (Variant page): a Locked Candidate whose cells are
+// seen along a diagonal or by a knight's move - the same idea as Pointing and
+// Claiming, one notch harder to spot, so right after them.
+export const RANK_VARIANT_LOCKED_CANDIDATE = 1.125
+export const RANK_CAGE_LOCKED_CANDIDATE = 1.25
+export const RANK_RULE_OF_45 = 1.5
 export const RANK_SUBSET = 2 // naked pair/triple/quad, hidden pair
 export const RANK_UR = 3
 export const RANK_BUG_PLUS_N = 4 // BUG+1, BUG+2 and BUG+3 alike - one technique
@@ -816,9 +850,7 @@ export function medusaMassCoverage(mass: MassEliminationInstance, candidates: Ca
         const sameCell = row === placed.row && col === placed.col
         const peer =
           !sameCell &&
-          (row === placed.row ||
-            col === placed.col ||
-            (Math.floor(row / 3) === Math.floor(placed.row / 3) && Math.floor(col / 3) === Math.floor(placed.col / 3)))
+          (row === placed.row || col === placed.col || sameBox(row, col, placed.row, placed.col))
         for (let digit = 1; digit <= 9; digit++) {
           if (candidates[row][col][digit - 1] && ((sameCell && digit !== placed.digit) || (peer && digit === placed.digit))) {
             covered.add(`${row}.${col}.${digit}`)
@@ -942,6 +974,19 @@ export function buildTechniqueInstances(
       techniqueRank: RANK_SINGLE,
     })
   }
+  // Killer cages (none on a Classic grid). A cage with one empty cell left is
+  // a single of its own kind; the combinations come next.
+  const cageRows = killerCageFinder.find(board, candidates)
+  instances.push(...cageRows.filter((cage) => cage.kind === 'sum').map(buildKillerCageInstance))
+  if (easiestFound()) {
+    return instances
+  }
+  instances.push(...cageRows.filter((cage) => cage.kind === 'combinations').map(buildKillerCageInstance))
+  if (easiestFound()) {
+    return instances
+  }
+  // Entropy (nothing on any other grid): a 2x2 square's own deductions.
+  instances.push(...entropyFinder.find(board, candidates).map(buildEntropySquareInstance))
   if (easiestFound()) {
     return instances
   }
@@ -964,6 +1009,22 @@ export function buildTechniqueInstances(
       techniqueRank: RANK_LOCKED_CANDIDATE,
     })
   }
+  if (easiestFound()) {
+    return instances
+  }
+
+  // X-Sudoku / Anti-Knight (nothing on any other grid): locked candidates
+  // through a diagonal or a knight's move.
+  instances.push(...variantLockedFinder.find(board, candidates).map(buildVariantLockedInstance))
+  if (easiestFound()) {
+    return instances
+  }
+
+  pushUnlessCovered(cageRows.filter((cage) => cage.kind === 'locked').map(buildKillerCageInstance))
+  if (easiestFound()) {
+    return instances
+  }
+  instances.push(...killerRule45Finder.find(board, candidates).map(buildKillerRule45Instance))
   if (easiestFound()) {
     return instances
   }
@@ -1494,18 +1555,18 @@ export function buildTechniqueInstances(
   if (easiestFound()) {
     return instances
   }
-  // ALS-AIC (off by default) ranks just above UR-AIC, and is hidden the
-  // same way: by an easier row that makes all its eliminations and is
-  // neither a Dragon nor an AIC (Short Single-Digit, Short, Generic AIC or
-  // UR-AIC) - so ALS-xz, itself the shortest ALS chain, does hide it.
+  // ALS-AIC (off by default) ranks just above UR-AIC. It is hidden by an
+  // easier non-Dragon row that makes all its eliminations - ALS-xz (itself
+  // the shortest ALS chain) and, unlike UR-AIC, the plain AICs too (Short
+  // Single-Digit, Short, Generic), by request (2026-10-06): an ALS of two
+  // bivalue cells sharing a digit is just two ordinary strong links, so such
+  // an "ALS-AIC" is a plain chain written shorter - the user's case was a
+  // Y-Wing listed again as `1r1c9 = 5r1c9 - 5r5c9 =ALS= 1r4c7`. Grouped AIC
+  // and UR-AIC rows (both ranked above Dragon) never hide it, by request.
   if (alsAicEnabled) {
-    const aicRanks = new Set([RANK_SHORT_SINGLE_DIGIT_AIC, RANK_SHORT_AIC, RANK_GENERIC_AIC, RANK_UR_AIC])
     pushUnlessCovered(
       alsAicFinder.find(board, candidates).map(buildAlsAicInstance),
-      instances.filter(
-        (instance) =>
-          (instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_ALS_XZ) && !aicRanks.has(instance.techniqueRank),
-      ),
+      instances.filter((instance) => instance.techniqueRank < RANK_DRAGON || instance.techniqueRank === RANK_ALS_XZ),
     )
   }
   if (easiestFound()) {
@@ -1692,6 +1753,103 @@ function pushUnlessCoveredByEasier(
 }
 
 /** A Techniques-panel row for one fish. */
+function buildKillerCageInstance(cage: KillerCageInstance): TechniqueInstance {
+  const id = `killer-cage-${cage.kind}-${cage.cage.cells.map(([row, col]) => `${row}.${col}`).join('-')}`
+  if (cage.kind === 'sum') {
+    const { row, col, digit } = cage.solved!
+    return {
+      id,
+      name: 'Cage Sum',
+      notation: `${capitalizeFirst(cage.reasonText)}, so ${cellRef(row, col)} is ${digit}`,
+      usedCells: cage.cage.cells,
+      usedCandidates: [],
+      eliminatedCandidates: cage.eliminations,
+      solvedCandidates: [cage.solved!],
+      techniqueRank: RANK_SINGLE,
+      variantConstraint: 'killer',
+    }
+  }
+  if (cage.kind === 'locked') {
+    return {
+      id: `${id}-${cage.lockedDigit}`,
+      name: 'Cage Locked Candidate',
+      notation: `${capitalizeFirst(cage.reasonText)}, so ${killerEliminationsText(cage.eliminations)}`,
+      usedCells: cage.cage.cells,
+      usedCandidates: cage.lockedCells.map(([row, col]) => ({ row, col, digit: cage.lockedDigit! })),
+      eliminatedCandidates: cage.eliminations,
+      solvedCandidates: [],
+      techniqueRank: RANK_CAGE_LOCKED_CANDIDATE,
+      variantConstraint: 'killer',
+    }
+  }
+  return {
+    id,
+    name: 'Cage Combinations',
+    notation: `${capitalizeFirst(cage.reasonText)}, so ${killerEliminationsText(cage.eliminations)}`,
+    usedCells: cage.cage.cells,
+    usedCandidates: [],
+    eliminatedCandidates: cage.eliminations,
+    solvedCandidates: [],
+    techniqueRank: RANK_CAGE_COMBINATIONS,
+    variantConstraint: 'killer',
+  }
+}
+
+function buildEntropySquareInstance(entropy: EntropySquareInstance): TechniqueInstance {
+  const [top, left] = entropy.square[0]
+  return {
+    id: `entropy-square-${entropy.kind}-${top}.${left}-${entropy.groups.join('')}`,
+    name: 'Entropy Square',
+    notation: `${capitalizeFirst(entropy.reasonText)}, so ${killerEliminationsText(entropy.eliminations)}`,
+    usedCells: entropy.square,
+    usedCandidates: [],
+    eliminatedCandidates: entropy.eliminations,
+    solvedCandidates: [],
+    techniqueRank: RANK_ENTROPY_SQUARE,
+    variantConstraint: 'entropy',
+  }
+}
+
+function buildVariantLockedInstance(locked: VariantLockedInstance): TechniqueInstance {
+  const how = locked.kind === 'knight' ? "Knight's Move" : 'Diagonal'
+  return {
+    id: `variant-locked-${locked.kind}-${locked.digit}-${locked.lockedCells.map(([row, col]) => `${row}.${col}`).join('-')}`,
+    name: `Locked Candidate (${how})`,
+    notation: `${locked.reasonText}, and ${
+      locked.kind === 'knight' ? "each of these cells sees all of them (a knight's move counts)" : 'each of these cells sees all of them'
+    }, so ${killerEliminationsText(locked.eliminations)}`,
+    usedCells: locked.lockedCells,
+    usedCandidates: locked.lockedCells.map(([row, col]) => ({ row, col, digit: locked.digit })),
+    eliminatedCandidates: locked.eliminations,
+    solvedCandidates: [],
+    techniqueRank: RANK_VARIANT_LOCKED_CANDIDATE,
+    variantConstraint: locked.kind === 'knight' ? 'anti-knight' : 'x-sudoku',
+  }
+}
+
+function buildKillerRule45Instance(rule: KillerRule45Instance): TechniqueInstance {
+  const kindName = rule.kind === 'innie' ? 'Innies' : 'Outies'
+  return {
+    id: `killer-45-${rule.kind}-${rule.emptyCells.map(([row, col]) => `${row}.${col}`).join('-')}`,
+    name: `Rule of 45 (${rule.emptyCells.length === 1 ? kindName.slice(0, -1) : kindName})`,
+    notation: rule.solved
+      ? `${rule.reasonText}, so ${cellRef(rule.solved.row, rule.solved.col)} is ${rule.solved.digit}`
+      : `${rule.reasonText}, so ${killerEliminationsText(rule.eliminations)}`,
+    usedCells: rule.houseCells,
+    usedCandidates: [],
+    eliminatedCandidates: rule.eliminations,
+    solvedCandidates: rule.solved ? [rule.solved] : [],
+    // The innies/outies themselves get the yellow border, inside the houses.
+    medusaHighlightCells: rule.cells,
+    techniqueRank: RANK_RULE_OF_45,
+    variantConstraint: 'killer',
+  }
+}
+
+function capitalizeFirst(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
 function buildFishInstance(fish: FishInstance): TechniqueInstance {
   const eliminatedLabel = fish.eliminations.map((e) => cellRef(e.row, e.col)).join(', ')
   return {

@@ -736,6 +736,7 @@ function renderToolbar() {
       ['areas', 'Time by area, per visit (CSV)'],
       ['events', 'Events (CSV)'],
       ['quiz', 'Practice quiz answers (CSV)'],
+      ['saved', 'Saved puzzles (CSV)'],
     ].map(([table, label]) => el('a', { href: `/admin/export?${query({ table })}`, text: label })),
   )
   const exportMenu = el(

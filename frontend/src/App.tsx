@@ -11,6 +11,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type Ref,
 } from 'react'
@@ -27,7 +28,7 @@ import {
 } from './sudoku/boardUtils'
 import { CanvasGridImage } from './sudoku/CanvasGridImage'
 import { reportImport } from './importAnalytics'
-import { AREA_LAYER, trackEvent, trackSettingsChanges, useAnalyticsArea } from './usageTracking'
+import { AREA_LAYER, trackEvent, trackSavedPuzzle, trackSettingsChanges, useAnalyticsArea } from './usageTracking'
 import { recognizeDigit } from './sudoku/OcrDigitRecognizer'
 import { PuzzleImporter } from './sudoku/PuzzleImporter'
 import { SolveResponse, type SolveStatus } from './sudoku/SolveResponse'
@@ -61,6 +62,7 @@ import {
 import type { DragonPuzzleGenerateOptions, GeneratedDragonPuzzle } from './sudoku/SudokuDragonPuzzleGenerator'
 import { SudokuGenerator } from './sudoku/SudokuGenerator'
 import { ocrGrid } from './sudoku/SudokuGridOcr'
+import { detectJigsawRegions } from './sudoku/SudokuJigsawOcr'
 import { bugPlusNEliminationsText, bugPlusNName } from './sudoku/SudokuBugPlusNFinder'
 import { SudokuRules } from './sudoku/SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './sudoku/SudokuGenericAicFinder'
@@ -100,6 +102,16 @@ import ConfirmDialog from './ConfirmDialog'
 import { afterPaint, useSettledValue, type BusyTask } from './busyTask'
 import { solvePathInWorker, type SolvePathOptions } from './solvePathInWorker'
 import { seRatingPosition, seRatingText, useSeRating } from './seRating'
+import { useVariantRating, variantRatingRequest, variantRatingText } from './variantRating'
+import SavedPuzzlesModal from './SavedPuzzlesModal'
+import {
+  deleteSavedPuzzle,
+  filledCellCount,
+  loadSavedPuzzles,
+  savePuzzle,
+  savedPuzzleOfGrid,
+  type SavedPuzzle,
+} from './savedPuzzles'
 import {
   DEFAULT_SETTINGS,
   DRAGON_GENERATION_TIMEOUT_OPTIONS,
@@ -111,7 +123,9 @@ import {
   type AppSettings,
 } from './settingsDefaults'
 import {
+  loadGivensEntry,
   loadSavedGrid,
+  saveGivensEntry,
   loadSavedSettings,
   loadWelcomeDismissed,
   saveGrid,
@@ -120,7 +134,41 @@ import {
 } from './persistedState'
 import { isNativePasteHotkey, keyNameOf, matchHotkey, type HotkeyBindings } from './hotkeys'
 import HotkeySettings from './HotkeySettings'
-import { isContiguousGroup, layoutAicOverlay } from './aicLinkLayout'
+import { isContiguousGroup, layoutAicOverlay, pipCenter, setKillerPipLayout } from './aicLinkLayout'
+import {
+  CLASSIC_CONSTRAINTS,
+  describeConstraintProblem,
+  normalizeConstraints,
+  regionWording,
+  setActiveConstraints,
+  sudokuUnits,
+  withConstraints,
+  type KillerCage,
+  type SudokuConstraints,
+} from './sudoku/SudokuConstraints'
+import {
+  DEFAULT_VARIANT_PUZZLE,
+  STANDARD_REGIONS,
+  blankRegionDraft,
+  drawRegionCell,
+  looksLikeSudokuWikiVariant,
+  looksLikeVariantPuzzle,
+  parseSudokuWikiVariant,
+  parseVariantPuzzle,
+  sudokuCoachStateRules,
+  serializeSudokuWikiPuzzle,
+  serializeSudokuWikiState,
+  serializeVariantPuzzle,
+  serializeVariantState,
+  variantName,
+} from './sudoku/VariantPuzzle'
+import { generateVariantPuzzle, type VariantKind } from './sudoku/VariantPuzzleGenerator'
+import { exampleBoard, exampleConstraints, pickVariantExample } from './sudoku/variantExamplePuzzles'
+import { techniqueUnavailableReason, type TechniqueKey } from './sudoku/variantApplicability'
+import { VariantGridOverlay } from './variant/VariantGridOverlay'
+import { VariantLayoutPanel, type LayoutEditor } from './variant/VariantLayoutPanel'
+import { VariantImportDialog, type VariantImportChoice } from './variant/VariantImportDialog'
+import { VARIANT_HELP_QUICKSTART, VARIANT_HELP_QUICKSTART_HEADING, variantHelpTabs } from './variant/variantHelpContent'
 import {
   singleFinder,
   lockedCandidateFinder,
@@ -131,6 +179,10 @@ import {
   bugPlusNFinder,
   colorFinder,
   medusaFinder,
+  killerCageFinder,
+  killerRule45Finder,
+  variantLockedFinder,
+  entropyFinder,
   NINE,
   DIGITS,
   type TechniqueInstance,
@@ -211,6 +263,17 @@ interface GridState {
   /** Manual highlight colours the user painted onto candidates - a pure
    * annotation, never touched by any solving technique or auto-solve. */
   candidateColors: CandidateColorGrid
+  /** The puzzle's Jigsaw regions and Killer cages (SudokuConstraints.ts).
+   * Always CLASSIC_CONSTRAINTS on the Classic page; on the Variant page they
+   * are part of the puzzle, so they travel through Undo/Redo with it. */
+  constraints: SudokuConstraints
+}
+
+/** What an edit hands commitGrid: the colours and the constraints carry
+ * forward from the current grid unless the edit says otherwise. */
+type GridChange = Omit<GridState, 'candidateColors' | 'constraints'> & {
+  candidateColors?: CandidateColorGrid
+  constraints?: SudokuConstraints
 }
 
 /** One undo/redo-able snapshot: the grid *and* whatever the cached Solve
@@ -222,14 +285,31 @@ interface HistoryEntry {
   solvePath: SolvePathResult | null
 }
 
-function createInitialGrid(): GridState {
+function createInitialGrid(variant: boolean): GridState {
+  if (variant) {
+    const sample = parseVariantPuzzle(DEFAULT_VARIANT_PUZZLE)
+    if (sample.ok) {
+      return {
+        board: sample.board,
+        givens: sample.givens,
+        candidates: sample.candidates,
+        candidateColors: sample.candidateColors,
+        constraints: sample.constraints,
+      }
+    }
+  }
   return {
     board: cloneBoard(DEFAULT_PUZZLE),
     givens: computeGivenMask(DEFAULT_PUZZLE),
     candidates: createEmptyCandidates(),
     candidateColors: createEmptyCandidateColors(),
+    constraints: CLASSIC_CONSTRAINTS,
   }
 }
+
+/** True on the Variant solver page (App's `variant` prop), for the module-
+ * level components that have no other way to know. */
+const VariantContext = createContext(false)
 
 /** The nine manual candidate-highlight colours, in palette layout order -
  * default hex values only. The user can recolour any of them (see
@@ -433,38 +513,9 @@ interface StrongLink {
   b: readonly [number, number]
 }
 
-const CELL_SIZE = 100
-const PIP_SIZE = CELL_SIZE / 3
-
-/** Center of a digit's candidate pip within cell (row, col), in the 0-900
- * board coordinate space the strong-link SVG overlay is drawn in. */
-function pipCenter(row: number, col: number, digit: number) {
-  const pipRow = Math.floor((digit - 1) / 3)
-  const pipCol = (digit - 1) % 3
-  return {
-    x: col * CELL_SIZE + (pipCol + 0.5) * PIP_SIZE,
-    y: row * CELL_SIZE + (pipRow + 0.5) * PIP_SIZE,
-  }
-}
-
-/** Cell groups (units) a strong link can form within: each row, column, and box. */
-function unitCells(unitIndex: number, kind: 'row' | 'column' | 'box'): Array<readonly [number, number]> {
-  if (kind === 'row') {
-    return NINE.map((c) => [unitIndex, c] as const)
-  }
-  if (kind === 'column') {
-    return NINE.map((r) => [r, unitIndex] as const)
-  }
-  const boxRow = Math.floor(unitIndex / 3) * 3
-  const boxCol = (unitIndex % 3) * 3
-  const cells: Array<readonly [number, number]> = []
-  for (let dr = 0; dr < 3; dr++) {
-    for (let dc = 0; dc < 3; dc++) {
-      cells.push([boxRow + dr, boxCol + dc])
-    }
-  }
-  return cells
-}
+/** A candidate pip's width in the 0-900 board coordinate space the overlays
+ * are drawn in (pipCenter itself is aicLinkLayout's, shared with the chains). */
+const PIP_SIZE = 100 / 3
 
 /**
  * Conjugate pairs: for a digit, a strong link joins the two cells of a unit
@@ -478,23 +529,20 @@ function findStrongLinks(candidates: CandidateGrid): StrongLink[] {
   const seen = new Set<string>()
 
   for (const digit of DIGITS) {
-    for (const kind of ['row', 'column', 'box'] as const) {
-      for (const unitIndex of NINE) {
-        const withCandidate = unitCells(unitIndex, kind).filter(
-          ([r, c]) => candidates[r][c][digit - 1],
-        )
-        if (withCandidate.length !== 2) {
-          continue
-        }
-
-        const [a, b] = withCandidate
-        const key = `${digit}:${a[0]}${a[1]}-${b[0]}${b[1]}`
-        if (seen.has(key)) {
-          continue
-        }
-        seen.add(key)
-        links.push({ digit, a, b })
+    // Rows, then columns, then boxes (a Jigsaw's regions on the Variant page).
+    for (const unit of sudokuUnits()) {
+      const withCandidate = unit.filter(([r, c]) => candidates[r][c][digit - 1])
+      if (withCandidate.length !== 2) {
+        continue
       }
+
+      const [a, b] = withCandidate
+      const key = `${digit}:${a[0]}${a[1]}-${b[0]}${b[1]}`
+      if (seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      links.push({ digit, a, b })
     }
   }
 
@@ -1017,7 +1065,7 @@ function DragonStepper({
           Forward ▶
         </button>
       </div>
-      <p className="dragon-player-description">{move.description}</p>
+      <p className="dragon-player-description">{regionWording(move.description)}</p>
       <DragonAicNote />
       {substeps && substeps.length > 1 && (
         <div className="dragon-substep-player">
@@ -1042,7 +1090,7 @@ function DragonStepper({
               Forward ▶
             </button>
           </div>
-          <p className="dragon-substep-description">{capitalizeFirst(substeps[resolvedSubstepIndex].clause)}.</p>
+          <p className="dragon-substep-description">{regionWording(capitalizeFirst(substeps[resolvedSubstepIndex].clause))}.</p>
         </div>
       )}
     </div>
@@ -1154,13 +1202,13 @@ function TechniqueFocusView({
       </div>
       {/* Keyed on the step, so each step's text starts scrolled to its top. */}
       <div className="technique-focus-text" key={`${stepIndex}-${resolvedSubstepIndex}`}>
-        {!moves && <p className="technique-notation">{instance.notation}</p>}
+        {!moves && <p className="technique-notation">{regionWording(instance.notation)}</p>}
         <AicDragonNote instance={instance} />
-        {move && <p className="dragon-player-description">{move.description}</p>}
+        {move && <p className="dragon-player-description">{regionWording(move.description)}</p>}
         {move && <DragonAicNote />}
         {substeps && (
           <p className="dragon-substep-description technique-focus-substep">
-            {capitalizeFirst(substeps[resolvedSubstepIndex].clause)}.
+            {regionWording(capitalizeFirst(substeps[resolvedSubstepIndex].clause))}.
           </p>
         )}
       </div>
@@ -1592,8 +1640,10 @@ function TechniqueLearnButton({
   instance: TechniqueInstance
   onLearn: (target: TutorialTarget) => void
 }) {
+  // The lessons are Classic positions; the Variant page has no How It Works.
+  const variant = useContext(VariantContext)
   const target = tutorialTargetFor(instance.id)
-  if (!target) {
+  if (!target || variant) {
     return null
   }
   return (
@@ -1606,6 +1656,37 @@ function TechniqueLearnButton({
     >
       ?
     </button>
+  )
+}
+
+/** Variant page: marks a row whose deduction comes from a constraint a
+ * Classic Sudoku doesn't have (a Killer cage) - every other row is a
+ * Classic technique at work on the variant. */
+function VariantConstraintBadge({ instance }: { instance: TechniqueInstance }) {
+  if (!instance.variantConstraint) {
+    return null
+  }
+  return (
+    <span
+      className="variant-constraint-badge"
+      title={
+        instance.variantConstraint === 'killer'
+          ? 'This deduction comes from the Killer cages, not from a Classic technique.'
+          : instance.variantConstraint === 'x-sudoku'
+            ? "This deduction uses the X-Sudoku's diagonals."
+            : instance.variantConstraint === 'entropy'
+              ? 'This deduction uses the Entropy rule (a low, a middle and a high digit in every 2x2 square).'
+              : "This deduction uses the Anti-Knight rule (a knight's move)."
+      }
+    >
+      {instance.variantConstraint === 'killer'
+        ? 'Killer'
+        : instance.variantConstraint === 'x-sudoku'
+          ? 'X'
+          : instance.variantConstraint === 'entropy'
+            ? 'Entropy'
+            : 'Knight'}
+    </span>
   )
 }
 
@@ -1933,8 +2014,11 @@ function TechniquePanel({
               return (
                 <li key={instance.id} className="technique-row">
                   <TechniqueRowButton active={isActive} onSelect={() => onSelect(instance.id)}>
-                    <span className="technique-name">{instance.name}</span>
-                    <span className="technique-notation">{instance.notation}</span>
+                    <span className="technique-name">
+                      {instance.name}
+                      <VariantConstraintBadge instance={instance} />
+                    </span>
+                    <span className="technique-notation">{regionWording(instance.notation)}</span>
                   </TechniqueRowButton>
                   <DragonAicBadge instance={instance} />
                   <AicDragonBadge instance={instance} />
@@ -2090,8 +2174,9 @@ function TechniquePanel({
                       <TechniqueRowButton active={isActive} onSelect={() => onSelectSolvePathStep(index)}>
                         <span className="technique-name">
                           Step {index + 1}: {step.instance.name}
+                          <VariantConstraintBadge instance={step.instance} />
                         </span>
-                        <span className="technique-notation">{step.instance.notation}</span>
+                        <span className="technique-notation">{regionWording(step.instance.notation)}</span>
                       </TechniqueRowButton>
                       <DragonAicBadge instance={step.instance} />
                       <TechniqueLearnButton instance={step.instance} onLearn={onLearn} />
@@ -2369,6 +2454,16 @@ function MenuHelpButton({ topic, onClick }: { topic: string; onClick: () => void
   )
 }
 
+/** The Dynamic Dragon helper techniques whose logic doesn't hold on every
+ * variant, as rows of the applicability table (variantApplicability.ts). */
+const RULE3_APPLICABILITY_KEY: Partial<Record<Rule3Technique, TechniqueKey>> = {
+  UR: 'unique rectangle',
+  'BUG+N': 'bug+n',
+  'avoidable rectangle': 'avoidable rectangle',
+  'extended ur': 'extended ur',
+  'ur-aic': 'ur-aic',
+}
+
 type BusyTaskKind = 'solve' | 'generate' | 'ocr' | 'solve-path' | 'find' | 'auto-solve' | 'autocomplete' | 'hint'
 
 interface RunningBusyTask extends BusyTask {
@@ -2378,15 +2473,64 @@ interface RunningBusyTask extends BusyTask {
 
 let nextBusyTaskId = 1
 
-export default function App() {
+/**
+ * The whole solver page. `variant` makes it the Variant Sudoku Solver (the
+ * /variants/ page): the same grid, panels, colouring tools and settings, on
+ * a puzzle that may carry Jigsaw regions and Killer cages (grid.constraints).
+ * What differs there is kept to where a variant really is different - how a
+ * puzzle gets onto the grid (its own menu, layout editor and puzzle string),
+ * what is drawn over the cells, and the parts built on Classic positions,
+ * which are left out (puzzle generation and stocks, screenshot import, the
+ * SE rating, How It Works).
+ */
+export default function App({ variant = false }: { variant?: boolean } = {}) {
   // The puzzle and settings the user left the page with (persistedState.ts),
   // read once on mount; the effects further down keep both saved.
-  const [initialGrid] = useState<GridState>(() => loadSavedGrid() ?? createInitialGrid())
+  const [initialGrid] = useState<GridState>(() => {
+    const saved = loadSavedGrid()
+    // The Classic page never has (or loads) anything but the standard grid.
+    return saved ? { ...saved, constraints: (variant && saved.constraints) || CLASSIC_CONSTRAINTS } : createInitialGrid(variant)
+  })
   const [initialSettings] = useState(loadSavedSettings)
   const [grid, setGrid] = useState<GridState>(initialGrid)
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => [{ grid: initialGrid, solvePath: null }])
   const [historyIndex, setHistoryIndex] = useState(0)
-  const { board, givens, candidates, candidateColors } = grid
+  const { board, givens, candidates, candidateColors, constraints } = grid
+  // Every finder, the rules and the solver read the active constraints
+  // (SudokuConstraints.ts) instead of taking them as an argument. This is
+  // where they are made to match the grid on screen: before anything this
+  // render computes, and so before any handler that runs after it. A no-op
+  // unless the puzzle's layout actually changed (always, on the Classic page).
+  setActiveConstraints(constraints)
+  const hasCages = constraints.cages.length > 0
+  // X-Sudoku / Anti-Knight (Variant page; always false on the Classic page).
+  const hasDiagonalRule = constraints.diagonals === true
+  const hasKnightRule = constraints.antiKnight === true
+  // Deadly patterns need the two fillings to be equally legal: not under
+  // cages or the Anti-Knight rule (see uniquenessHolds).
+  const hasEntropyRule = constraints.entropy === true
+  const noUniquenessTechniques = hasCages || hasKnightRule || hasEntropyRule
+  // A Killer grid draws its pencil marks a little smaller, clear of the cage
+  // sums and outlines; the overlays drawn on the pips have to know (see
+  // pipCenter).
+  setKillerPipLayout(hasCages)
+  // Variant page only: the layout editor (cages / regions) while it is open,
+  // and the practice-puzzle menu's "Harder puzzles" tick. Session-only.
+  const [layoutEditor, setLayoutEditor] = useState<LayoutEditor | null>(null)
+  const [variantHardPuzzles, setVariantHardPuzzles] = useState(false)
+  // Variant page: a string or screenshot import that has been read but not
+  // put on the grid yet - the VariantImportDialog first asks which rules the
+  // puzzle has (plain digits can't say) or to confirm the ones the import
+  // carries. `load` finishes the import with the answer; cancelling drops it
+  // and leaves the grid as it was.
+  const [variantImportPrompt, setVariantImportPrompt] = useState<{
+    source: 'text' | 'screenshot'
+    detected: SudokuConstraints
+    load: (choice: VariantImportChoice) => void
+  } | null>(null)
+  /** Why a technique can't be used on the puzzle on the grid (shown as the
+   * reason its menu checkbox is off), or null. Always null on a Classic grid. */
+  const unavailable = (key: TechniqueKey) => techniqueUnavailableReason(key, constraints)
 
   const [selected, setSelected] = useState<{ row: number; col: number } | null>({
     row: 0,
@@ -2505,6 +2649,7 @@ export default function App() {
   const [showBivalueCells, setShowBivalueCells] = useState(initialSettings.showBivalueCells)
   const [gridWhiteMode, setGridWhiteMode] = useState(initialSettings.gridWhiteMode)
   const [minBaseMedusaFilter, setMinBaseMedusaFilter] = useState(initialSettings.minBaseMedusaFilter)
+  const [entropyGroupMarking, setEntropyGroupMarking] = useState(initialSettings.entropyGroupMarking)
   const [allPossibleTechniques, setAllPossibleTechniques] = useState(initialSettings.allPossibleTechniques)
   const [dynamicDragonDisabled, setDynamicDragonDisabled] = useState(initialSettings.dynamicDragonDisabled)
   const [doubleDragonEnabled, setDoubleDragonEnabled] = useState(initialSettings.doubleDragonEnabled)
@@ -2645,6 +2790,10 @@ export default function App() {
    * same technique keeps what was already revealed (see onOpenHint). */
   const lastHintRef = useRef<{ hint: TechniqueHint; revealed: number } | null>(null)
   const [confirmOptimizeDynamicOpen, setConfirmOptimizeDynamicOpen] = useState(false)
+  // The Saved Puzzles dialog (savedPuzzles.ts): null = closed, else this
+  // page's list as last read from localStorage - re-read on every open, so a
+  // save made in another tab is there.
+  const [savedPuzzlesList, setSavedPuzzlesList] = useState<SavedPuzzle[] | null>(null)
   const [confirmAllPossibleTechniquesOpen, setConfirmAllPossibleTechniquesOpen] = useState(false)
   // Where How It Works is open (null: closed) - a hint's "Learn this
   // technique" link opens it on that technique's tab/sub-tab.
@@ -2700,15 +2849,37 @@ export default function App() {
   // grid. `historyIndex` is the import's undo-history entry - undoing past it
   // hides the banner, and a new edit from there discards it (commitGrid).
   // `imageUrl` is an object URL of the screenshot, shown for comparison.
-  const [ocrProofread, setOcrProofread] = useState<{ historyIndex: number; imageUrl: string } | null>(null)
+  // "Create From Empty Grid" (Generate Puzzle menu, Classic page) is the same
+  // state with no screenshot (`imageUrl` null): the user types the digits
+  // instead of OCR reading them, and "Confirm givens" locks them - there only
+  // when they make a puzzle with exactly one solution (onConfirmGivens). A
+  // reload keeps that one going (loadGivensEntry): its digits are saved as
+  // they are, not locked, since half-entered givens are no puzzle yet.
+  const [ocrProofread, setOcrProofread] = useState<{ historyIndex: number; imageUrl: string | null } | null>(() =>
+    !variant && loadGivensEntry() && initialGrid.givens.every((row) => row.every((given) => !given))
+      ? { historyIndex: 0, imageUrl: null }
+      : null,
+  )
   const [ocrProofreadShowImage, setOcrProofreadShowImage] = useState(false)
   const ocrProofreadVisible = ocrProofread !== null && historyIndex >= ocrProofread.historyIndex
+  const givensEntryVisible = ocrProofreadVisible && ocrProofread.imageUrl === null
+  // Why the last "Confirm givens" was refused. Tied to the board it was said
+  // about, so it disappears with the next edit, undo or redo.
+  const [givensEntryWarning, setGivensEntryWarning] = useState<{ board: Board; message: string } | null>(null)
+  // The banner's "Clear grid" asks before it wipes the digits typed so far.
+  const [confirmClearGivensOpen, setConfirmClearGivensOpen] = useState(false)
   useEffect(() => {
-    if (!ocrProofread) {
+    const imageUrl = ocrProofread?.imageUrl
+    if (!imageUrl) {
       return
     }
-    return () => URL.revokeObjectURL(ocrProofread.imageUrl)
+    return () => URL.revokeObjectURL(imageUrl)
   }, [ocrProofread])
+  useEffect(() => {
+    if (!variant) {
+      saveGivensEntry(givensEntryVisible)
+    }
+  }, [variant, givensEntryVisible])
   const busy = busyTasks.length > 0
   const busyKinds = new Set(busyTasks.map((t) => t.kind))
   const solving = busyKinds.has('solve')
@@ -2748,8 +2919,9 @@ export default function App() {
   }, [candidateColors, candidateColorSwatches])
 
   const strongLinks = useMemo(
-    () => (showStrongLinks ? findStrongLinks(candidates) : []),
-    [candidates, showStrongLinks],
+    // Under the grid's own constraints: the units a link lives in are theirs.
+    () => (showStrongLinks ? withConstraints(constraints, () => findStrongLinks(candidates)) : []),
+    [candidates, showStrongLinks, constraints],
   )
 
   const bivalueCells = useMemo(() => {
@@ -2775,10 +2947,18 @@ export default function App() {
   // against). Re-solved from scratch on every board change, same tradeoff
   // puzzleSolveResult below already makes - cheap enough now not to bother
   // caching further (see SudokuSolver's bitmask-based backtracking).
+  // Keyed on the givens themselves (as a string) rather than on `board`: a
+  // variant's brute force can take a second or two on a hard puzzle (a sparse
+  // Killer has no givens at all to start from), and solving the same givens
+  // again after every digit the user places would stall the page each time.
+  const givensKey = useMemo(
+    () => board.map((row, r) => row.map((value, c) => (givens[r][c] ? value : 0)).join('')).join(''),
+    [board, givens],
+  )
   const givensSolveResult = useMemo(() => {
-    const givenOnlyBoard = board.map((row, r) => row.map((value, c) => (givens[r][c] ? value : 0)))
-    return solver.solve(givenOnlyBoard)
-  }, [board, givens])
+    const givenOnlyBoard = Array.from({ length: 9 }, (_, r) => Array.from({ length: 9 }, (_, c) => Number(givensKey[r * 9 + c])))
+    return withConstraints(constraints, () => solver.solve(givenOnlyBoard))
+  }, [givensKey, constraints])
 
   // A user-entered digit that's wrong - either it duplicates another digit
   // already in its row/column/box, or (even when it doesn't collide with
@@ -2789,7 +2969,7 @@ export default function App() {
   // highlight here. Givens are never flagged - they're locked, not
   // something the user "input", and a puzzle whose own givens conflict is
   // already surfaced separately by the solvability badge.
-  const conflictedCells = useMemo(() => {
+  const conflictedCells = useMemo(() => withConstraints(constraints, () => {
     const set = new Set<string>()
     const scratch = cloneBoard(board)
     const solution = givensSolveResult.status === 'solved' ? givensSolveResult.board : null
@@ -2820,7 +3000,7 @@ export default function App() {
       }
     }
     return set
-  }, [board, givens, givensSolveResult])
+  }), [board, givens, givensSolveResult, constraints])
 
   // The global Short AIC on/off switch is a master switch over its own
   // per-technique checkbox in the Dynamic Dragon Colouring list - turning
@@ -2888,10 +3068,22 @@ export default function App() {
   // classified as "multiple solutions" since an under-clued board that's
   // otherwise a normal, non-contrived arrangement is virtually always
   // satisfiable many different ways, never exactly zero.
-  const puzzleSolveResult = useMemo(
-    () => (filled < MIN_UNIQUE_SOLUTION_CLUES ? SolveResponse.multiple() : solver.solve(board)),
-    [board, filled],
-  )
+  // The 17-clue minimum is a fact about Classic Sudoku only: a Killer's
+  // cages or a Jigsaw's regions can pin down the solution with far fewer
+  // givens (a Killer usually has none), so a variant is always solved.
+  const puzzleSolveResult = useMemo(() => {
+    if (constraints === CLASSIC_CONSTRAINTS) {
+      return filled < MIN_UNIQUE_SOLUTION_CLUES ? SolveResponse.multiple() : solver.solve(board)
+    }
+    // A variant whose givens have one solution, with nothing on the grid
+    // that disagrees with it: the grid's solution is that same one, no need
+    // to search for it again (see givensKey above for why that matters).
+    const solution = givensSolveResult.status === 'solved' ? givensSolveResult.board : null
+    if (solution && board.every((row, r) => row.every((value, c) => value === 0 || value === solution[r][c]))) {
+      return givensSolveResult
+    }
+    return withConstraints(constraints, () => solver.solve(board))
+  }, [board, filled, constraints, givensSolveResult])
   // The puzzle the SE rating under the grid is for: the givens, so the
   // rating is the loaded/generated puzzle's and stays put while it is being
   // solved. A grid with no usable givens (digits typed in, or a screenshot
@@ -2904,8 +3096,31 @@ export default function App() {
     }
     return puzzleSolveResult.status === 'solved' && filled < 81 ? board.map((row) => row.join('')).join('') : null
   }, [board, givens, givensSolveResult, puzzleSolveResult, filled])
-  const seRating = useSeRating(seRatedPuzzle)
+  // Sudoku Explainer rates Classic puzzles; it knows nothing of cages or
+  // regions, so the Variant page shows no rating at all.
+  const seRating = useSeRating(variant ? null : seRatedPuzzle)
   const seRatingLine = seRating && seRatingText(seRating, 'puzzle')
+  // Variant page: the puzzle's rating on the SE scale from the variant rater
+  // (variantRating.ts - SukakuExplainer for a Jigsaw, its engine plus this
+  // solver's cage techniques for a Killer). Same rule as the SE rating for
+  // what is rated: the givens when they make a puzzle with one solution, else
+  // the grid as it stands; nothing for a puzzle with no regions or cages.
+  const variantRatingTarget = useMemo(() => {
+    if (!variant || ocrProofreadVisible) {
+      return null
+    }
+    if (givensSolveResult.status === 'solved') {
+      return variantRatingRequest(
+        board.map((row, r) => row.map((value, c) => (givens[r][c] ? value : 0))),
+        givens,
+        constraints,
+      )
+    }
+    return puzzleSolveResult.status === 'solved' && filled < 81 ? variantRatingRequest(board, board.map((row) => row.map(() => false)), constraints) : null
+    // givensKey stands for the givens on the board.
+  }, [variant, ocrProofreadVisible, givensSolveResult, puzzleSolveResult, filled, board, givens, constraints])
+  const variantRating = useVariantRating(variantRatingTarget)
+  const variantRatingLine = variantRating && variantRatingTarget && variantRatingText(variantRating, variantRatingTarget.system)
 
   const candidatesAccurate = useMemo(() => {
     if (puzzleSolveResult.status !== 'solved' || !puzzleSolveResult.board) {
@@ -2943,7 +3158,7 @@ export default function App() {
     [seRatedPuzzle, puzzleSolveResult, candidatesAccurate, filled, board, candidates],
   )
   const seCurrentIsPuzzle = seCurrentPosition === seRatedPuzzle
-  const seCurrentOwnRating = useSeRating(seCurrentIsPuzzle ? null : seCurrentPosition, false)
+  const seCurrentOwnRating = useSeRating(variant || seCurrentIsPuzzle ? null : seCurrentPosition, false)
   const seCurrentRating = seCurrentIsPuzzle ? seRating : seCurrentOwnRating
   const seCurrentRatingLine = seCurrentRating && seRatingText(seCurrentRating, 'current')
 
@@ -2957,6 +3172,7 @@ export default function App() {
       board,
       candidates,
       givens,
+      constraints,
       minBaseMedusaFilter,
       allPossibleTechniques,
       listEasiestDragonTechniquesFirst,
@@ -2983,6 +3199,7 @@ export default function App() {
       board,
       candidates,
       givens,
+      constraints,
       minBaseMedusaFilter,
       allPossibleTechniques,
       listEasiestDragonTechniquesFirst,
@@ -3046,7 +3263,9 @@ export default function App() {
     () =>
       !candidatesAccurate
         ? NO_TECHNIQUE_INSTANCES
-        : buildTechniqueInstances(
+        : // `analysis` is a frame behind the grid, so for that frame its
+          // constraints may not be the active ones (a new puzzle just loaded).
+          withConstraints(analysis.constraints, () => buildTechniqueInstances(
         analysis.board,
         analysis.candidates,
         analysis.minBaseMedusaFilter ? MIN_BASE_MEDUSA_CANDIDATES : 0,
@@ -3072,7 +3291,7 @@ export default function App() {
         analysis.allPossibleTechniques,
         false,
         analysis.listEasiestDragonTechniquesFirst,
-      ),
+      )),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
@@ -3090,6 +3309,7 @@ export default function App() {
       analysis.board,
       analysis.candidates,
       analysis.givens,
+      analysis.constraints,
       analysis.minBaseMedusaFilter,
       analysis.effectiveAllowedRule3Techniques,
       analysis.shortAicEnabled,
@@ -3115,7 +3335,7 @@ export default function App() {
     () =>
       !candidatesAccurate || !analysis.minBaseMedusaFilter || techniqueInstances.length > 0
         ? 0
-        : buildTechniqueInstances(
+        : withConstraints(analysis.constraints, () => buildTechniqueInstances(
             analysis.board,
             analysis.candidates,
             0,
@@ -3138,7 +3358,7 @@ export default function App() {
             analysis.urAicEnabled,
             analysis.alsAicEnabled,
             analysis.groupedAicEnabled,
-          ).length,
+          )).length,
     // Same inputs as techniqueInstances (which it also reads).
     [
       candidatesAccurate,
@@ -3154,6 +3374,7 @@ export default function App() {
       analysis.board,
       analysis.candidates,
       analysis.givens,
+      analysis.constraints,
       analysis.minBaseMedusaFilter,
       analysis.effectiveAllowedRule3Techniques,
       analysis.shortAicEnabled,
@@ -3382,7 +3603,8 @@ export default function App() {
         : selectedTechnique
           ? `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]} › ${techniqueTrackingName(selectedTechnique.name)}`
           : `Solver › ${TECHNIQUE_PANEL_TAB_LABELS[techniquePanelTab]}`
-  useAnalyticsArea(solverArea, AREA_LAYER.solver)
+  // The Variant page's time is its own section of the analytics.
+  useAnalyticsArea(variant ? solverArea.replace(/^Solver/, 'Variant Solver') : solverArea, AREA_LAYER.solver)
   // Every setting as one AppSettings snapshot: saved so a reopened tab
   // comes back as it was left (persistedState.ts), and diffed for usage
   // analytics. A new setting must be added here and to the deps.
@@ -3393,6 +3615,7 @@ export default function App() {
       showBivalueCells,
       gridWhiteMode,
       minBaseMedusaFilter,
+      entropyGroupMarking,
       allPossibleTechniques,
       shortSingleDigitAicEnabled,
       shortAicEnabled,
@@ -3437,6 +3660,7 @@ export default function App() {
       showBivalueCells,
       gridWhiteMode,
       minBaseMedusaFilter,
+      entropyGroupMarking,
       allPossibleTechniques,
       shortSingleDigitAicEnabled,
       shortAicEnabled,
@@ -3486,12 +3710,14 @@ export default function App() {
     // A screenshot import still being proofread is saved already locked: the
     // proofread (and the screenshot) doesn't survive a reload, so what comes
     // back is the digits as they stood, as givens - same as "Lock as givens".
+    // Givens being typed in ("Create From Empty Grid") are saved as they
+    // are: that entry carries on after a reload (see ocrProofread).
     saveGrid(
-      ocrProofreadVisible
+      ocrProofreadVisible && !givensEntryVisible
         ? { ...grid, givens: grid.board.map((row) => row.map((value) => value !== 0)) }
         : grid,
     )
-  }, [grid, ocrProofreadVisible])
+  }, [grid, ocrProofreadVisible, givensEntryVisible])
   const gridFilled = board.every((row) => row.every((value) => value !== 0)) && conflictedCells.size === 0
   useEffect(() => {
     if (gridFilled) {
@@ -3773,8 +3999,12 @@ export default function App() {
       preferEasierDoubleDragons: easySolveEnabled && preferEasierDoubleDragons,
       preferEasiestDragonTechniques: easySolveEnabled && preferEasiestDragonTechniques,
       minBaseMedusaCandidates: 0,
+      // The worker has its own copy of the engine: the puzzle's regions and
+      // cages go with every search (left out on a standard grid).
+      ...(constraints === CLASSIC_CONSTRAINTS ? {} : { constraints }),
     }),
     [
+      constraints,
       preferEasierDoubleDragons,
       preferEasiestDragonTechniques,
       enabledFish,
@@ -3813,7 +4043,7 @@ export default function App() {
   // the status line says "Checking…" until the answer comes back. Only the
   // board and settings matter to it, not the user's own candidate marks, so
   // this request object (and with it the search) only changes with those.
-  const freshAutofill = useMemo(() => freshAutofillCandidates(board), [board])
+  const freshAutofill = useMemo(() => withConstraints(constraints, () => freshAutofillCandidates(board)), [board, constraints])
   const solvabilityRequest = useMemo(
     () =>
       puzzleSolveResult.status === 'solved' && candidatesAccurate
@@ -3883,15 +4113,13 @@ export default function App() {
    * (including null, to clear it) when this specific action changes it,
    * so undoing this step restores the grid *and* the path together rather
    * than leaving them out of sync. */
-  function commitGrid(
-    next: Omit<GridState, 'candidateColors'> & { candidateColors?: CandidateColorGrid },
-    nextSolvePath?: SolvePathResult | null,
-  ): number {
+  function commitGrid(next: GridChange, nextSolvePath?: SolvePathResult | null): number {
     const resolved: GridState = {
       board: next.board,
       givens: next.givens,
       candidates: next.candidates,
       candidateColors: sanitizeCandidateColors(next.candidateColors ?? grid.candidateColors, next.board, next.candidates),
+      constraints: next.constraints ?? grid.constraints,
     }
     const resolvedSolvePath = nextSolvePath === undefined ? solvePath : nextSolvePath
     const truncated = historyEntries.slice(0, historyIndex + 1)
@@ -3927,7 +4155,7 @@ export default function App() {
     latestRef.current = { grid, commitGrid }
   })
 
-  function commitAutoSolve(next: Omit<GridState, 'candidateColors'> & { candidateColors?: CandidateColorGrid }) {
+  function commitAutoSolve(next: GridChange) {
     commitGrid(next, null)
   }
 
@@ -4831,6 +5059,7 @@ export default function App() {
     setShowBivalueCells(DEFAULT_SETTINGS.showBivalueCells)
     setGridWhiteMode(DEFAULT_SETTINGS.gridWhiteMode)
     setMinBaseMedusaFilter(DEFAULT_SETTINGS.minBaseMedusaFilter)
+    setEntropyGroupMarking(DEFAULT_SETTINGS.entropyGroupMarking)
     setAllPossibleTechniques(DEFAULT_SETTINGS.allPossibleTechniques)
     setShortSingleDigitAicEnabled(DEFAULT_SETTINGS.shortSingleDigitAicEnabled)
     setShortAicEnabled(DEFAULT_SETTINGS.shortAicEnabled)
@@ -5762,6 +5991,21 @@ export default function App() {
   }
 
   function onCellClick(row: number, col: number) {
+    // Layout editor (Variant page): a click picks the cell for the cage
+    // being made, or moves it into the region being drawn.
+    if (layoutEditor?.mode === 'cages') {
+      const key = `${row},${col}`
+      const selection = layoutEditor.selection.includes(key)
+        ? layoutEditor.selection.filter((other) => other !== key)
+        : [...layoutEditor.selection, key]
+      setLayoutEditor({ ...layoutEditor, selection })
+      return
+    }
+    if (layoutEditor?.mode === 'regions') {
+      // Drawn with the pointer (onRegionPointerDown/Move); a click that got
+      // here is the tail of that, or a key press on a focused cell.
+      return
+    }
     if (selected?.row === row && selected?.col === col) {
       setSelected(null)
       setHighlightedDigit(null)
@@ -5848,10 +6092,62 @@ export default function App() {
    * import box and the paste shortcut. False (with the reason in the status
    * line) when the text isn't a puzzle. */
   async function importPuzzleText(text: string): Promise<boolean> {
+    // The Variant page's own puzzle text (givens, regions, cages, progress).
+    // ...or a SudokuWiki Jigsaw / Killer string (shape=1&bd=..., or colours
+    // and clue numbers).
+    if (variant && (looksLikeVariantPuzzle(text) || looksLikeSudokuWikiVariant(text))) {
+      const parsed = looksLikeVariantPuzzle(text) ? parseVariantPuzzle(text) : parseSudokuWikiVariant(text)
+      if (!parsed.ok) {
+        setStatus(parsed.error)
+        return false
+      }
+      // Nothing is loaded until the dialog has confirmed the puzzle's rules.
+      setVariantImportPrompt({
+        source: 'text',
+        detected: parsed.constraints,
+        load: (choice) => {
+          latestRef.current.commitGrid(
+            {
+              board: parsed.board,
+              givens: parsed.givens,
+              candidates: parsed.candidates,
+              candidateColors: parsed.candidateColors,
+              constraints: choice.constraints,
+            },
+            null,
+          )
+          finishVariantImport(choice, 'Click "Autofill all" to start on its candidates.')
+        },
+      })
+      return true
+    }
     const result = await importer.import(text)
     if (!result.ok) {
       setStatus(result.error)
       return false
+    }
+    // A Classic string on the Variant page: its digits can't say whether it
+    // is a Classic, X-Sudoku or Anti-Knight puzzle, so the dialog asks. The
+    // one exception is a Sudoku.Coach state, which lists its puzzle's rules:
+    // an Entropy Sudoku's comes with that rule already ticked.
+    if (variant) {
+      const stated = await sudokuCoachStateRules(text)
+      setVariantImportPrompt({
+        source: 'text',
+        detected: normalizeConstraints({ regions: null, cages: [], entropy: stated.entropy }),
+        load: (choice) => {
+          latestRef.current.commitGrid({
+            board: result.board,
+            givens: result.givens,
+            candidates: result.candidates,
+            candidateColors: result.candidateColors ?? createEmptyCandidateColors(),
+            constraints: choice.constraints,
+          })
+          setOcrProofread(null)
+          finishVariantImport(choice, 'Click "Autofill all" to start on its candidates.')
+        },
+      })
+      return true
     }
     // Past an await - see latestRef.
     // A new puzzle starts unpainted unless its string carries paint (a Copy
@@ -5861,12 +6157,42 @@ export default function App() {
       givens: result.givens,
       candidates: result.candidates,
       candidateColors: result.candidateColors ?? createEmptyCandidateColors(),
+      // A Classic string on the Variant page is a puzzle with no cages on
+      // the 3x3 boxes - not the givens of whatever layout was there before.
+      ...(variant ? { constraints: CLASSIC_CONSTRAINTS } : {}),
     })
     setOcrProofread(null)
-    reportImport(result.board, { importType: 'string', sourceFormat: importer.detectFormat(text) })
+    setLayoutEditor(null)
+    // The import analytics validate a string as a Classic puzzle.
+    if (!variant) {
+      reportImport(result.board, { importType: 'string', sourceFormat: importer.detectFormat(text) })
+    }
     setHighlightedDigit(null)
     setStatus('Puzzle imported. Click Solve to check it.')
     return true
+  }
+
+  /** The end of a Variant page import, once the dialog's answer is on the
+   * grid: opens the region / cage editor when the puzzle is a Jigsaw /
+   * Killer whose regions / cages the import didn't carry, and says what was
+   * loaded and what is left to do. */
+  function finishVariantImport(choice: VariantImportChoice, then: string) {
+    setHighlightedDigit(null)
+    const name = variantName(choice.constraints)
+    if (choice.drawRegions) {
+      setLayoutEditor({ mode: 'regions', draft: blankRegionDraft(), region: 0 })
+      setCompactSection('import')
+      setStatus(
+        `Imported. Now draw the nine Jigsaw regions by dragging across the grid, then click "Use regions"${choice.addCages ? ', and add the cages after that with Edit cages' : ''}.`,
+      )
+    } else if (choice.addCages) {
+      setLayoutEditor({ mode: 'cages', selection: [], sum: '' })
+      setCompactSection('import')
+      setStatus('Imported. Now add the Killer cages: pick the cells of a cage, type its sum and add it.')
+    } else {
+      setLayoutEditor(null)
+      setStatus(`${name}${name === 'Classic' ? ' Sudoku' : ''} puzzle imported. ${then}`)
+    }
   }
 
   /** The paste shortcut: a puzzle string if the clipboard text is one, else
@@ -5943,7 +6269,14 @@ export default function App() {
   async function onCopyPuzzleAsIs() {
     let exported: string
     try {
-      exported = await importer.exportToSudokuCoachState(board, givens, candidates, candidateColors)
+      // Variant page: a Jigsaw or Killer goes out as a SudokuWiki string, by
+      // request - the one the import box reads and that site loads. What that
+      // format can't hold (a Killer with givens or uncaged cells, a puzzle
+      // with no regions or cages) falls back to this solver's own text.
+      exported = variant
+        ? (serializeSudokuWikiState({ board, givens, candidates, candidateColors, constraints }) ??
+          serializeVariantState({ board, givens, candidates, candidateColors, constraints }))
+        : await importer.exportToSudokuCoachState(board, givens, candidates, candidateColors)
     } catch {
       setStatus('Could not export this puzzle.')
       return
@@ -5962,9 +6295,11 @@ export default function App() {
    * givens (typed in by hand), since then the digits on it are the puzzle. */
   async function onCopyOriginal() {
     const hasGivens = givens.some((row) => row.some(Boolean))
-    const puzzle = board
-      .flatMap((row, r) => row.map((value, c) => (value !== 0 && (!hasGivens || givens[r][c]) ? String(value) : '0')))
-      .join('')
+    const puzzle = variant
+      ? (serializeSudokuWikiPuzzle(board, givens, constraints) ?? serializeVariantPuzzle(board, givens, constraints))
+      : board
+          .flatMap((row, r) => row.map((value, c) => (value !== 0 && (!hasGivens || givens[r][c]) ? String(value) : '0')))
+          .join('')
     try {
       await navigator.clipboard.writeText(puzzle)
       showToast('Copied to clipboard!')
@@ -5972,6 +6307,107 @@ export default function App() {
       setStatus("Couldn't access the clipboard - here's the puzzle string to copy manually:")
       setImportText(puzzle)
     }
+  }
+
+  /** What a Saved Puzzles entry holds: the grid as it stands. A screenshot
+   * import still being proofread is saved already locked, as the autosave
+   * does - the proofread and its screenshot can't be brought back. */
+  function gridToSave(): GridState {
+    return ocrProofreadVisible ? { ...grid, givens: board.map((row) => row.map((value) => value !== 0)) } : grid
+  }
+
+  /** One Saved Puzzles action for the analytics (saved_puzzle_events): the
+   * puzzle as Copy Original writes it, and - for a save - the position as
+   * text the import box reads back, colours included. Fire-and-forget. */
+  async function reportSavedPuzzle(action: 'save' | 'update' | 'open' | 'delete', saved: SavedPuzzle) {
+    try {
+      const g = saved.grid
+      const savedConstraints = g.constraints ?? CLASSIC_CONSTRAINTS
+      const hasGivens = g.givens.some((row) => row.some(Boolean))
+      const puzzle = variant
+        ? serializeVariantPuzzle(g.board, g.givens, savedConstraints)
+        : g.board.flatMap((row, r) => row.map((value, c) => (value !== 0 && (!hasGivens || g.givens[r][c]) ? String(value) : '0'))).join('')
+      let state: string | null = null
+      if (action === 'save' || action === 'update') {
+        // The Variant page's own JSON rather than the SudokuWiki string Copy
+        // Puzzle As-Is prefers: it is the one that holds every rule and the
+        // colours.
+        state = variant
+          ? serializeVariantState({ ...g, constraints: savedConstraints })
+          : await importer.exportToSudokuCoachState(g.board, g.givens, g.candidates, g.candidateColors)
+      }
+      const name = action === 'save' ? 'Save' : action === 'update' ? 'Update' : action === 'open' ? 'Open' : 'Delete'
+      trackEvent('saved puzzle', name, `${saved.page} · ${saved.kind} · ${saved.name}`)
+      trackSavedPuzzle({
+        action,
+        saveId: saved.id,
+        name: saved.name,
+        page: saved.page,
+        variant: saved.kind,
+        puzzle,
+        state,
+        filled: filledCellCount(g),
+        rating: saved.rating,
+      })
+    } catch {
+      // Analytics must never affect the app.
+    }
+  }
+
+  /** The dialog's Save: the grid under `name`, over the entry `replaceId`
+   * when there is one. Returns what went wrong, for the dialog to show. */
+  function onSavePuzzle(name: string, replaceId: string | null): string | null {
+    const ratingLine = variant ? variantRating?.kind === 'rated' && variantRatingLine : seRating?.kind === 'rated' && seRatingLine
+    const result = savePuzzle({
+      name,
+      replaceId,
+      kind: variant ? variantName(constraints) : 'Classic',
+      rating: ratingLine ? ratingLine.text : null,
+      grid: gridToSave(),
+    })
+    setSavedPuzzlesList(result.puzzles)
+    if (!result.ok) {
+      return result.reason === 'limit'
+        ? 'The saved puzzles list is full - delete one to save another.'
+        : "Couldn't save: this browser's storage is full or blocked (a private window can do that)."
+    }
+    setStatus(`Saved as "${result.puzzle.name}".`)
+    void reportSavedPuzzle(result.replaced ? 'update' : 'save', result.puzzle)
+    return null
+  }
+
+  /** Puts a saved puzzle back on the grid exactly as it was saved - one
+   * undoable step, like any other puzzle load, so the grid it replaces is
+   * an Undo away. */
+  function onOpenSavedPuzzle(saved: SavedPuzzle) {
+    const g = saved.grid
+    commitGrid(
+      {
+        board: g.board,
+        givens: g.givens,
+        candidates: g.candidates,
+        candidateColors: g.candidateColors,
+        // The Classic page never has (or loads) anything but the standard grid.
+        constraints: (variant && g.constraints) || CLASSIC_CONSTRAINTS,
+      },
+      null,
+    )
+    setOcrProofread(null)
+    setLayoutEditor(null)
+    setHighlightedDigit(null)
+    setSavedPuzzlesList(null)
+    setStatus(`Opened "${saved.name}". Undo brings back the grid you had before.`)
+    void reportSavedPuzzle('open', saved)
+  }
+
+  function onDeleteSavedPuzzle(saved: SavedPuzzle): string | null {
+    const result = deleteSavedPuzzle(saved.id)
+    setSavedPuzzlesList(result.puzzles)
+    if (!result.ok) {
+      return "Couldn't delete it: this browser's storage is blocked."
+    }
+    void reportSavedPuzzle('delete', saved)
+    return null
   }
 
   /** Reads a screenshot of a Sudoku grid (dropped or pasted) and rebuilds
@@ -5982,7 +6418,70 @@ export default function App() {
    * a given - but OCR can misread, so they load editable first, with the
    * proofread banner (ocrProofread) to check them against the screenshot
    * and then lock them. */
+  /** The Variant page's screenshot import: a Jigsaw's regions are read from
+   * the heavy borders (detectJigsawRegions), then the digits exactly as the
+   * Classic reader does, and loaded for proofreading the same way. A
+   * screenshot whose lines don't make nine regions loads on the 3x3 boxes.
+   * Killer cages and their sums are not read. Its own function so the
+   * Classic import below stays exactly as it was. */
+  function onImportVariantImage(file: Blob) {
+    setStatus('Reading screenshot…')
+    runBusyTask(
+      'ocr',
+      {
+        title: 'Reading screenshot…',
+        detail: 'Finding the grid, its regions and its digits - the first read also loads the text recogniser.',
+      },
+      async () => {
+        try {
+          const image = await CanvasGridImage.fromBlob(file)
+          const found = detectJigsawRegions(image)
+          const imported: SudokuConstraints = found.regions && !found.standard ? { regions: found.regions, cages: [] } : CLASSIC_CONSTRAINTS
+          const result = await ocrGrid(image, recognizeDigit, imported)
+          const solvedCount = result.board.flat().filter((v) => v !== 0).length
+          const unrecognizedCount = result.cells.filter((c) => c.unrecognizedSolvedDigit).length
+          if (solvedCount === 0 && unrecognizedCount === 0 && imported === CLASSIC_CONSTRAINTS) {
+            setStatus("Couldn't find a Sudoku grid in that image.")
+            return
+          }
+          const parts = [`read ${solvedCount} digit${solvedCount === 1 ? '' : 's'}`]
+          if (unrecognizedCount > 0) {
+            parts.push(`couldn't read ${unrecognizedCount} digit${unrecognizedCount === 1 ? '' : 's'}`)
+          }
+          // The digits only go on the grid (to be proofread, then locked as
+          // givens) once the dialog has settled which rules the puzzle has.
+          setStatus(`Screenshot read (${parts.join(', ')}). Choose what kind of puzzle it is.`)
+          setVariantImportPrompt({
+            source: 'screenshot',
+            detected: imported,
+            load: (choice) => {
+              const historyIndex = latestRef.current.commitGrid(
+                {
+                  board: result.board,
+                  givens: result.board.map((row) => row.map(() => false)),
+                  candidates: result.candidates,
+                  candidateColors: createEmptyCandidateColors(),
+                  constraints: choice.constraints,
+                },
+                null,
+              )
+              setOcrProofread({ historyIndex, imageUrl: URL.createObjectURL(file) })
+              setOcrProofreadShowImage(false)
+              finishVariantImport(choice, `Screenshot: ${parts.join(', ')}. Check the digits, then lock them as givens.`)
+            },
+          })
+        } catch {
+          setStatus("Couldn't read that screenshot.")
+        }
+      },
+    )
+  }
+
   function onImportImage(file: Blob) {
+    if (variant) {
+      onImportVariantImage(file)
+      return
+    }
     setStatus('Reading screenshot…')
     runBusyTask(
       'ocr',
@@ -6118,6 +6617,13 @@ export default function App() {
     if (isInHotkeyScope(event.target) && runHotkey(event)) {
       return
     }
+    // Drawing regions: 1-9 choose the region to draw, never enter a digit.
+    if (layoutEditor?.mode === 'regions') {
+      if (event.key >= '1' && event.key <= '9' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        setLayoutEditor({ ...layoutEditor, region: Number(event.key) - 1 })
+      }
+      return
+    }
     if (!selected || event.ctrlKey || event.metaKey || event.altKey) {
       // A modified digit is a shortcut (or the browser's own), never entry.
       return
@@ -6184,6 +6690,57 @@ export default function App() {
     commitGrid({ board, givens: board.map((row) => row.map((value) => value !== 0)), candidates })
     setOcrProofread(null)
     setStatus('Digits locked as givens.')
+  }
+
+  /** Generate Puzzle -> "Create From Empty Grid": clears the grid (one
+   * undoable step) and opens the givens-entry banner. The digits typed from
+   * here are ordinary editable cells until "Confirm givens" locks them. */
+  function onCreateFromEmptyGrid() {
+    const empty = createEmptyBoard()
+    const historyIndex = commitGrid(
+      { board: empty, givens: computeGivenMask(empty), candidates: createEmptyCandidates(), candidateColors: createEmptyCandidateColors() },
+      null,
+    )
+    setOcrProofread({ historyIndex, imageUrl: null })
+    setOcrProofreadShowImage(false)
+    setGivensEntryWarning(null)
+    setHighlightedDigit(null)
+    setStatus('Empty grid ready. Enter the givens, then confirm them.')
+  }
+
+  /** The givens-entry banner's "Confirm givens": locks the typed digits as
+   * givens (as onLockOcrDigits does), but only when they make a proper
+   * puzzle - one solution exactly. Otherwise it says why and the entry
+   * carries on. Pencil marks made meanwhile are dropped: the puzzle starts
+   * clean. */
+  function onConfirmGivens() {
+    const problem =
+      filled === 0
+        ? 'The grid is empty - enter the digits first.'
+        : conflictedCells.size > 0
+          ? 'Some digits clash with each other (outlined in red) - fix them first.'
+          : puzzleSolveResult.status === 'solved'
+            ? null
+            : puzzleSolveResult.status === 'multiple'
+              ? 'The current puzzle have more than one solution - place more digits.'
+              : 'The current puzzle have no solution - check the digits.'
+    if (problem) {
+      setGivensEntryWarning({ board, message: problem })
+      setStatus(problem)
+      return
+    }
+    commitGrid(
+      {
+        board,
+        givens: board.map((row) => row.map((value) => value !== 0)),
+        candidates: createEmptyCandidates(),
+        candidateColors: createEmptyCandidateColors(),
+      },
+      null,
+    )
+    setOcrProofread(null)
+    setGivensEntryWarning(null)
+    setStatus('Givens confirmed. Click "Autofill all" to start on its candidates.')
   }
 
   function onClear() {
@@ -6364,6 +6921,316 @@ export default function App() {
     )
   }
 
+  // ---- Variant page: practice puzzles, the layout editor, Killer auto-solve ----
+
+  // Drawing a Jigsaw's regions: a stroke starts on pointer down and takes in
+  // every cell the pointer crosses until it is lifted. Where it starts says
+  // what it does - on a cell already in the chosen region it rubs out, on
+  // any other it paints. Pointer moves arrive faster than renders, so the
+  // editor is also kept in a ref the stroke reads and writes straight away.
+  const layoutEditorRef = useRef(layoutEditor)
+  useLayoutEffect(() => {
+    layoutEditorRef.current = layoutEditor
+  })
+  const regionStrokeRef = useRef<'paint' | 'erase' | null>(null)
+
+  function cellUnderPointer(event: ReactPointerEvent<HTMLElement>): [number, number] | null {
+    const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-cell]')
+    const [row, col] = (cell?.getAttribute('data-cell') ?? '').split(',').map(Number)
+    return cell && Number.isInteger(row) && Number.isInteger(col) ? [row, col] : null
+  }
+
+  function drawRegionAt(row: number, col: number) {
+    const editor = layoutEditorRef.current
+    const stroke = regionStrokeRef.current
+    if (editor?.mode !== 'regions' || !stroke) {
+      return
+    }
+    const drawn = drawRegionCell(editor.draft, editor.region, row, col, stroke)
+    if (!drawn) {
+      return
+    }
+    const next: LayoutEditor = { mode: 'regions', draft: drawn.draft, region: drawn.region }
+    layoutEditorRef.current = next
+    setLayoutEditor(next)
+    // The region is full: the stroke ends there, rather than running on into
+    // the next region's colour under the same drag.
+    if (drawn.completed) {
+      regionStrokeRef.current = null
+    }
+  }
+
+  function onRegionPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    const editor = layoutEditorRef.current
+    const cell = cellUnderPointer(event)
+    if (editor?.mode !== 'regions' || !cell || (event.pointerType === 'mouse' && event.button !== 0)) {
+      return
+    }
+    // Keep the drag from selecting text or scrolling the page.
+    event.preventDefault()
+    regionStrokeRef.current = editor.draft[cell[0]][cell[1]] === editor.region ? 'erase' : 'paint'
+    drawRegionAt(cell[0], cell[1])
+  }
+
+  function onRegionPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    if (!regionStrokeRef.current) {
+      return
+    }
+    const cell = cellUnderPointer(event)
+    if (cell) {
+      drawRegionAt(cell[0], cell[1])
+    }
+  }
+
+  function onRegionPointerEnd() {
+    regionStrokeRef.current = null
+  }
+
+  /** "Draw a new Jigsaw": an empty grid with nothing on it, and the region
+   * editor open on a blank draft - regions first, digits after. */
+  function onDrawNewJigsaw() {
+    const empty = createEmptyBoard()
+    commitGrid(
+      {
+        board: empty,
+        givens: computeGivenMask(empty),
+        candidates: createEmptyCandidates(),
+        candidateColors: createEmptyCandidateColors(),
+        constraints: CLASSIC_CONSTRAINTS,
+      },
+      null,
+    )
+    setHighlightedDigit(null)
+    setSelected(null)
+    setLayoutEditor({ mode: 'regions', draft: blankRegionDraft(), region: 0 })
+    setCompactSection('import')
+    setStatus('Draw the nine regions by dragging across the grid, then click "Use regions".')
+  }
+
+  /** A published example (variantExamplePuzzles.ts) - X-Sudoku and
+   * Anti-Knight only, the kinds there are verified examples of. */
+  function onExampleVariantPuzzle(kind: 'x-sudoku' | 'anti-knight') {
+    const current = board.map((row, r) => row.map((value, c) => (givens[r][c] ? value : 0)).join('')).join('')
+    const example = pickVariantExample(kind, current)
+    const exampleGivens = exampleBoard(example)
+    commitGrid(
+      {
+        board: exampleGivens,
+        givens: computeGivenMask(exampleGivens),
+        candidates: createEmptyCandidates(),
+        candidateColors: createEmptyCandidateColors(),
+        constraints: exampleConstraints(kind),
+      },
+      null,
+    )
+    setLayoutEditor(null)
+    setHighlightedDigit(null)
+    setStatus(`${example.label} (${kind === 'x-sudoku' ? 'X-Sudoku' : 'Anti-Knight'}) loaded. Click "Autofill all" to start on its candidates.`)
+  }
+
+  /** Switches the diagonal rule (X-Sudoku) or the Anti-Knight rule on or off
+   * for the puzzle on the grid - how a puzzle typed in or pasted as a plain
+   * 81-digit string becomes one of them. */
+  function onToggleVariantRule(rule: 'diagonals' | 'antiKnight' | 'entropy') {
+    const on = !constraints[rule]
+    const name = rule === 'diagonals' ? 'The diagonal rule (X-Sudoku)' : rule === 'entropy' ? 'The Entropy rule' : 'The Anti-Knight rule'
+    commitLayout(
+      { ...constraints, [rule]: on },
+      on ? `${name} is on. Candidates already on the grid were not changed - "Autofill all" applies it.` : `${name} is off.`,
+    )
+  }
+
+  function onNewVariantPuzzle(kind: VariantKind) {
+    const name =
+      kind === 'killer' ? 'Killer' : kind === 'jigsaw' ? 'Jigsaw' : kind === 'x-sudoku' ? 'X-Sudoku' : kind === 'anti-knight' ? 'Anti-Knight' : kind === 'entropy' ? 'Entropy' : 'Killer Jigsaw'
+    setStatus(`Generating a ${name} puzzle…`)
+    runBusyTask(
+      'generate',
+      { title: `Generating a ${name} puzzle…`, detail: 'Building a random puzzle with exactly one solution.' },
+      () => {
+        const puzzle = generateVariantPuzzle(kind, { hard: variantHardPuzzles })
+        if (!puzzle) {
+          setStatus("Couldn't make one this time - try again.")
+          return
+        }
+        commitGrid(
+          {
+            board: puzzle.board,
+            givens: computeGivenMask(puzzle.board),
+            candidates: createEmptyCandidates(),
+            candidateColors: createEmptyCandidateColors(),
+            constraints: puzzle.constraints,
+          },
+          null,
+        )
+        setLayoutEditor(null)
+        setHighlightedDigit(null)
+        setStatus(`New ${name} puzzle loaded. Click "Autofill all" to start on its candidates.`)
+      },
+    )
+  }
+
+  /** One layout change (cages or regions) as one undoable step. The digits
+   * and marks stay; the cached Solve Path was for the old layout and goes. */
+  function commitLayout(next: SudokuConstraints, message: string) {
+    commitGrid(
+      { board, givens, candidates, constraints: normalizeConstraints(next) },
+      null,
+    )
+    setStatus(message)
+  }
+
+  function onAddCage() {
+    if (layoutEditor?.mode !== 'cages' || layoutEditor.selection.length === 0) {
+      return
+    }
+    const cells = layoutEditor.selection
+      .map((key) => key.split(',').map(Number) as [number, number])
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    const cage: KillerCage = { sum: Number(layoutEditor.sum), cells }
+    const problem = describeConstraintProblem({ regions: null, cages: [cage] })
+    if (problem) {
+      setStatus(problem)
+      return
+    }
+    const picked = new Set(layoutEditor.selection)
+    const kept = constraints.cages.filter((other) => !other.cells.some(([row, col]) => picked.has(`${row},${col}`)))
+    const cages = [...kept, cage].sort((a, b) => a.cells[0][0] - b.cells[0][0] || a.cells[0][1] - b.cells[0][1])
+    commitLayout({ ...constraints, cages }, `Added a cage of ${cells.length} cell${cells.length === 1 ? '' : 's'} summing to ${cage.sum}.`)
+    setLayoutEditor({ mode: 'cages', selection: [], sum: '' })
+  }
+
+  function onRemoveCages() {
+    if (layoutEditor?.mode !== 'cages') {
+      return
+    }
+    const picked = new Set(layoutEditor.selection)
+    const cages = constraints.cages.filter((cage) => !cage.cells.some(([row, col]) => picked.has(`${row},${col}`)))
+    const removed = constraints.cages.length - cages.length
+    if (removed === 0) {
+      setStatus('None of the picked cells is in a cage.')
+      return
+    }
+    commitLayout({ ...constraints, cages }, `Removed ${removed} cage${removed === 1 ? '' : 's'}.`)
+    setLayoutEditor({ ...layoutEditor, selection: [] })
+  }
+
+  function onClearCages() {
+    if (constraints.cages.length === 0) {
+      return
+    }
+    commitLayout({ ...constraints, cages: [] }, 'Removed every cage.')
+    if (layoutEditor?.mode === 'cages') {
+      setLayoutEditor({ ...layoutEditor, selection: [] })
+    }
+  }
+
+  function onApplyRegions() {
+    if (layoutEditor?.mode !== 'regions') {
+      return
+    }
+    const draft = layoutEditor.draft
+    const standard = draft.every((row, r) => row.every((region, c) => region === STANDARD_REGIONS[r][c]))
+    const next: SudokuConstraints = { ...constraints, regions: standard ? null : draft.map((row) => [...row]) }
+    const problem = describeConstraintProblem(next)
+    if (problem) {
+      setStatus(problem)
+      return
+    }
+    commitLayout(next, standard ? 'Regions set to the 3x3 boxes.' : 'Regions set. Now enter the digits - click a cell and type, or use the Solution pad.')
+    setLayoutEditor(null)
+  }
+
+  function onStandardRegions() {
+    if (constraints.regions === null) {
+      return
+    }
+    commitLayout({ ...constraints, regions: null }, 'Regions set to the 3x3 boxes.')
+  }
+
+  /** Applies every row of a Killer technique at once (the Auto-solve
+   * buttons): placements first, then the eliminations that are left. */
+  function applyKillerRows(
+    techniqueName: string,
+    rows: Array<{ eliminations: Array<{ row: number; col: number; digit: number }>; solved: { row: number; col: number; digit: number } | null }>,
+  ) {
+    if (!pairFinder.hasFullCandidates(board, candidates)) {
+      setStatus(`${techniqueName} needs every empty cell to have its candidates marked first — try Autofill all.`)
+      return
+    }
+    const solvedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    const eliminatedByCell = new Map<string, { row: number; col: number; digit: number }>()
+    for (const found of rows) {
+      if (found.solved) {
+        solvedByCell.set(`${found.solved.row},${found.solved.col}`, found.solved)
+      }
+      for (const elimination of found.eliminations) {
+        eliminatedByCell.set(`${elimination.row},${elimination.col},${elimination.digit}`, elimination)
+      }
+    }
+    if (solvedByCell.size === 0 && eliminatedByCell.size === 0) {
+      setStatus(`No ${techniqueName} deductions to apply.`)
+      return
+    }
+    const nextBoard = cloneBoard(board)
+    const nextCandidates = cloneCandidates(candidates)
+    for (const { row, col, digit } of solvedByCell.values()) {
+      nextBoard[row][col] = digit
+    }
+    for (const { row, col, digit } of solvedByCell.values()) {
+      nextCandidates[row][col] = Array(9).fill(false)
+      SudokuRules.eliminatePeerCandidates(nextCandidates, nextBoard, row, col, digit)
+    }
+    let eliminated = 0
+    for (const { row, col, digit } of eliminatedByCell.values()) {
+      if (nextBoard[row][col] === 0 && nextCandidates[row][col][digit - 1]) {
+        nextCandidates[row][col][digit - 1] = false
+        eliminated++
+      }
+    }
+    commitAutoSolve({ board: nextBoard, givens, candidates: nextCandidates })
+    const parts: string[] = []
+    if (solvedByCell.size > 0) {
+      parts.push(`solved ${solvedByCell.size} cell${solvedByCell.size === 1 ? '' : 's'}`)
+    }
+    if (eliminated > 0) {
+      parts.push(`eliminated ${eliminated} candidate${eliminated === 1 ? '' : 's'}`)
+    }
+    setStatus(`${techniqueName} ${parts.join(' and ')}.`)
+  }
+
+  function onCageCombinations() {
+    applyKillerRows(
+      'Cage Combinations',
+      killerCageFinder.find(board, candidates).filter((cage) => cage.kind !== 'locked'),
+    )
+  }
+
+  function onCageLockedCandidates() {
+    applyKillerRows(
+      'Cage Locked Candidates',
+      killerCageFinder.find(board, candidates).filter((cage) => cage.kind === 'locked'),
+    )
+  }
+
+  function onVariantLockedCandidates() {
+    applyKillerRows(
+      'Locked Candidates',
+      variantLockedFinder.find(board, candidates).map((locked) => ({ eliminations: locked.eliminations, solved: null })),
+    )
+  }
+
+  function onEntropySquares() {
+    applyKillerRows(
+      'Entropy Squares',
+      entropyFinder.find(board, candidates).map((square) => ({ eliminations: square.eliminations, solved: null })),
+    )
+  }
+
+  function onRuleOf45() {
+    applyKillerRows('Rule of 45', killerRule45Finder.find(board, candidates))
+  }
+
   function dragonGenerationTimeoutLabel(): string {
     return (
       DRAGON_GENERATION_TIMEOUT_OPTIONS.find((option) => option.ms === dragonGenerationTimeoutMs)?.label ??
@@ -6375,7 +7242,27 @@ export default function App() {
   // below (unchanged - three columns around the grid), and the touch layout
   // (useCompactLayout), which pins the grid and puts every control group
   // behind one of the dock's tabs. Both reuse the exact same elements.
-  const header = (
+  const header = variant ? (
+    <header className="header">
+      <h1>
+        Variant Sudoku Colouring Solver <span className="app-version">{APP_VERSION}</span>
+      </h1>
+      <p>
+        The Colouring solver and trainer, extended to Sudoku variants: <b>Killer</b>, <b>Jigsaw</b>, <b>X-Sudoku</b>, <b>Anti-Knight</b> and <b>Entropy</b> (and mixes of them). <br /> <br />
+        Pick a puzzle from the <b>Puzzle</b> menu, or draw your own under <b>Puzzle layout</b>, then click <b>Autofill all</b> and open
+        the Techniques list. The Classic techniques run on the variant wherever their logic holds - see{' '}
+        <button type="button" className="header-link" onClick={() => setHelpOpen({ tab: 'Variant Sudoku' })}>
+          how variants are solved
+        </button>
+        . <br />
+        For Classic Sudoku, and to learn the Colouring techniques step by step, use the{' '}
+        <a className="header-link" href={import.meta.env.BASE_URL}>
+          Classic solver
+        </a>
+        .
+      </p>
+    </header>
+  ) : (
     <header className="header">
       <h1>
         Sudoku Colouring Solver/Trainer <span className="app-version">{APP_VERSION}</span>
@@ -6394,6 +7281,18 @@ export default function App() {
         <button type="button" className="header-link" onClick={() => setHelpOpen({tab: "Technique Selections"})}>
            techniques
         </button>{' '}
+        {/* Dev only, by request: in a build nothing on the Classic page
+            points at the Variant solver - it is reached by its own URL. */}
+        {import.meta.env.DEV && (
+          <>
+            <br />
+            Solving a Killer or a Jigsaw? Try the{' '}
+            <a className="header-link" href={`${import.meta.env.BASE_URL}variants/`}>
+              Variant solver
+            </a>
+            .
+          </>
+        )}
       </p>
     </header>
   )
@@ -6458,14 +7357,27 @@ export default function App() {
       <div className="toolbar-group toolbar-group-end">
         {!phone && (
           <div className="toolbar-segment">
-            <button
-              type="button"
-              className="how-it-works-trigger"
-              title="Learn the colouring techniques, step by step"
-              onClick={() => setTutorialTarget({ tab: 'basics' })}
-            >
-              Learn techniques
-            </button>
+            {variant ? (
+              // How It Works teaches on Classic positions, so it lives on the
+              // Classic page; this goes there.
+              <button
+                type="button"
+                className="how-it-works-trigger"
+                title="Open the Classic solver, where the colouring techniques are taught step by step"
+                onClick={() => window.location.assign(import.meta.env.BASE_URL)}
+              >
+                Classic solver
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="how-it-works-trigger"
+                title="Learn the colouring techniques, step by step"
+                onClick={() => setTutorialTarget({ tab: 'basics' })}
+              >
+                Learn techniques
+              </button>
+            )}
             <button
               type="button"
               className="help-button"
@@ -6478,6 +7390,138 @@ export default function App() {
             </button>
           </div>
         )}
+        {variant ? (
+          // The Variant page's own way of getting a puzzle: random practice
+          // puzzles of each kind, and the layout editor for entering one.
+          <DropdownMenu
+            trackingName="Variant Puzzle"
+            label={
+              phone ? (
+                generating ? (
+                  '⏳'
+                ) : (
+                  '🧩'
+                )
+              ) : (
+                <>
+                  {generating ? 'Generating…' : 'Puzzle'} <span className="dropdown-caret">▾</span>
+                </>
+              )
+            }
+            ariaLabel={phone ? (generating ? 'Generating puzzle' : 'Puzzle') : undefined}
+            buttonClassName="generate-puzzle-trigger"
+            closeOnItemClick
+          >
+            <div className="dropdown-section">
+              <h3 className="dropdown-section-title">
+                Practice puzzle
+                <MenuHelpButton topic="Variant Sudoku" onClick={() => setHelpOpen({ tab: 'Variant Sudoku' })} />
+              </h3>
+              {(
+                [
+                  ['killer', 'Killer puzzle', 'A random Killer: cages with sums, no givens'],
+                  ['jigsaw', 'Jigsaw puzzle', 'A random Jigsaw: irregular regions in place of the 3x3 boxes'],
+                  ['killer-jigsaw', 'Killer Jigsaw puzzle', 'Cages over irregular regions'],
+                  ['x-sudoku', 'X-Sudoku puzzle', 'A random X-Sudoku: each of the two long diagonals also holds 1-9 once'],
+                  ['anti-knight', 'Anti-Knight puzzle', "A random Anti-Knight Sudoku: cells a chess knight's move apart can't hold the same digit"],
+                  ['entropy', 'Entropy puzzle', 'A random Entropy Sudoku: every 2x2 square holds a low (1-3), a middle (4-6) and a high (7-9) digit'],
+                ] as const
+              ).map(([kind, label, title]) => (
+                <button key={kind} type="button" className="dropdown-item" onClick={() => onNewVariantPuzzle(kind)} disabled={busy} title={title}>
+                  {label}
+                </button>
+              ))}
+              <label
+                className="menu-checkbox"
+                title="A Jigsaw with as few givens as it can have, a Killer with bigger cages and almost no one-cell ones. Still just valid puzzles - not graded by technique."
+              >
+                <input type="checkbox" checked={variantHardPuzzles} onChange={() => setVariantHardPuzzles((value) => !value)} />
+                Harder puzzles
+              </label>
+            </div>
+            <div className="dropdown-divider" />
+            <div className="dropdown-section">
+              <h3 className="dropdown-section-title">Published examples</h3>
+              <button
+                type="button"
+                className="dropdown-item"
+                disabled={busy}
+                title="One of the example puzzles of SudokuWiki's X-Sudoku solver (each checked to have exactly one solution)"
+                onClick={() => onExampleVariantPuzzle('x-sudoku')}
+              >
+                X-Sudoku example
+              </button>
+              <button
+                type="button"
+                className="dropdown-item"
+                disabled={busy}
+                title="One of SudokuTodo's Anti-Knight puzzles (each checked to have exactly one solution)"
+                onClick={() => onExampleVariantPuzzle('anti-knight')}
+              >
+                Anti-Knight example
+              </button>
+            </div>
+            <div className="dropdown-divider" />
+            <div className="dropdown-section">
+              <h3 className="dropdown-section-title">Enter your own</h3>
+              <button
+                type="button"
+                className="dropdown-item"
+                disabled={busy}
+                title="Clears the grid and lets you draw the nine regions first; the digits come after"
+                onClick={onDrawNewJigsaw}
+              >
+                Draw a new Jigsaw
+              </button>
+              <button
+                type="button"
+                className="dropdown-item"
+                disabled={busy}
+                onClick={() => {
+                  setLayoutEditor({ mode: 'cages', selection: [], sum: '' })
+                  setCompactSection('import')
+                }}
+              >
+                Edit cages
+              </button>
+              <button
+                type="button"
+                className="dropdown-item"
+                disabled={busy}
+                onClick={() => {
+                  setLayoutEditor({ mode: 'regions', draft: (constraints.regions ?? STANDARD_REGIONS).map((row) => [...row]), region: 0 })
+                  setCompactSection('import')
+                }}
+              >
+                Redraw regions
+              </button>
+              <button type="button" className="dropdown-item" disabled={busy || !hasCages} onClick={onClearCages}>
+                Remove all cages
+              </button>
+              <button type="button" className="dropdown-item" disabled={busy || constraints.regions === null} onClick={onStandardRegions}>
+                Back to 3x3 boxes
+              </button>
+              <label className="menu-checkbox" title="X-Sudoku: each of the two long diagonals also holds every digit once. Tick it after typing or pasting an X-Sudoku's digits.">
+                <input type="checkbox" checked={hasDiagonalRule} disabled={busy} onChange={() => onToggleVariantRule('diagonals')} />
+                Diagonals (X-Sudoku)
+              </label>
+              <label
+                className="menu-checkbox"
+                title="Anti-Knight: two cells a chess knight's move apart can't hold the same digit. Tick it after typing or pasting an Anti-Knight puzzle's digits."
+              >
+                <input type="checkbox" checked={hasKnightRule} disabled={busy} onChange={() => onToggleVariantRule('antiKnight')} />
+                Anti-Knight rule
+              </label>
+              <label
+                className="menu-checkbox"
+                title="Entropy: every 2x2 square of cells holds at least one low (1-3), one middle (4-6) and one high (7-9) digit. Tick it for an Entropy puzzle whose digits were typed in."
+              >
+                <input type="checkbox" checked={hasEntropyRule} disabled={busy} onChange={() => onToggleVariantRule('entropy')} />
+                Entropy rule
+              </label>
+            </div>
+          </DropdownMenu>
+        ) : (
         <DropdownMenu
           trackingName="Generate Puzzle"
           label={
@@ -6515,6 +7559,18 @@ export default function App() {
           ariaLabel={phone ? (generating ? 'Generating puzzle' : 'Generate Puzzle') : undefined}
           buttonClassName="generate-puzzle-trigger"
         >
+          <div className="dropdown-section">
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={onCreateFromEmptyGrid}
+              disabled={busy}
+              title="Clears the grid so you can enter your own puzzle's givens, then confirm them to start solving"
+            >
+              Create From Empty Grid
+            </button>
+          </div>
+          <div className="dropdown-divider" />
           <div className="dropdown-section">
             <h3 className="dropdown-section-title">
               Generate Practice Puzzle
@@ -6707,6 +7763,7 @@ export default function App() {
             </label>
           </div>
         </DropdownMenu>
+        )}
 
         {/* The three settings menus, joined into one group on the desktop. */}
         <div className="toolbar-segment">
@@ -6886,6 +7943,9 @@ export default function App() {
                     </p>
                   )}
                   {shown && group.techniques.map((technique) => {
+              // Not usable on the puzzle on the grid (Variant page): the
+              // finders find nothing there, so the box is off with the reason.
+              const notOnThisPuzzle = RULE3_APPLICABILITY_KEY[technique] ? unavailable(RULE3_APPLICABILITY_KEY[technique]) : null
               const disabledByMasterSwitch =
                 ((ALL_FISH_TECHNIQUES as readonly Rule3Technique[]).includes(technique) &&
                   !enabledFish.has(technique as FishTechnique)) ||
@@ -6902,25 +7962,28 @@ export default function App() {
                   key={technique}
                   className="menu-checkbox"
                   title={
-                    dynamicDragonDisabled
+                    notOnThisPuzzle ??
+                    (dynamicDragonDisabled
                       ? 'Dynamic Dragons are disabled, so this has no effect'
                       : disabledByMasterSwitch
                         ? `${RULE3_TECHNIQUE_LABELS[technique]} is turned off in Technique Selections, so this has no effect`
-                        : undefined
+                        : undefined)
                   }
                 >
                   <input
                     type="checkbox"
-                    checked={allowedRule3Techniques.has(technique)}
+                    checked={allowedRule3Techniques.has(technique) && notOnThisPuzzle === null}
                     disabled={
                       technique === 'naked pair' ||
                       technique === 'locked candidate' ||
                       disabledByMasterSwitch ||
-                      dynamicDragonDisabled
+                      dynamicDragonDisabled ||
+                      notOnThisPuzzle !== null
                     }
                     onChange={() => toggleRule3Technique(technique)}
                   />
                   {RULE3_TECHNIQUE_LABELS[technique]}
+                  {notOnThisPuzzle !== null && <span className="menu-not-applicable"> (not on this puzzle)</span>}
                 </label>
               )
                   })}
@@ -6945,6 +8008,42 @@ export default function App() {
           buttonClassName="technique-selections-trigger"
           align="right"
         >
+          {variant && (
+            <>
+              <div className="dropdown-section">
+                <h3 className="dropdown-section-title">X-Sudoku / Anti-Knight / Entropy Techniques</h3>
+                {(
+                  [
+                    ['Locked Candidate (Diagonal)', hasDiagonalRule, 'Needs the diagonal rule (X-Sudoku) - the puzzle on the grid does not have it.'],
+                    ["Locked Candidate (Knight's Move)", hasKnightRule, 'Needs the Anti-Knight rule - the puzzle on the grid does not have it.'],
+                    ['Entropy Square', hasEntropyRule, 'Needs the Entropy rule - the puzzle on the grid does not have it.'],
+                  ] as const
+                ).map(([name, on, off]) => (
+                  <label key={name} className="menu-checkbox" title={on ? `${name} is always used by the solver on this puzzle.` : off}>
+                    <input type="checkbox" checked={on} disabled readOnly />
+                    {name}
+                  </label>
+                ))}
+              </div>
+              <div className="dropdown-section">
+                <h3 className="dropdown-section-title">
+                  Killer Techniques
+                  <MenuHelpButton topic="Variant Sudoku" onClick={() => setHelpOpen({ tab: 'Variant Sudoku' })} />
+                </h3>
+                {['Cage Sum', 'Cage Combinations', 'Cage Locked Candidate', 'Rule of 45 (Innies / Outies)'].map((name) => (
+                  <label
+                    key={name}
+                    className="menu-checkbox"
+                    title={hasCages ? `${name} is always used by the solver on a puzzle with cages.` : 'Needs Killer cages - the puzzle on the grid has none.'}
+                  >
+                    <input type="checkbox" checked={hasCages} disabled readOnly />
+                    {name}
+                  </label>
+                ))}
+              </div>
+              <div className="dropdown-divider" />
+            </>
+          )}
           <div className="dropdown-section">
             <div className="menu-section-toggle-row">
               <button
@@ -7043,12 +8142,25 @@ export default function App() {
               Techniques (Non-Colouring)
               <MenuHelpButton topic="Techniques" onClick={() => setHelpOpen({ tab: 'Technique Selections' })} />
             </h3>
-            {['Unique Rectangle', 'Bivalue Oddagon', 'BUG+1', 'Avoidable Rectangle'].map((name) => (
-              <label key={name} className="menu-checkbox" title={`${name} is always used by the solver.`}>
-                <input type="checkbox" checked disabled readOnly />
-                {name}
-              </label>
-            ))}
+            {(
+              [
+                ['Unique Rectangle', 'unique rectangle'],
+                ['Bivalue Oddagon', 'bivalue oddagon'],
+                ['BUG+1', 'bug+n'],
+                ['Avoidable Rectangle', 'avoidable rectangle'],
+              ] as const
+            ).map(([name, key]) => {
+              // Off (with the reason) where the technique's logic doesn't hold
+              // on the puzzle on the grid - a Killer has no deadly patterns.
+              const reason = unavailable(key)
+              return (
+                <label key={name} className="menu-checkbox" title={reason ?? `${name} is always used by the solver.`}>
+                  <input type="checkbox" checked={reason === null} disabled readOnly />
+                  {name}
+                  {reason !== null && <span className="menu-not-applicable"> (not on this puzzle)</span>}
+                </label>
+              )
+            })}
             <label
               className="menu-checkbox"
               title="When off, the solver will not look for Short Single-Digit AIC chains at all. Disable this for a true Colouring experience."
@@ -7142,13 +8254,20 @@ export default function App() {
                     key={technique}
                     className="menu-checkbox"
                     title={
-                      technique === 'extended ur'
+                      unavailable(technique) ??
+                      (technique === 'extended ur'
                         ? "When on, the solver looks for Extended Unique Rectangles (Type 1): a Unique Rectangle on a 6-cell deadly pattern. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu), and gets its own lesson under Learn techniques. It doesn't affect puzzle generation."
-                        : `When on, the solver looks for ${EXOTIC_TECHNIQUE_NAMES[technique]}. It can't be used inside Dynamic Dragon Colouring and doesn't affect puzzle generation.`
+                        : `When on, the solver looks for ${EXOTIC_TECHNIQUE_NAMES[technique]}. It can't be used inside Dynamic Dragon Colouring and doesn't affect puzzle generation.`)
                     }
                   >
-                    <input type="checkbox" checked={enabled} onChange={() => setEnabled((value) => !value)} />
+                    <input
+                      type="checkbox"
+                      checked={enabled && unavailable(technique) === null}
+                      disabled={unavailable(technique) !== null}
+                      onChange={() => setEnabled((value) => !value)}
+                    />
                     Enable {EXOTIC_TECHNIQUE_NAMES[technique]}
+                    {unavailable(technique) !== null && <span className="menu-not-applicable"> (not on this puzzle)</span>}
                   </label>
                 ))}
                 <label
@@ -7167,10 +8286,19 @@ export default function App() {
                 </label>
                 <label
                   className="menu-checkbox"
-                  title="When on, the solver looks for UR-AICs: chains that may link through a Unique Rectangle. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu)."
+                  title={
+                    unavailable('ur-aic') ??
+                    'When on, the solver looks for UR-AICs: chains that may link through a Unique Rectangle. It can then also be allowed inside Dynamic Dragon Colouring (Dragon Configuration menu).'
+                  }
                 >
-                  <input type="checkbox" checked={urAicEnabled} onChange={() => setUrAicEnabled((value) => !value)} />
+                  <input
+                    type="checkbox"
+                    checked={urAicEnabled && unavailable('ur-aic') === null}
+                    disabled={unavailable('ur-aic') !== null}
+                    onChange={() => setUrAicEnabled((value) => !value)}
+                  />
                   Enable UR-AIC
+                  {unavailable('ur-aic') !== null && <span className="menu-not-applicable"> (not on this puzzle)</span>}
                 </label>
                 <label
                   className="menu-checkbox"
@@ -7278,6 +8406,15 @@ export default function App() {
               <input type="checkbox" checked={showBivalueCells} onChange={toggleBivalueCells} />
               Show bivalue cells
             </label>
+            {variant && (
+              <label
+                className="menu-checkbox"
+                title="On an Entropy puzzle, tints every cell that is down to one or two groups: blue = low (1-3), amber = middle (4-6), pink = high (7-9). A cell split in two colours can still be either group. Drawing only - it changes no candidates."
+              >
+                <input type="checkbox" checked={entropyGroupMarking} onChange={() => setEntropyGroupMarking((value) => !value)} />
+                Entropy: colour cells by group
+              </label>
+            )}
             <label
               className="menu-checkbox"
               title="Toggle the grid's colour scheme between light and dark modes"
@@ -7316,19 +8453,28 @@ export default function App() {
           >
             {/* The page title, hidden above the toolbar on a phone. */}
             <h3 className="dropdown-section-title">
-              Sudoku Colouring Solver/Trainer {APP_VERSION}
+              {variant ? 'Variant Sudoku Colouring Solver' : 'Sudoku Colouring Solver/Trainer'} {APP_VERSION}
             </h3>
             <button type="button" className="dropdown-item" onClick={onClear} disabled={busy}>
               Clear grid
             </button>
-            <button
-              type="button"
-              className="dropdown-item"
-              title="Learn the colouring techniques, step by step"
-              onClick={() => setTutorialTarget({ tab: 'basics' })}
-            >
-              Learn techniques
+            <button type="button" className="dropdown-item" onClick={() => setSavedPuzzlesList(loadSavedPuzzles())} disabled={busy}>
+              Saved puzzles
             </button>
+            {variant ? (
+              <button type="button" className="dropdown-item" onClick={() => window.location.assign(import.meta.env.BASE_URL)}>
+                Classic solver
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="dropdown-item"
+                title="Learn the colouring techniques, step by step"
+                onClick={() => setTutorialTarget({ tab: 'basics' })}
+              >
+                Learn techniques
+              </button>
+            )}
             <button type="button" className="dropdown-item" onClick={() => setHelpOpen({})}>
               Settings guide (?)
             </button>
@@ -7341,7 +8487,19 @@ export default function App() {
   // While an imported screenshot's digits await proofreading, the technique
   // sections are off: a misread digit would make every technique, hint and
   // auto-solve wrong, and locking is what turns them into givens.
-  const techniquesLockedNotice = ocrProofreadVisible ? (
+  const givensEntryWarningText = givensEntryWarning && givensEntryWarning.board === board ? givensEntryWarning.message : null
+  const techniquesLockedNotice = givensEntryVisible ? (
+    <div className="techniques-locked">
+      <p className="technique-empty">
+        <b>Confirm the givens first.</b> Enter your puzzle's givens on the grid, then confirm them to see the
+        techniques.
+      </p>
+      {givensEntryWarningText && <p className="ocr-proofread-warning">{givensEntryWarningText}</p>}
+      <button type="button" className="primary" onClick={onConfirmGivens} disabled={busy}>
+        Confirm givens
+      </button>
+    </div>
+  ) : ocrProofreadVisible ? (
     <div className="techniques-locked">
       <p className="technique-empty">
         <b>Lock the imported digits first.</b> Check the grid against your screenshot, then lock the digits as givens to
@@ -7425,13 +8583,35 @@ export default function App() {
     />
   )
 
+  const layoutEditorSelection = new Set(layoutEditor?.mode === 'cages' ? layoutEditor.selection : [])
   const gridElement = (
     <div
-      className={['grid', gridWhiteMode ? 'grid-white-mode' : ''].filter(Boolean).join(' ')}
+      className={[
+        'grid',
+        gridWhiteMode ? 'grid-white-mode' : '',
+        // Variant page: a Jigsaw's regions replace the 3x3 boxes' thick lines,
+        // a Killer keeps a band above the pencil marks for the cage sums, and
+        // the layout editor turns the cells into something to pick.
+        constraints.regions || layoutEditor?.mode === 'regions' ? 'grid-jigsaw' : '',
+        hasCages ? 'grid-killer' : '',
+        layoutEditor ? 'grid-layout-editing' : '',
+        layoutEditor?.mode === 'regions' ? 'grid-region-drawing' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       role="grid"
       aria-label="Sudoku board"
       tabIndex={0}
       data-hotkey-scope
+      {...(layoutEditor?.mode === 'regions'
+        ? {
+            onPointerDown: onRegionPointerDown,
+            onPointerMove: onRegionPointerMove,
+            onPointerUp: onRegionPointerEnd,
+            onPointerCancel: onRegionPointerEnd,
+            onPointerLeave: onRegionPointerEnd,
+          }
+        : {})}
     >
       {NINE.map((boxIndex) => {
         const boxRow = Math.floor(boxIndex / 3)
@@ -7477,6 +8657,7 @@ export default function App() {
                   aria-readonly={givens[r][c]}
                   aria-label={cellAriaLabel(r, c, value)}
                   className={classes}
+                  data-cell={`${r},${c}`}
                   onClick={() => onCellClick(r, c)}
                 >
                   {value !== 0 ? (
@@ -7703,6 +8884,16 @@ export default function App() {
         )
       })}
 
+      {variant && (
+        <VariantGridOverlay
+          constraints={constraints}
+          regionDraft={layoutEditor?.mode === 'regions' ? layoutEditor.draft : null}
+          selectedCells={layoutEditorSelection}
+          focusCell={selected}
+          entropyGroups={entropyGroupMarking && hasEntropyRule ? { board, candidates } : null}
+        />
+      )}
+
       {strongLinks.length > 0 && (
         <svg className="strong-links" viewBox="0 0 900 900" aria-hidden="true">
           {strongLinks.map((link, index) => {
@@ -7758,7 +8949,36 @@ export default function App() {
 
   const importRows = (
     <>
-      {ocrProofreadVisible && (
+      {givensEntryVisible && (
+        <div className="ocr-proofread" role="region" aria-label="Enter the givens">
+          <p className="ocr-proofread-text">
+            <b>Create your puzzle!</b> Fill in any empty cells, then confirm to start solving.
+          </p>
+          {givensEntryWarningText && (
+            <p className="ocr-proofread-warning" role="alert">
+              {givensEntryWarningText}
+            </p>
+          )}
+          <div className="ocr-proofread-actions">
+            <button type="button" className="primary" onClick={onConfirmGivens} disabled={busy}>
+              Confirm givens
+            </button>
+            {/* Starting over: small and at the far end of the row, so it
+                isn't hit by a slip on the way to Confirm, and it asks first
+                (confirmClearGivensOpen). */}
+            <button
+              type="button"
+              className="givens-entry-clear"
+              onClick={() => setConfirmClearGivensOpen(true)}
+              disabled={busy || filled === 0}
+              title="Remove every digit and start over"
+            >
+              Clear grid
+            </button>
+          </div>
+        </div>
+      )}
+      {ocrProofreadVisible && !givensEntryVisible && (
         <div className="ocr-proofread" role="region" aria-label="Check the imported digits">
           <p className="ocr-proofread-text">
             <b>Check the imported digits.</b> Compare the grid with your screenshot, correct any mistakes, then lock them in.
@@ -7774,7 +8994,7 @@ export default function App() {
               Lock as givens
             </button>
           </div>
-          {ocrProofreadShowImage && (
+          {ocrProofreadShowImage && ocrProofread.imageUrl && (
             <img className="ocr-proofread-image" src={ocrProofread.imageUrl} alt="The imported screenshot" />
           )}
         </div>
@@ -7782,7 +9002,11 @@ export default function App() {
       <div className="import-row">
         <textarea
           className="import-input"
-          placeholder="Paste a sudoku grid in any format (Sudoku.Coach, 81-char string, etc.)"
+          placeholder={
+            variant
+              ? 'Paste a SudokuWiki Jigsaw / Killer string, or a puzzle copied from here'
+              : 'Paste a sudoku grid in any format (Sudoku.Coach, 81-char string, etc.)'
+          }
           rows={1}
           value={importText}
           disabled={busy}
@@ -7791,40 +9015,61 @@ export default function App() {
         <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
           Import
         </button>
+        {/* Next to Import - the other way of getting a puzzle onto the grid -
+            rather than in the toolbar, which has no room left on one row.
+            A phone also has it in the toolbar's "⋯" menu. */}
+        <button
+          type="button"
+          className="saved-puzzles-trigger"
+          aria-haspopup="dialog"
+          title="Save the puzzle on the grid with all your progress - digits, candidates and colours - or open one you saved earlier. Kept in this browser."
+          onClick={() => setSavedPuzzlesList(loadSavedPuzzles())}
+          disabled={busy}
+        >
+          Saved puzzles
+        </button>
       </div>
 
       <div className="import-secondary-row" ref={importSecondaryRowRef}>
-        <div
-          className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
-          onDragOver={(event) => {
-            event.preventDefault()
-            setOcrDragActive(true)
-          }}
-          onDragLeave={() => setOcrDragActive(false)}
-          onDrop={onImageDrop}
-          onPaste={onImagePaste}
-          tabIndex={0}
-          role="button"
-          aria-label="Drop or paste a Sudoku grid screenshot to read it"
-        >
-          <span>
-            {ocrBusy
-              ? 'Reading screenshot…'
-              : 'Drag or paste a screenshot, or '}
-          </span>
-          {!ocrBusy && (
-            <label className="image-import-browse">
-              upload
-              <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
-            </label>
-          )}
-        </div>
+        {/* On the Variant page a screenshot is read as a Jigsaw (regions and
+            digits); the wording below says so. */}
+        {(
+          <div
+            className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
+            onDragOver={(event) => {
+              event.preventDefault()
+              setOcrDragActive(true)
+            }}
+            onDragLeave={() => setOcrDragActive(false)}
+            onDrop={onImageDrop}
+            onPaste={onImagePaste}
+            tabIndex={0}
+            role="button"
+            aria-label="Drop or paste a Sudoku grid screenshot to read it"
+          >
+            <span>
+              {ocrBusy
+                ? 'Reading screenshot…'
+                : 'Drag or paste a screenshot, or '}
+            </span>
+            {!ocrBusy && (
+              <label className="image-import-browse">
+                upload
+                <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
+              </label>
+            )}
+          </div>
+        )}
         <button
           type="button"
           className="copy-sc-button"
           onClick={onCopyPuzzleAsIs}
           disabled={busy}
-          title="Copies the current progress - givens, solved cells, candidates and colours - to your clipboard. Pastes into Sudoku.Coach (without the colours) or back into this app."
+          title={
+            variant
+              ? 'Copies the puzzle and the current progress (solved cells and candidates) to your clipboard as a SudokuWiki Jigsaw / Killer string. Paste it into the import box here, or load it on sudokuwiki.org. Colours on candidates are not part of that format.'
+              : 'Copies the current progress - givens, solved cells, candidates and colours - to your clipboard. Pastes into Sudoku.Coach (without the colours) or back into this app.'
+          }
         >
           Copy Puzzle As-Is
         </button>
@@ -7833,7 +9078,11 @@ export default function App() {
           className="copy-sc-button"
           onClick={onCopyOriginal}
           disabled={busy}
-          title="Copies just the original puzzle (its givens) as an 81-character string (0 = empty) to your clipboard"
+          title={
+            variant
+              ? 'Copies just the puzzle - its givens, regions and cages - to your clipboard as a SudokuWiki Jigsaw / Killer string'
+              : 'Copies just the original puzzle (its givens) as an 81-character string (0 = empty) to your clipboard'
+          }
         >
           Copy Original
         </button>
@@ -8065,7 +9314,9 @@ export default function App() {
       inert={ocrProofreadVisible}
     >
       <h2 className="control-label">Auto-solve</h2>
-      {ocrProofreadVisible && <p className="dropdown-hint">Lock the imported digits as givens first.</p>}
+      {ocrProofreadVisible && (
+        <p className="dropdown-hint">{givensEntryVisible ? 'Confirm the givens first.' : 'Lock the imported digits as givens first.'}</p>
+      )}
       {/* Two columns under difficulty-tier subheadings instead of one
           full-width button per technique (18 rows) - the labels are
           shortened to fit a column; each button's title still spells out
@@ -8138,7 +9389,79 @@ export default function App() {
           </button>
         </div>
       </div>
-      <div className="autosolve-subgroup">
+      {/* Killer cages (Variant page): the techniques a cage's sum brings. */}
+      {hasCages && (
+        <div className="autosolve-subgroup">
+          <h3 className="autosolve-subgroup-label">Killer</h3>
+          <div className="autosolve-grid">
+            <button
+              type="button"
+              className="autosolve-button wide"
+              disabled={busy || filled === 81}
+              onClick={onCageCombinations}
+              title="Auto-solve all visible Cage Sums and Cage Combinations: every candidate that fits no way of filling its cage."
+            >
+              Cage combinations
+            </button>
+            <button
+              type="button"
+              className="autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onCageLockedCandidates}
+              title="Auto-solve all visible Cage Locked Candidates: a digit a cage must hold, removed from the cells that see all its places."
+            >
+              Cage locked
+            </button>
+            <button
+              type="button"
+              className="autosolve-button"
+              disabled={busy || filled === 81}
+              onClick={onRuleOf45}
+              title="Auto-solve all visible Rule of 45 finds (innies and outies)."
+            >
+              Rule of 45
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Entropy (Variant page): what the 2x2 squares say about their cells. */}
+      {hasEntropyRule && (
+        <div className="autosolve-subgroup">
+          <h3 className="autosolve-subgroup-label">Entropy</h3>
+          <div className="autosolve-grid">
+            <button
+              type="button"
+              className="autosolve-button wide"
+              disabled={busy || filled === 81}
+              onClick={onEntropySquares}
+              title="Auto-solve all visible Entropy Squares: a group (low, middle, high) only one cell of a 2x2 square can still hold, or two groups only two of its cells can."
+            >
+              Entropy Squares
+            </button>
+          </div>
+        </div>
+      )}
+      {/* X-Sudoku / Anti-Knight (Variant page): locked candidates through a
+          diagonal or a knight's move. */}
+      {(hasDiagonalRule || hasKnightRule) && (
+        <div className="autosolve-subgroup">
+          <h3 className="autosolve-subgroup-label">{hasDiagonalRule && hasKnightRule ? 'X-Sudoku / Anti-Knight' : hasDiagonalRule ? 'X-Sudoku' : 'Anti-Knight'}</h3>
+          <div className="autosolve-grid">
+            <button
+              type="button"
+              className="autosolve-button wide"
+              disabled={busy || filled === 81}
+              onClick={onVariantLockedCandidates}
+              title="Auto-solve all visible Locked Candidates that work through a diagonal or a knight's move: a digit's only places in a unit, removed from every cell that sees them all."
+            >
+              {hasKnightRule ? "Knight's move locked" : 'Diagonal locked'}
+            </button>
+          </div>
+        </div>
+      )}
+      {/* No deadly patterns under Killer cages, the Anti-Knight or the Entropy rule (see
+          uniquenessHolds). */}
+      <div className="autosolve-subgroup" hidden={noUniquenessTechniques}>
         <h3 className="autosolve-subgroup-label">Uniqueness</h3>
         <div className="autosolve-grid">
           <button
@@ -8288,6 +9611,24 @@ export default function App() {
     </section>
   )
 
+  // Variant page: what kind of puzzle is on the grid, and the editor for its
+  // cages and regions - first in the controls column, since on that page it
+  // is how a puzzle is entered.
+  const variantLayoutPanel = variant ? (
+    <VariantLayoutPanel
+      constraints={constraints}
+      editor={layoutEditor}
+      busy={busy}
+      hasKeyboard={hasKeyboard}
+      onEditorChange={setLayoutEditor}
+      onAddCage={onAddCage}
+      onRemoveCages={onRemoveCages}
+      onClearCages={onClearCages}
+      onApplyRegions={onApplyRegions}
+      onStandardRegions={onStandardRegions}
+    />
+  ) : null
+
   const actionsRow = (
     <div className="actions">
       <button type="button" className="primary" onClick={onSolve} disabled={busy}>
@@ -8299,7 +9640,10 @@ export default function App() {
   const statusLines = (
     <>
       <p className="status" role="status">
-        {status} <span className="muted">(grid has {filled}/81 cells filled)</span>
+        {status}{' '}
+        <span className="muted">
+          (grid has {filled}/81 cells filled{variant ? `; ${variantName(constraints)} puzzle` : ''})
+        </span>
       </p>
       <p className={['solvability', `solvability-${solvability.kind}`].join(' ')}>{solvabilityText(solvability)}</p>
     </>
@@ -8317,6 +9661,8 @@ export default function App() {
         {line.text}
       </span>
     )
+  // The Variant page's rating line, in the SE rating's place and style.
+  const variantRatingElement = variantRatingLine && <p className="se-rating">{seRatingPart(variantRating, variantRatingLine)}</p>
   const seRatingElement = (seRatingLine || seCurrentRatingLine) && (
     <p className="se-rating">
       {seRatingPart(seRating, seRatingLine)}
@@ -8337,7 +9683,9 @@ export default function App() {
         </div>
       )}
 
-      {welcomeOpen && (
+      {/* The welcome popup introduces the Classic trainer; the Variant
+          page's header and Variant Sudoku help tab do that job there. */}
+      {welcomeOpen && !variant && (
         <WelcomeModal
           onDismiss={(neverShowAgain, link) => {
             if (neverShowAgain) {
@@ -8359,10 +9707,14 @@ export default function App() {
           onClose={() => setHelpOpen(null)}
           initialTab={helpOpen.tab}
           hideKeyboardShortcuts={!hasKeyboard}
-          onOpenTutorial={() => {
-            setHelpOpen(null)
-            setTutorialTarget({ tab: 'basics' })
-          }}
+          {...(variant
+            ? { tabs: variantHelpTabs(), quickstartHeading: VARIANT_HELP_QUICKSTART_HEADING, quickstart: VARIANT_HELP_QUICKSTART }
+            : {
+                onOpenTutorial: () => {
+                  setHelpOpen(null)
+                  setTutorialTarget({ tab: 'basics' })
+                },
+              })}
         />
       )}
       {tutorialTarget && (
@@ -8377,6 +9729,7 @@ export default function App() {
         <HintModal
           hint={hintView.hint}
           wrongCandidates={!candidatesAccurate}
+          showLearnLinks={!variant}
           revealed={hintView.revealed}
           onNextHint={onNextHint}
           onClose={() => setHintView(null)}
@@ -8387,6 +9740,33 @@ export default function App() {
         />
       )}
 
+      {variantImportPrompt && (
+        <VariantImportDialog
+          source={variantImportPrompt.source}
+          detected={variantImportPrompt.detected}
+          onConfirm={(choice) => {
+            const { load } = variantImportPrompt
+            setVariantImportPrompt(null)
+            load(choice)
+          }}
+          onCancel={() => {
+            setVariantImportPrompt(null)
+            setStatus('Import cancelled - the grid was not changed.')
+          }}
+        />
+      )}
+      {savedPuzzlesList && (
+        <SavedPuzzlesModal
+          puzzles={savedPuzzlesList}
+          current={savedPuzzleOfGrid(savedPuzzlesList, gridToSave())}
+          canSave={filled > 0 || constraints !== CLASSIC_CONSTRAINTS}
+          areaPrefix={variant ? 'Variant Solver' : ''}
+          onSave={onSavePuzzle}
+          onOpen={onOpenSavedPuzzle}
+          onDelete={onDeleteSavedPuzzle}
+          onClose={() => setSavedPuzzlesList(null)}
+        />
+      )}
       {confirmOptimizeDynamicOpen && (
         <ConfirmDialog
           title="Turn on Optimize Dynamic Dragons?"
@@ -8408,6 +9788,20 @@ export default function App() {
              If this is turned ON right now, expect slower performance and higher CPU usage.  This is because the Dynamic Dragon analysis will be optimized to find more solutions, which requires more CPU cycles. 
           </p>
           <p className="confirm-tip">Tip: turn Exhaustive Dragon Colouring ON first to keep things quick and minimize CPU usage.</p>
+        </ConfirmDialog>
+      )}
+      {confirmClearGivensOpen && (
+        <ConfirmDialog
+          title="Clear the grid?"
+          confirmLabel="Clear grid"
+          cancelLabel="Keep my digits"
+          onConfirm={() => {
+            setConfirmClearGivensOpen(false)
+            onCreateFromEmptyGrid()
+          }}
+          onCancel={() => setConfirmClearGivensOpen(false)}
+        >
+          <p>Every digit you have entered will be removed, so you can start over from an empty grid.</p>
         </ConfirmDialog>
       )}
       {confirmAllPossibleTechniquesOpen && (
@@ -8453,20 +9847,27 @@ export default function App() {
         <>
           <div className="compact-status">
             {statusLines}
-            {seRatingElement}
+            {variant ? variantRatingElement : seRatingElement}
           </div>
           {autosolveGroup}
           {actionsRow}
         </>
       ),
-      import: importRows,
+      import: (
+        <>
+          {variantLayoutPanel}
+          {importRows}
+        </>
+      ),
     }
     return (
+      <VariantContext.Provider value={variant}>
       <DragonAicContext.Provider value={dragonAicView}>
       <AicDragonContext.Provider value={aicDragonView}>
       <main
         className={[
           'page',
+          variant ? 'variant-page' : '',
           'compact-layout',
           landscape ? 'compact-landscape' : 'compact-portrait',
           phone ? 'compact-phone' : '',
@@ -8512,7 +9913,8 @@ export default function App() {
               className={['compact-tab', compactSection === id ? 'active' : ''].filter(Boolean).join(' ')}
               onClick={() => setCompactSection(id)}
             >
-              {label}
+              {/* The Variant page's tab also holds the layout editor. */}
+              {variant && id === 'import' ? 'Puzzle' : label}
             </button>
           ))}
         </nav>
@@ -8520,13 +9922,15 @@ export default function App() {
       </main>
       </AicDragonContext.Provider>
       </DragonAicContext.Provider>
+      </VariantContext.Provider>
     )
   }
 
   return (
+    <VariantContext.Provider value={variant}>
     <DragonAicContext.Provider value={dragonAicView}>
       <AicDragonContext.Provider value={aicDragonView}>
-    <main className="page" onKeyDown={onKeyDown} onKeyUp={onKeyUp} onPaste={onScopedPaste}>
+    <main className={variant ? 'page variant-page' : 'page'} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onPaste={onScopedPaste}>
       {header}
 
       {toolbar}
@@ -8540,7 +9944,7 @@ export default function App() {
         <div className="grid-column" ref={gridColumnRef}>
           {gridElement}
 
-          {seRatingElement}
+          {variant ? variantRatingElement : seRatingElement}
 
           {importRows}
 
@@ -8549,6 +9953,8 @@ export default function App() {
         </div>
 
         <div className="controls">
+          {variantLayoutPanel}
+
           {solutionGroup}
 
           {candidateGroup}
@@ -8567,5 +9973,6 @@ export default function App() {
     </main>
     </AicDragonContext.Provider>
       </DragonAicContext.Provider>
+    </VariantContext.Provider>
   )
 }

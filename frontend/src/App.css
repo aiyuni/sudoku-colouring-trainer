@@ -943,6 +943,16 @@ html.app-busy .busy-cancel,
   min-height: 2.5rem;
 }
 
+/* "Create From Empty Grid": the banner's start-over button - pushed to the
+   right end, away from Confirm, and smaller than it. */
+.ocr-proofread-actions .givens-entry-clear {
+  min-height: 0;
+  margin-left: auto;
+  align-self: center;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
 .ocr-proofread-image {
   display: block;
   max-width: 100%;
@@ -4545,6 +4555,101 @@ button.primary {
   }
 }
 
+/* ---- Variant import dialog (variant/VariantImportDialog.tsx) ----
+   The confirm dialog's backdrop and card with a list of rule checkboxes,
+   each a whole tappable row. Its accept button is blue, not the confirm
+   dialog's amber: importing isn't a risky choice. */
+.variant-import-dialog {
+  width: min(31rem, 100%);
+}
+
+.variant-import-dialog .confirm-icon {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.variant-import-options {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.75rem 0;
+}
+
+.variant-import-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+
+.variant-import-option:hover {
+  border-color: #60a5fa;
+}
+
+.variant-import-option-on {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.variant-import-option input {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0.15rem 0 0;
+}
+
+.variant-import-rule,
+.variant-import-note {
+  display: block;
+  font-size: 0.84rem;
+}
+
+.variant-import-rule {
+  color: #475569;
+}
+
+.variant-import-note {
+  margin-top: 0.15rem;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.confirm-actions .variant-import-accept {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.confirm-actions .variant-import-accept:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .variant-import-dialog .confirm-icon {
+    background: #172554;
+    color: #93c5fd;
+  }
+
+  .variant-import-option {
+    border-color: #475569;
+  }
+
+  .variant-import-option-on {
+    border-color: #60a5fa;
+    background: #172554;
+  }
+
+  .variant-import-rule {
+    color: #94a3b8;
+  }
+
+  .variant-import-note {
+    color: #93c5fd;
+  }
+}
+
 /* ---- Welcome popup (WelcomeModal.tsx) ----
    The confirm dialog's backdrop and card, a little wider; the "Never show
    again" checkbox sits left of the button. */
@@ -4735,4 +4840,497 @@ button.primary {
   .autocomplete-heading {
     color: #e2e8f0;
   }
+}
+
+/* ---- Variant solver (/variants/): Killer cages and Jigsaw regions ----
+   Everything above is the one grid both pages share; this is only what a
+   variant draws on top of it (VariantGridOverlay) and its own controls
+   (VariantLayoutPanel), in the same visual language. */
+
+/* The cage outlines and their sums follow the grid's own light/dark/white
+   theme, like the grid lines do. */
+:root {
+  --cage-line: #475569;
+  --cage-sum: #1e293b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cage-line: #94a3b8;
+    --cage-sum: #e2e8f0;
+  }
+}
+
+.grid.grid-white-mode {
+  --cage-line: #475569;
+  --cage-sum: #1e293b;
+}
+
+/* Same 900x900 drawing space and stacking as the strong-link overlay, so a
+   cell's own highlight (selected, technique-used...) never hides its cage. */
+.variant-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* A Jigsaw's regions are drawn by the overlay, so the box grid's own thick
+   dividers become thin ones like every other cell line. */
+.grid.grid-jigsaw {
+  gap: 1px;
+  background: var(--grid-line-thin);
+}
+
+.region-border {
+  stroke: var(--grid-line-thick);
+  stroke-width: 7;
+  stroke-linecap: square;
+}
+
+.cage-line {
+  fill: none;
+  stroke: var(--cage-line);
+  stroke-width: 2.4;
+  stroke-dasharray: 7 5;
+}
+
+.cage-sum {
+  font: 700 18px/1 'Segoe UI', system-ui, sans-serif;
+  fill: var(--cage-sum);
+}
+
+.cage-sum-bg {
+  fill: var(--grid-bg);
+  opacity: 0.92;
+}
+
+/* A Killer grid keeps the top band of every cell clear for the cage sums and
+   a margin round the other sides for the dashed outlines: the pencil marks
+   sit in the rest (aicLinkLayout's KILLER_PIP_INSETS are the same numbers,
+   for the lines drawn between pips), and a placed digit drops by a hair so
+   it never touches a sum. */
+.grid.grid-killer .candidates {
+  inset: 22% 8% 8% 8%;
+}
+
+.grid.grid-killer .candidate {
+  font-size: 0.72rem;
+}
+
+.compact-board .grid.grid-killer .candidate {
+  font-size: min(0.72rem, 2.55cqi);
+}
+
+.grid.grid-killer .cell {
+  padding-top: 9%;
+}
+
+/* Layout editor: cells picked for the cage being made, and the regions
+   being drawn (tinted and numbered). */
+.grid.grid-layout-editing .cell {
+  cursor: crosshair;
+}
+
+.cage-pick {
+  fill: rgb(37 99 235 / 0.22);
+  stroke: #2563eb;
+  stroke-width: 3;
+}
+
+.region-draft-tint {
+  opacity: 0.55;
+}
+
+/* Big and faint, behind whatever the cell holds - it must not read as a
+   digit or a candidate of the puzzle. */
+.region-draft-label {
+  font: 800 64px/1 'Segoe UI', system-ui, sans-serif;
+  fill: #334155;
+  text-anchor: middle;
+  opacity: 0.16;
+}
+
+/* The "Puzzle layout" control group. */
+.variant-kind-chip {
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.variant-group .paint-hint {
+  margin: 0 0 0.35rem;
+  text-align: left;
+}
+
+.variant-group-editing {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 0.25);
+}
+
+.variant-editor-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.4rem;
+  margin-bottom: 0.1rem;
+}
+
+.variant-editor-row > .bulk-action-button {
+  flex: 1;
+}
+
+.variant-sum-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.variant-sum-field input {
+  width: 4.2rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.45rem;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.candidate-bulk-actions.variant-actions-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.variant-region-buttons {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 0.2rem;
+  margin-bottom: 0.1rem;
+}
+
+.variant-region-button {
+  padding: 0.25rem 0;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+/* Each button wears its region's tint (inline), so the colours on the grid
+   can be matched to it; dark text whatever the theme. */
+.variant-region-button {
+  color: #0f172a;
+  border: 2px solid transparent;
+}
+
+.variant-region-button.active {
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 0.45);
+}
+
+.variant-region-button.full {
+  opacity: 0.75;
+}
+
+.variant-use-regions {
+  width: 100%;
+  margin-top: 0.3rem;
+}
+
+/* Drawing regions is a drag across the cells: it must not scroll the page
+   or select text on the way. */
+.grid.grid-region-drawing {
+  touch-action: none;
+  user-select: none;
+}
+
+.grid.grid-region-drawing .cell {
+  cursor: cell;
+}
+
+.variant-region-size {
+  display: block;
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+/* Techniques list: a deduction that comes from the Killer cages. */
+.variant-constraint-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 0.3rem;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+/* Technique Selections: a technique whose logic doesn't hold on the puzzle
+   on the grid. */
+.menu-not-applicable {
+  white-space: nowrap;
+  color: #b45309;
+  font-size: 0.85em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .variant-kind-chip {
+    background: #312e81;
+    color: #c7d2fe;
+  }
+
+  .variant-sum-field {
+    color: #cbd5e1;
+  }
+
+  .variant-sum-field input {
+    border-color: #475569;
+    background: #0f172a;
+    color: #e2e8f0;
+  }
+
+  .variant-constraint-badge {
+    background: #78350f;
+    color: #fde68a;
+  }
+
+  .menu-not-applicable {
+    color: #fbbf24;
+  }
+}
+
+/* Variant page: X-Sudoku's diagonals (a tint over their cells, under the
+   digits' own colours) and Anti-Knight's "a knight's move from the cursor"
+   marks. Drawn by VariantGridOverlay. */
+.variant-layer .diagonal-tint {
+  fill: #6366f1;
+  opacity: 0.11;
+}
+
+/* Entropy: cells down to one group (or two - split diagonally), with the
+   "Entropy: colour cells by group" setting on. */
+.variant-layer .entropy-tint {
+  opacity: 0.2;
+}
+
+.variant-layer .entropy-low {
+  fill: #0ea5e9;
+}
+
+.variant-layer .entropy-middle {
+  fill: #f59e0b;
+}
+
+.variant-layer .entropy-high {
+  fill: #db2777;
+}
+
+.variant-layer .knight-mark {
+  font-size: 26px;
+  text-anchor: end;
+  fill: #b45309;
+  opacity: 0.75;
+}
+
+/* ---- Saved puzzles dialog (SavedPuzzlesModal.tsx) ----
+   The confirm dialog's backdrop and card, wider: a name + Save row on top,
+   then the list of saves, each a row with its own Open / Delete. */
+.saved-puzzles-dialog {
+  width: min(36rem, 100%);
+}
+
+.saved-puzzles-label {
+  display: block;
+  margin: 0.4rem 0 0.35rem;
+  font-weight: 600;
+}
+
+.saved-puzzles-save-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.saved-puzzles-save-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+
+.saved-puzzles-save-row input:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.saved-puzzles-dialog .saved-puzzles-note,
+.saved-puzzles-dialog .saved-puzzles-error {
+  margin: 0.45rem 0 0;
+  font-size: 0.84rem;
+  color: #64748b;
+}
+
+.saved-puzzles-dialog .saved-puzzles-done {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.saved-puzzles-dialog .saved-puzzles-error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.saved-puzzles-clash {
+  margin-top: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.5rem;
+  background: #fef3c7;
+  color: #78350f;
+  font-size: 0.88rem;
+}
+
+.saved-puzzles-clash p {
+  margin: 0 0 0.45rem;
+}
+
+.saved-puzzles-clash-actions,
+.saved-puzzle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.saved-puzzles-dialog .saved-puzzles-empty {
+  margin: 1rem 0 0.5rem;
+  padding: 1.1rem 1rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.6rem;
+  color: #64748b;
+  text-align: center;
+}
+
+.saved-puzzles-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.saved-puzzle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.6rem;
+}
+
+/* The save of the puzzle now on the grid. */
+.saved-puzzle-current {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.saved-puzzle-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.saved-puzzle-name,
+.saved-puzzle-meta {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.saved-puzzle-name {
+  font-weight: 700;
+}
+
+.saved-puzzle-meta {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.saved-puzzle-actions button,
+.saved-puzzles-clash-actions button {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.saved-puzzle-confirm {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.saved-puzzle-actions .saved-puzzle-delete {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #fff;
+}
+
+.saved-puzzle-actions .saved-puzzle-delete:hover {
+  background: #991b1b;
+  border-color: #991b1b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .saved-puzzles-save-row input {
+    background: #0f172a;
+    border-color: #475569;
+  }
+
+  .saved-puzzles-dialog .saved-puzzles-note,
+  .saved-puzzles-dialog .saved-puzzles-empty,
+  .saved-puzzle-meta {
+    color: #94a3b8;
+  }
+
+  .saved-puzzles-dialog .saved-puzzles-done {
+    color: #4ade80;
+  }
+
+  .saved-puzzles-dialog .saved-puzzles-error,
+  .saved-puzzle-confirm {
+    color: #fca5a5;
+  }
+
+  .saved-puzzles-clash {
+    background: #451a03;
+    color: #fde68a;
+  }
+
+  .saved-puzzle,
+  .saved-puzzles-dialog .saved-puzzles-empty {
+    border-color: #475569;
+  }
+
+  .saved-puzzle-current {
+    border-color: #60a5fa;
+    background: #172554;
+  }
+}
+
+/* The dialog's button, at the end of the import row. */
+.saved-puzzles-trigger {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }

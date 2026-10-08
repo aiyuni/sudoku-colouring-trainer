@@ -83,6 +83,30 @@ export interface QuizAnswer {
   ms: number
 }
 
+/** One Saved Puzzles action (savedPuzzles.ts): a save, an update of an
+ * existing save, a reopen or a delete. Never merged either: each is its own
+ * saved_puzzle_events row, and a save carries the whole position as text the
+ * import box reads, so the owner can load exactly what was saved. The saved
+ * puzzles themselves live only in the visitor's browser. */
+export interface SavedPuzzleAction {
+  action: 'save' | 'update' | 'open' | 'delete'
+  /** The save's own id (stable across updates) and its name. */
+  saveId: string
+  name: string
+  page: 'classic' | 'variant'
+  /** "Classic", "Killer", "Killer Jigsaw", ... */
+  variant: string
+  /** The puzzle itself, as "Copy Original" writes it. */
+  puzzle: string
+  /** The position saved, as "Copy Puzzle As-Is" writes it (Variant: this
+   * solver's JSON, which also holds the colours). Only sent with a save or
+   * update - an open/delete row refers back to it by saveId. */
+  state: string | null
+  /** Cells holding a digit. */
+  filled: number
+  rating: string | null
+}
+
 interface ActiveArea {
   name: string
   layer: number
@@ -105,6 +129,12 @@ let events = new Map<string, PendingEvent>()
 let droppedEvents = 0
 let quizAnswers: Array<QuizAnswer & { at: number }> = []
 const MAX_QUIZ_ANSWERS_PER_BATCH = 60
+let savedPuzzleActions: Array<SavedPuzzleAction & { id: string; at: number }> = []
+// The Worker takes 32 KB per batch and a saved position is 1-3 KB of text
+// (see usage.ts for the matching limits).
+const MAX_SAVED_PUZZLE_ACTIONS_PER_BATCH = 8
+const MAX_SAVED_PUZZLE_TEXT_LENGTH = 4000
+const MAX_SAVED_STATE_TEXT_LENGTH = 12000
 // Filled in asynchronously at start (Client Hints are a promise); sent
 // with the page context once ready.
 let device: Record<string, unknown> | null = null
@@ -288,10 +318,12 @@ function flush(final: boolean): void {
   if (droppedEvents > 0) {
     pending.push({ category: 'meta', name: 'Events dropped', label: null, value: null, count: droppedEvents, at: now })
   }
-  if (!hasAreas && pending.length === 0 && quizAnswers.length === 0 && contextSent) {
+  if (!hasAreas && pending.length === 0 && quizAnswers.length === 0 && savedPuzzleActions.length === 0 && contextSent) {
     return
   }
   const answered = quizAnswers
+  const saved = savedPuzzleActions
+  savedPuzzleActions = []
   areaMs = new Map()
   events = new Map()
   droppedEvents = 0
@@ -316,6 +348,9 @@ function flush(final: boolean): void {
   }
   if (answered.length > 0) {
     body.quiz = answered.map(({ at, ...answer }) => ({ ...answer, age: Math.max(0, now - at) }))
+  }
+  if (saved.length > 0) {
+    body.saves = saved.map(({ at, ...action }) => ({ ...action, age: Math.max(0, now - at) }))
   }
   if (includeContext) {
     body.context = pageContext()
@@ -418,6 +453,30 @@ export function trackQuizAnswer(answer: QuizAnswer): void {
     return
   }
   quizAnswers.push({ ...answer, at: Date.now() })
+}
+
+/** Records one Saved Puzzles action (a saved_puzzle_events row: who, which
+ * save, what was done to it and - for a save - the exact position). Sent
+ * straight away rather than with the next minute's batch: these are rare,
+ * and a save is often the last thing done before the tab is closed. */
+export function trackSavedPuzzle(action: SavedPuzzleAction): void {
+  if (!started || savedPuzzleActions.length >= MAX_SAVED_PUZZLE_ACTIONS_PER_BATCH) {
+    return
+  }
+  try {
+    savedPuzzleActions.push({
+      ...action,
+      name: action.name.slice(0, 100),
+      // An over-long text would be cut into something unreadable: better none.
+      puzzle: action.puzzle.length <= MAX_SAVED_PUZZLE_TEXT_LENGTH ? action.puzzle : '',
+      state: action.state !== null && action.state.length <= MAX_SAVED_STATE_TEXT_LENGTH ? action.state : null,
+      id: randomId(),
+      at: Date.now(),
+    })
+    flush(false)
+  } catch {
+    // Analytics must never affect the app.
+  }
 }
 
 /** Generic button tracking, so every toolbar item, Auto-solve button,

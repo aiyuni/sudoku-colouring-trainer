@@ -1,6 +1,7 @@
+import { onConstraintsChange } from './SudokuConstraints'
 import type { CandidateElimination } from './SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import type { Cell } from './SudokuUnits'
+import { boxOf, isStandardLayout, type Cell, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 /** The four fish this app implements, simplest first. Sashimi fish (where
@@ -129,7 +130,15 @@ export class SudokuFishFinder {
     }
     // A line with a single candidate is a hidden single, and a finned base
     // line can hold at most `size` covered candidates plus fins in one band.
-    const maxPerLine = finned ? size + BOX_SIZE : size
+    // The band shortcuts are exact on the standard 3x3 boxes only: a cover
+    // candidate sees a fin through their shared box, so every fin sits in
+    // the band of three cross-lines that box spans. A Jigsaw region can
+    // reach further along a line, so there the fins are only limited to
+    // what one region can hold of a line, and evaluateFish's "sees every
+    // fin" (which asks the regions themselves) does the rest.
+    const standard = isStandardLayout()
+    const maxFins = standard ? BOX_SIZE : BOARD_SIZE - size
+    const maxPerLine = finned ? size + maxFins : size
     const eligible = masks
       .map((mask, line) => ({ mask, line }))
       .filter(({ mask }) => popcount(mask) >= 2 && popcount(mask) <= maxPerLine)
@@ -144,11 +153,11 @@ export class SudokuFishFinder {
         if (unionSize === size) {
           coverChoices.push(union)
         }
-      } else if (unionSize > size && unionSize <= size + BOX_SIZE) {
+      } else if (unionSize > size && unionSize <= size + maxFins) {
         for (const cover of combinations(bitsOf(union), size)) {
           const coverMask = cover.reduce((acc, x) => acc | (1 << x), 0)
           const finMask = union & ~coverMask
-          if (bandsOf(finMask) === 1) {
+          if (!standard || bandsOf(finMask) === 1) {
             coverChoices.push(coverMask)
           }
         }
@@ -202,6 +211,8 @@ function houseContains(house: House, [row, col]: Cell): boolean {
 // A house's cells never change - built once per house, since evaluateFish
 // runs inside Dynamic Dragon's simulation loop when a fish is allowed there.
 const houseCellsCache = new Map<string, Cell[]>()
+// A box house's cells are the active constraints' (a Jigsaw's regions).
+onConstraintsChange(() => houseCellsCache.clear())
 
 function houseCells(house: House): Cell[] {
   const cacheKey = `${house.kind}${house.index}`
@@ -221,12 +232,8 @@ function houseCells(house: House): Cell[] {
   return cells
 }
 
-function boxOf(row: number, col: number): number {
-  return Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
-}
-
 function sees([r1, c1]: Cell, [r2, c2]: Cell): boolean {
-  return (r1 !== r2 || c1 !== c2) && (r1 === r2 || c1 === c2 || boxOf(r1, c1) === boxOf(r2, c2))
+  return (r1 !== r2 || c1 !== c2) && sharesHouseOrLink(r1, c1, r2, c2)
 }
 
 /** The base/cover fish rule for one digit (see the class comment): null when

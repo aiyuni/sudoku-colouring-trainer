@@ -1,6 +1,7 @@
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import { sudokuUnits, type Cell } from './SudokuUnits'
+import { constraintsVersion } from './SudokuConstraints'
+import { BOARD_SIZE } from './SudokuRules'
+import { boxOf, sudokuUnits, type Cell, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 /** One Almost Locked Set: N unsolved cells of a single house holding N+1
@@ -51,12 +52,15 @@ interface Als extends AlsInfo {
 }
 
 let cachedPeerWords: Int32Array | null = null
+let cachedPeerWordsVersion = -1
 
-/** Per cell, the 20 peers as three words. */
+/** Per cell, the 20 peers as three words - per set of constraints (a
+ * Jigsaw's regions change who sees whom). */
 function peerWords(): Int32Array {
-  if (cachedPeerWords) {
+  if (cachedPeerWords && cachedPeerWordsVersion === constraintsVersion()) {
     return cachedPeerWords
   }
+  cachedPeerWordsVersion = constraintsVersion()
   const words = new Int32Array(81 * 3)
   for (let a = 0; a < 81; a++) {
     const ra = Math.floor(a / BOARD_SIZE)
@@ -65,9 +69,7 @@ function peerWords(): Int32Array {
       if (a === b) continue
       const rb = Math.floor(b / BOARD_SIZE)
       const cb = b % BOARD_SIZE
-      const sameBox =
-        Math.floor(ra / BOX_SIZE) === Math.floor(rb / BOX_SIZE) && Math.floor(ca / BOX_SIZE) === Math.floor(cb / BOX_SIZE)
-      if (ra === rb || ca === cb || sameBox) {
+      if (sharesHouseOrLink(ra, ca, rb, cb)) {
         words[a * 3 + Math.floor(b / WORD_BITS)] |= 1 << (b % WORD_BITS)
       }
     }
@@ -324,11 +326,11 @@ export class SudokuAlsXzFinder {
 
 function houseMaskOf(cells: readonly Cell[]): number {
   const [row, col] = cells[0]
-  const box = Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
+  const box = boxOf(row, col)
   let mask = 0
   if (cells.every(([r]) => r === row)) mask |= 1 << row
   if (cells.every(([, c]) => c === col)) mask |= 1 << (BOARD_SIZE + col)
-  if (cells.every(([r, c]) => Math.floor(r / BOX_SIZE) * BOX_SIZE + Math.floor(c / BOX_SIZE) === box)) {
+  if (cells.every(([r, c]) => boxOf(r, c) === box)) {
     mask |= 1 << (2 * BOARD_SIZE + box)
   }
   return mask

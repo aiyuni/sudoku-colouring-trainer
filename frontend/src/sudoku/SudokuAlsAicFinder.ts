@@ -1,5 +1,5 @@
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
+import { BOARD_SIZE } from './SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './SudokuGenericAicFinder'
 import {
   aicNodeCells,
@@ -13,7 +13,7 @@ import {
   type LinkGraphs,
   type ShortAicInstance,
 } from './SudokuShortAicFinder'
-import { sudokuUnits } from './SudokuUnits'
+import { boxOf as boxOfCell, sudokuUnits, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 type Cell = readonly [number, number]
@@ -100,14 +100,14 @@ export function alsAicAlsUseText(use: AlsAicAlsUse, aic: ShortAicInstance): stri
 }
 
 function boxOf([row, col]: Cell): number {
-  return Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
+  return boxOfCell(row, col)
 }
 
 function sees(a: Cell, b: Cell): boolean {
   if (a[0] === b[0] && a[1] === b[1]) {
     return false
   }
-  return a[0] === b[0] || a[1] === b[1] || boxOf(a) === boxOf(b)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 /** A strong link of the search graph; `als` is the ALS behind an ALS link,
@@ -254,6 +254,11 @@ export class SudokuAlsAicFinder {
           return
         }
         // Units are rows 0-8, columns 9-17, boxes 18-26 (SudokuUnits).
+        // An X-Sudoku's diagonals (27, 28) make no groups: three diagonal
+        // cells of one box share no line.
+        if (u >= 27) {
+          return
+        }
         const splits: Array<(cell: Cell) => number> = u < 18 ? [boxOf] : [([r]) => r, ([, c]) => c]
         for (const partOf of splits) {
           const parts = new Map<number, Cell[]>()

@@ -40,13 +40,31 @@ export interface Point {
 }
 
 const CELL_SIZE = 100
-const PIP_SIZE = CELL_SIZE / 3
 
-/** Same as App's pipCenter: a candidate's pip centre in drawing units. */
-function pipCenter(row: number, col: number, digit: number): Point {
+/** How far a Killer grid keeps its pencil marks from the cell's edges, in
+ * drawing units out of 100: a band at the top for the cage sums, and a
+ * margin on the other three sides so no pip sits on a cage's dashed outline.
+ * App.css says the same thing to the cells themselves (.grid-killer
+ * .candidates) - change the two together. */
+export const KILLER_PIP_INSETS = { top: 22, side: 8, bottom: 8 } as const
+const NO_PIP_INSETS = { top: 0, side: 0, bottom: 0 } as const
+
+let pipInsets: { top: number; side: number; bottom: number } = NO_PIP_INSETS
+
+/** Whether the grid shows cages. App sets it (during render, from the puzzle
+ * on the grid) before anything that draws on the pips. */
+export function setKillerPipLayout(killer: boolean): void {
+  pipInsets = killer ? KILLER_PIP_INSETS : NO_PIP_INSETS
+}
+
+/** A candidate's pip centre in drawing units (a 900x900 board, 100 per
+ * cell): the 3x3 pip layout of a cell, squeezed below the cage-sum band on a
+ * Killer grid. Shared by every overlay drawn on the pips (strong links, AIC
+ * chains). */
+export function pipCenter(row: number, col: number, digit: number): Point {
   return {
-    x: col * CELL_SIZE + (((digit - 1) % 3) + 0.5) * PIP_SIZE,
-    y: row * CELL_SIZE + (Math.floor((digit - 1) / 3) + 0.5) * PIP_SIZE,
+    x: col * CELL_SIZE + pipInsets.side + (((digit - 1) % 3) + 0.5) * ((CELL_SIZE - 2 * pipInsets.side) / 3),
+    y: row * CELL_SIZE + pipInsets.top + (Math.floor((digit - 1) / 3) + 0.5) * ((CELL_SIZE - pipInsets.top - pipInsets.bottom) / 3),
   }
 }
 

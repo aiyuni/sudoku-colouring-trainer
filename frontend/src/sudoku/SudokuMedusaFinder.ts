@@ -1,6 +1,6 @@
 import { markedCandidateDigits } from './boardUtils'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import { sudokuUnits, type Cell } from './SudokuUnits'
+import { BOARD_SIZE } from './SudokuRules'
+import { sudokuUnits, type Cell, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 export type ChainColor = 'blue' | 'yellow'
@@ -75,12 +75,7 @@ function cellKey(row: number, col: number): string {
 }
 
 function sameUnit(a: readonly [number, number], b: readonly [number, number]): boolean {
-  const [ar, ac] = a
-  const [br, bc] = b
-  if (ar === br || ac === bc) {
-    return true
-  }
-  return Math.floor(ar / BOX_SIZE) === Math.floor(br / BOX_SIZE) && Math.floor(ac / BOX_SIZE) === Math.floor(bc / BOX_SIZE)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 function opposite(color: ChainColor): ChainColor {

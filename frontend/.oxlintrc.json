@@ -15,6 +15,7 @@
     ]
   },
   "ignorePatterns": [
-    "src/se-rating/**"
+    "src/se-rating/**",
+    "src/variant-rating/**"
   ]
 }

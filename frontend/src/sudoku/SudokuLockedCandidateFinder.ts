@@ -1,6 +1,6 @@
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import type { Cell } from './SudokuUnits'
+import { BOARD_SIZE } from './SudokuRules'
+import { boxCells, boxOf, type Cell } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 export interface LockedCandidateInstance {
@@ -13,6 +13,11 @@ export interface LockedCandidateInstance {
   eliminations: CandidateElimination[]
 }
 
+/** A box's cells ordered column first, then row. */
+function boxCellsByColumn(box: number): Cell[] {
+  return [...boxCells(box)].sort((a, b) => a[1] - b[1] || a[0] - b[0])
+}
+
 /**
  * Locked Candidates, in its two forms:
  *  - Pointing: within a box, if every remaining candidate for a digit sits
@@ -23,63 +28,58 @@ export interface LockedCandidateInstance {
  *    digit sits in a single box, that digit can't be the solution to any
  *    other cell of that box, since one of the row's (or column's) own
  *    cells must hold it.
+ *
+ * "Box" is whatever the active constraints say it is (SudokuUnits.ts): both
+ * forms only need "a box and a line are two units of nine cells that
+ * overlap", so on a Jigsaw the same logic runs on its irregular regions - a
+ * region's candidates for a digit all on one row, or a row's all inside one
+ * region - with nothing else changed.
  */
 export class SudokuLockedCandidateFinder {
   findPointingInstances(board: Board, candidates: CandidateGrid): LockedCandidateInstance[] {
     const instances: LockedCandidateInstance[] = []
 
-    for (let boxRow = 0; boxRow < BOX_SIZE; boxRow++) {
-      for (let boxCol = 0; boxCol < BOX_SIZE; boxCol++) {
-        const boxCells: Cell[] = []
-        for (let dr = 0; dr < BOX_SIZE; dr++) {
-          for (let dc = 0; dc < BOX_SIZE; dc++) {
-            const row = boxRow * BOX_SIZE + dr
-            const col = boxCol * BOX_SIZE + dc
-            if (board[row][col] === 0) {
-              boxCells.push([row, col])
+    for (let box = 0; box < BOARD_SIZE; box++) {
+      const unsolvedBoxCells = boxCells(box).filter(([row, col]) => board[row][col] === 0)
+
+      for (let digit = 1; digit <= BOARD_SIZE; digit++) {
+        const holders = unsolvedBoxCells.filter(([row, col]) => candidates[row][col][digit - 1])
+        if (holders.length < 2) {
+          continue
+        }
+
+        const rows = new Set(holders.map(([row]) => row))
+        const cols = new Set(holders.map(([, col]) => col))
+
+        if (rows.size === 1) {
+          const [row] = rows
+          const eliminations: CandidateElimination[] = []
+          for (let col = 0; col < BOARD_SIZE; col++) {
+            if (boxOf(row, col) === box) {
+              continue
             }
+            if (candidates[row][col][digit - 1]) {
+              eliminations.push({ row, col, digit })
+            }
+          }
+          if (eliminations.length > 0) {
+            instances.push({ type: 'pointing', digit, basisCells: holders, eliminations })
           }
         }
 
-        for (let digit = 1; digit <= BOARD_SIZE; digit++) {
-          const holders = boxCells.filter(([row, col]) => candidates[row][col][digit - 1])
-          if (holders.length < 2) {
-            continue
-          }
-
-          const rows = new Set(holders.map(([row]) => row))
-          const cols = new Set(holders.map(([, col]) => col))
-
-          if (rows.size === 1) {
-            const [row] = rows
-            const eliminations: CandidateElimination[] = []
-            for (let col = 0; col < BOARD_SIZE; col++) {
-              if (Math.floor(col / BOX_SIZE) === boxCol) {
-                continue
-              }
-              if (candidates[row][col][digit - 1]) {
-                eliminations.push({ row, col, digit })
-              }
+        if (cols.size === 1) {
+          const [col] = cols
+          const eliminations: CandidateElimination[] = []
+          for (let row = 0; row < BOARD_SIZE; row++) {
+            if (boxOf(row, col) === box) {
+              continue
             }
-            if (eliminations.length > 0) {
-              instances.push({ type: 'pointing', digit, basisCells: holders, eliminations })
+            if (candidates[row][col][digit - 1]) {
+              eliminations.push({ row, col, digit })
             }
           }
-
-          if (cols.size === 1) {
-            const [col] = cols
-            const eliminations: CandidateElimination[] = []
-            for (let row = 0; row < BOARD_SIZE; row++) {
-              if (Math.floor(row / BOX_SIZE) === boxRow) {
-                continue
-              }
-              if (candidates[row][col][digit - 1]) {
-                eliminations.push({ row, col, digit })
-              }
-            }
-            if (eliminations.length > 0) {
-              instances.push({ type: 'pointing', digit, basisCells: holders, eliminations })
-            }
+          if (eliminations.length > 0) {
+            instances.push({ type: 'pointing', digit, basisCells: holders, eliminations })
           }
         }
       }
@@ -105,24 +105,17 @@ export class SudokuLockedCandidateFinder {
           continue
         }
 
-        const boxCols = new Set(holders.map(([, col]) => Math.floor(col / BOX_SIZE)))
-        if (boxCols.size !== 1) {
+        const boxes = new Set(holders.map(([, col]) => boxOf(row, col)))
+        if (boxes.size !== 1) {
           continue
         }
-        const [boxCol] = boxCols
-        const boxRow = Math.floor(row / BOX_SIZE)
+        const [box] = boxes
 
+        // The box's other cells, row by row (reading order).
         const eliminations: CandidateElimination[] = []
-        for (let dr = 0; dr < BOX_SIZE; dr++) {
-          const r = boxRow * BOX_SIZE + dr
-          if (r === row) {
-            continue
-          }
-          for (let dc = 0; dc < BOX_SIZE; dc++) {
-            const c = boxCol * BOX_SIZE + dc
-            if (candidates[r][c][digit - 1]) {
-              eliminations.push({ row: r, col: c, digit })
-            }
+        for (const [r, c] of boxCells(box)) {
+          if (r !== row && candidates[r][c][digit - 1]) {
+            eliminations.push({ row: r, col: c, digit })
           }
         }
         if (eliminations.length > 0) {
@@ -145,24 +138,19 @@ export class SudokuLockedCandidateFinder {
           continue
         }
 
-        const boxRows = new Set(holders.map(([row]) => Math.floor(row / BOX_SIZE)))
-        if (boxRows.size !== 1) {
+        const boxes = new Set(holders.map(([row]) => boxOf(row, col)))
+        if (boxes.size !== 1) {
           continue
         }
-        const [boxRow] = boxRows
-        const boxCol = Math.floor(col / BOX_SIZE)
+        const [box] = boxes
 
+        // The box's other cells, column by column - the order this list has
+        // always been in (the instances are compared step by step in the
+        // equivalence sweeps).
         const eliminations: CandidateElimination[] = []
-        for (let dc = 0; dc < BOX_SIZE; dc++) {
-          const c = boxCol * BOX_SIZE + dc
-          if (c === col) {
-            continue
-          }
-          for (let dr = 0; dr < BOX_SIZE; dr++) {
-            const r = boxRow * BOX_SIZE + dr
-            if (candidates[r][c][digit - 1]) {
-              eliminations.push({ row: r, col: c, digit })
-            }
+        for (const [r, c] of boxCellsByColumn(box)) {
+          if (c !== col && candidates[r][c][digit - 1]) {
+            eliminations.push({ row: r, col: c, digit })
           }
         }
         if (eliminations.length > 0) {

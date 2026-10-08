@@ -1,5 +1,5 @@
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
+import { BOARD_SIZE } from './SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './SudokuGenericAicFinder'
 import {
   aicNodeCells,
@@ -11,7 +11,7 @@ import {
   type LinkGraphs,
   type ShortAicInstance,
 } from './SudokuShortAicFinder'
-import { sudokuUnits } from './SudokuUnits'
+import { boxOf as boxOfCell, sudokuUnits, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 type Cell = readonly [number, number]
@@ -26,14 +26,14 @@ function cellRef([row, col]: Cell): string {
 }
 
 function boxOf([row, col]: Cell): number {
-  return Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
+  return boxOfCell(row, col)
 }
 
 function sees(a: Cell, b: Cell): boolean {
   if (a[0] === b[0] && a[1] === b[1]) {
     return false
   }
-  return a[0] === b[0] || a[1] === b[1] || boxOf(a) === boxOf(b)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 /** The link graph a Grouped AIC is searched in: every single candidate of
@@ -135,7 +135,12 @@ export function buildGroupedLinkGraph(board: Board, candidates: CandidateGrid, g
         return
       }
       // Units are rows 0-8, columns 9-17, boxes 18-26 (SudokuUnits).
-      const splits: Array<(cell: Cell) => number> = u < 18 ? [boxOf] : [([r]) => r, ([, c]) => c]
+      // An X-Sudoku's diagonals (27, 28) make no groups: three diagonal
+        // cells of one box share no line.
+        if (u >= 27) {
+          return
+        }
+        const splits: Array<(cell: Cell) => number> = u < 18 ? [boxOf] : [([r]) => r, ([, c]) => c]
       for (const partOf of splits) {
         const parts = new Map<number, Cell[]>()
         for (const cell of cells) {

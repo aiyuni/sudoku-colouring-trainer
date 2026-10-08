@@ -1,3 +1,4 @@
+import { activeConstraints, withConstraints, type SudokuConstraints } from './SudokuConstraints'
 import { SudokuRules } from './SudokuRules'
 import type { Board, CandidateGrid } from './types'
 
@@ -106,6 +107,14 @@ function isDarkBackground(image: GridImage): boolean {
     }
   }
   return false
+}
+
+/** The image the reader works on: the screenshot itself, or its inverse for
+ * a dark theme (see InvertedGridImage). For the Jigsaw region reader
+ * (SudokuJigsawOcr.ts), which measures the same "darker than the cell"
+ * ink; ocrGrid makes the same choice itself. */
+export function readableImage(sourceImage: GridImage): GridImage {
+  return isDarkBackground(sourceImage) ? new InvertedGridImage(sourceImage) : sourceImage
 }
 
 export type DigitRecognizer = (pngDataUrl: string) => Promise<number | null>
@@ -451,7 +460,7 @@ function findGridLines(profile: Float64Array): { start: number; pitch: number; s
  * uniform padding - on the rare image with no line structure to find at
  * all. A score is roughly "how many full-length lines the lattice hit",
  * so under 3 means it found little more than noise. */
-function findGridBounds(image: GridImage): Rect {
+export function findGridBounds(image: GridImage): Rect {
   const cols = findGridLines(lineProfile(image, 'x'))
   const rows = findGridLines(lineProfile(image, 'y'))
   if (cols.score >= 3 && rows.score >= 3) {
@@ -489,7 +498,16 @@ function digitPosition(digit: number): { row: number; col: number } {
  * colour, highlighted cell backgrounds, highlight boxes around a
  * candidate) and overlaid lines/arrows are ignored by construction: only
  * "is this pixel darker than its own cell's background" is ever asked. */
-export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecognizer): Promise<OcrResult> {
+export async function ocrGrid(
+  sourceImage: GridImage,
+  recognizeDigit: DigitRecognizer,
+  // Variant page only: the constraints the screenshot's puzzle has (its
+  // Jigsaw regions, read by SudokuJigsawOcr), for the "a candidate can't sit
+  // next to its own solved digit" clean-up at the end. Left out - as the
+  // Classic page always does - that check runs under the active constraints,
+  // exactly as before.
+  constraints?: SudokuConstraints,
+): Promise<OcrResult> {
   const image = isDarkBackground(sourceImage) ? new InvertedGridImage(sourceImage) : sourceImage
   const bounds = findGridBounds(image)
   const cellW = bounds.w / BOARD_SIZE
@@ -714,18 +732,20 @@ export async function ocrGrid(sourceImage: GridImage, recognizeDigit: DigitRecog
   // stray fragment of an overlaid arrow or highlight box in a technique
   // screenshot), never a real pencil mark misread as something else, so
   // it's safe to drop automatically rather than surface it as an error.
-  for (let row = 0; row < BOARD_SIZE; row++) {
-    for (let col = 0; col < BOARD_SIZE; col++) {
-      if (board[row][col] !== 0) {
-        continue
-      }
-      for (let digit = 1; digit <= 9; digit++) {
-        if (candidates[row][col][digit - 1] && !SudokuRules.isSafe(board, row, col, digit)) {
-          candidates[row][col][digit - 1] = false
+  withConstraints(constraints ?? activeConstraints(), () => {
+    for (let row = 0; row < BOARD_SIZE; row++) {
+      for (let col = 0; col < BOARD_SIZE; col++) {
+        if (board[row][col] !== 0) {
+          continue
+        }
+        for (let digit = 1; digit <= 9; digit++) {
+          if (candidates[row][col][digit - 1] && !SudokuRules.isSafe(board, row, col, digit)) {
+            candidates[row][col][digit - 1] = false
+          }
         }
       }
     }
-  }
+  })
 
   return { board, candidates, cells }
 }

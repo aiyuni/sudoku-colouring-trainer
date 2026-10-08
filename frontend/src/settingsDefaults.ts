@@ -17,6 +17,10 @@ export interface AppSettings {
   showBivalueCells: boolean
   gridWhiteMode: boolean
   minBaseMedusaFilter: boolean
+  /** Settings -> "Entropy: colour cells by group" (Variant page, Entropy
+   * puzzles only): cells narrowed to one or two of the low / middle / high
+   * groups are tinted. Drawing only - no technique reads it. */
+  entropyGroupMarking: boolean
   /** Settings -> "All Possible Techniques": the Techniques list keeps rows
    * whose eliminations easier (non-basic) rows already make. List only -
    * the solve path and solvability check are unaffected. */
@@ -118,6 +122,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showBivalueCells: false,
   gridWhiteMode: true,
   minBaseMedusaFilter: false,
+  entropyGroupMarking: false,
   allPossibleTechniques: false,
   shortSingleDigitAicEnabled: false,
   shortAicEnabled: false,

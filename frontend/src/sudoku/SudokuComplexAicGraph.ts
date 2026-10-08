@@ -1,9 +1,12 @@
 import { markedCandidateDigits } from './boardUtils'
+import { uniquenessHolds } from './SudokuConstraints'
 import { ALS_AIC_MAX_ALS_CELLS, findAls } from './SudokuAlsAicFinder'
 import { buildGroupedLinkGraph } from './SudokuGroupedAicFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
+import { BOARD_SIZE } from './SudokuRules'
 import { aicNodeCells, candidateKey, type AicAlsBasis, type AicCandidate, type AicUrBasis } from './SudokuShortAicFinder'
+import { spansTwoBoxes } from './SudokuUniqueRectangleFinder'
 import { SudokuUrAicFinder, type UrAicRectangleUse } from './SudokuUrAicFinder'
+import { sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 type Cell = readonly [number, number]
@@ -63,15 +66,11 @@ function cellRef([row, col]: Cell): string {
   return `r${row + 1}c${col + 1}`
 }
 
-function boxOf([row, col]: Cell): number {
-  return Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
-}
-
 function sees(a: Cell, b: Cell): boolean {
   if (a[0] === b[0] && a[1] === b[1]) {
     return false
   }
-  return a[0] === b[0] || a[1] === b[1] || boxOf(a) === boxOf(b)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 const urFinder = new SudokuUrAicFinder()
@@ -154,7 +153,8 @@ export function buildComplexLinkGraph(board: Board, candidates: CandidateGrid, m
     weak[b].push({ to: a, ur: use!.ur })
     available |= COMPLEX_KIND_BIT.ur
   }
-  for (let r1 = 0; r1 < BOARD_SIZE - 1; r1++) {
+  // No Unique Rectangle links under Killer cages (see uniquenessHolds).
+  for (let r1 = 0; uniquenessHolds() && r1 < BOARD_SIZE - 1; r1++) {
     for (let r2 = r1 + 1; r2 < BOARD_SIZE; r2++) {
       for (let c1 = 0; c1 < BOARD_SIZE - 1; c1++) {
         for (let c2 = c1 + 1; c2 < BOARD_SIZE; c2++) {
@@ -164,7 +164,7 @@ export function buildComplexLinkGraph(board: Board, candidates: CandidateGrid, m
             [r2, c1],
             [r2, c2],
           ]
-          if (new Set(cells.map(boxOf)).size !== 2 || cells.some(([r, c]) => board[r][c] !== 0)) {
+          if (!spansTwoBoxes(r1, r2, c1, c2) || cells.some(([r, c]) => board[r][c] !== 0)) {
             continue
           }
           const digitsOf = cells.map(([r, c]) => markedCandidateDigits(candidates[r][c]))

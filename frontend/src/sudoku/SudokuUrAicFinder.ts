@@ -1,6 +1,7 @@
+import { uniquenessHolds } from './SudokuConstraints'
 import { markedCandidateDigits } from './boardUtils'
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
+import { BOARD_SIZE } from './SudokuRules'
 import { GENERIC_AIC_MAX_LENGTH } from './SudokuGenericAicFinder'
 import {
   aicNodeCells,
@@ -14,7 +15,7 @@ import {
   type LinkGraphs,
   type ShortAicInstance,
 } from './SudokuShortAicFinder'
-import { hasStrongLink, sameUnit } from './SudokuUniqueRectangleFinder'
+import { hasStrongLink, sameUnit, spansTwoBoxes } from './SudokuUniqueRectangleFinder'
 import type { Board, CandidateGrid } from './types'
 
 type Cell = readonly [number, number]
@@ -80,10 +81,6 @@ export function urAicRectangleUseText(use: UrAicRectangleUse): string {
   }
   const [f, g] = use.forced!.map(aicNodeText)
   return `${p} and ${q} can't both be true: they would force ${f} and ${g}, the deadly pattern of ${urBasisText(use.ur)}`
-}
-
-function boxOf([row, col]: Cell): number {
-  return Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
 }
 
 /** A link of the search graph; `ur` is the rectangle fact behind a UR link,
@@ -152,6 +149,11 @@ interface Edge {
  */
 export class SudokuUrAicFinder {
   find(board: Board, candidates: CandidateGrid, graphs?: LinkGraphs, maxLength: number = UR_AIC_MAX_LENGTH): UrAicInstance[] {
+    // A deadly pattern is only deadly when both of its fillings satisfy every
+    // constraint - a Killer cage's sum tells them apart (see uniquenessHolds).
+    if (!uniquenessHolds()) {
+      return []
+    }
     const limit = maxLength % 2 === 0 ? maxLength - 1 : maxLength
     const base = graphs ?? buildLinkGraphs(board, candidates)
 
@@ -251,7 +253,7 @@ export class SudokuUrAicFinder {
               [r2, c2],
             ]
             // Exactly two boxes, every corner unsolved.
-            if (new Set(cells.map(boxOf)).size !== 2 || cells.some(([r, c]) => board[r][c] !== 0)) {
+            if (!spansTwoBoxes(r1, r2, c1, c2) || cells.some(([r, c]) => board[r][c] !== 0)) {
               continue
             }
             const digitsOf = cells.map(([r, c]) => markedCandidateDigits(candidates[r][c]))

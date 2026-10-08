@@ -18,6 +18,18 @@ export default defineConfig({
   ],
   // GitHub Actions sets VITE_BASE to /<repo>/ so assets load on github.io.
   base: process.env.VITE_BASE || '/',
+  build: {
+    rollupOptions: {
+      // Two pages from one build: the Classic solver at the site root, and
+      // the Variant solver (Killer, Jigsaw) at /variants/ - the same app in
+      // its variant mode (src/variants/main.tsx). The dev server serves both
+      // too: localhost:5173/ and localhost:5173/variants/.
+      input: {
+        main: resolve('index.html'),
+        variants: resolve('variants/index.html'),
+      },
+    },
+  },
   server: {
     port: 5173,
   },

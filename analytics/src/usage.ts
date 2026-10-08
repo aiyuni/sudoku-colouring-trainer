@@ -3,7 +3,8 @@
 // load's first batch) the page context. Written to the visitors, visits,
 // visit_areas and events tables (migration 0003), never to puzzle_imports.
 // Answered practice-quiz questions ride along in the same batch (`quiz`) and
-// go to quiz_answers (migration 0004).
+// go to quiz_answers (migration 0004); Saved Puzzles actions (`saves`) go to
+// saved_puzzle_events (migration 0005).
 //
 // Everything the client says is treated as untrusted: ids and names are
 // length- and charset-checked, times and counts clamped, and timestamps come
@@ -15,6 +16,13 @@ const MAX_BODY_BYTES = 32 * 1024
 const MAX_AREAS = 60
 const MAX_EVENTS = 200
 const MAX_QUIZ_ANSWERS = 60
+// Saved Puzzles actions (frontend/src/savedPuzzles.ts). A save carries the
+// whole position as import-box text, 1-3 KB; the client sends each action in
+// a batch of its own, so the body limit above is never the constraint.
+const MAX_SAVED_PUZZLE_ACTIONS = 8
+const SAVED_PUZZLE_ACTIONS = new Set(['save', 'update', 'open', 'delete'])
+const MAX_SAVED_PUZZLE_TEXT_LENGTH = 4000
+const MAX_SAVED_STATE_TEXT_LENGTH = 12000
 const QUIZ_ID_PATTERN = /^[a-z0-9][a-z0-9/-]{0,79}$/
 const QUIZ_KINDS = new Set(['choice', 'cells', 'candidates', 'colour'])
 const MAX_QUIZ_QUESTIONS = 50
@@ -49,6 +57,20 @@ interface QuizAnswer {
   age: number
 }
 
+interface SavedPuzzleAction {
+  id: string
+  action: string
+  saveId: string
+  name: string
+  page: string
+  variant: string
+  puzzle: string | null
+  state: string | null
+  filled: number | null
+  rating: string | null
+  age: number
+}
+
 interface UsageContext {
   referrer: string | null
   campaign: string | null
@@ -68,6 +90,7 @@ interface UsageBatch {
   areas: Array<[string, number]>
   events: UsageEvent[]
   quiz: QuizAnswer[]
+  saves: SavedPuzzleAction[]
   context: UsageContext | null
 }
 
@@ -129,6 +152,46 @@ function parseQuizAnswers(raw: unknown): QuizAnswer[] {
     })
   }
   return answers
+}
+
+function parseSavedPuzzleActions(raw: unknown): SavedPuzzleAction[] {
+  const actions: SavedPuzzleAction[] = []
+  if (!Array.isArray(raw)) {
+    return actions
+  }
+  for (const item of raw.slice(0, MAX_SAVED_PUZZLE_ACTIONS)) {
+    if (typeof item !== 'object' || item === null) continue
+    const a = item as Record<string, unknown>
+    const name = text(a.name, 100)
+    if (
+      typeof a.id !== 'string' ||
+      !ID_PATTERN.test(a.id) ||
+      typeof a.saveId !== 'string' ||
+      !ID_PATTERN.test(a.saveId) ||
+      typeof a.action !== 'string' ||
+      !SAVED_PUZZLE_ACTIONS.has(a.action) ||
+      (a.page !== 'classic' && a.page !== 'variant') ||
+      !name
+    ) {
+      continue
+    }
+    // Whole or not at all: a cut-off puzzle string can't be loaded.
+    const whole = (value: unknown, max: number) => (typeof value === 'string' && value.length <= max ? text(value, max) : null)
+    actions.push({
+      id: a.id,
+      action: a.action,
+      saveId: a.saveId,
+      name,
+      page: a.page,
+      variant: text(a.variant, 60) ?? (a.page === 'classic' ? 'Classic' : 'Variant'),
+      puzzle: whole(a.puzzle, MAX_SAVED_PUZZLE_TEXT_LENGTH),
+      state: a.action === 'save' || a.action === 'update' ? whole(a.state, MAX_SAVED_STATE_TEXT_LENGTH) : null,
+      filled: wholeNumber(a.filled, 0, 81),
+      rating: text(a.rating, 80),
+      age: typeof a.age === 'number' && Number.isFinite(a.age) ? Math.max(0, Math.min(a.age, MAX_EVENT_AGE_MS)) : 0,
+    })
+  }
+  return actions
 }
 
 function parseBatch(raw: string): UsageBatch | null {
@@ -199,7 +262,7 @@ function parseBatch(raw: string): UsageBatch | null {
       device: c.device,
     }
   }
-  return { visitor: b.visitor, visit: b.visit, areas, events, quiz: parseQuizAnswers(b.quiz), context }
+  return { visitor: b.visitor, visit: b.visit, areas, events, quiz: parseQuizAnswers(b.quiz), saves: parseSavedPuzzleActions(b.saves), context }
 }
 
 export async function handleSync(request: Request, db: D1Database, ctx: ExecutionContext): Promise<number> {
@@ -365,13 +428,41 @@ export async function handleSync(request: Request, db: D1Database, ctx: Executio
     ),
   )
 
+  // Saved Puzzles actions, likewise in a transaction of their own (the table
+  // is migration 0005). A resent action is ignored (UNIQUE action_id).
+  const savedInsert = db.prepare(
+    `INSERT OR IGNORE INTO saved_puzzle_events (action_id, visit_id, visitor_id, occurred_at, action, page, variant,
+                                                save_id, name, puzzle, state, filled_cells, rating)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+     WHERE EXISTS (SELECT 1 FROM visits WHERE visit_id = ?2 AND visitor_id = ?3)`,
+  )
+  const savedStatements = batch.saves.map((a) =>
+    savedInsert.bind(
+      a.id,
+      batch.visit,
+      batch.visitor,
+      new Date(now - a.age).toISOString(),
+      a.action,
+      a.page,
+      a.variant,
+      a.saveId,
+      a.name,
+      a.puzzle,
+      a.state,
+      a.filled,
+      a.rating,
+    ),
+  )
+
   // Respond at once; the writes (one transaction) finish in the background.
   ctx.waitUntil(
     db
       .batch(statements)
       .catch((err) => console.error('D1 usage batch failed', err))
       .then(() => (quizStatements.length > 0 ? db.batch(quizStatements) : undefined))
-      .catch((err) => console.error('D1 quiz batch failed', err)),
+      .catch((err) => console.error('D1 quiz batch failed', err))
+      .then(() => (savedStatements.length > 0 ? db.batch(savedStatements) : undefined))
+      .catch((err) => console.error('D1 saved puzzle batch failed', err)),
   )
   return 204
 }

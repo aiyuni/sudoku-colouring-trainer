@@ -1,5 +1,6 @@
 import { ALL_RULE3_TECHNIQUES } from './sudoku/SudokuDragonFinder'
 import { readHotkeyBindings } from './hotkeys'
+import { CLASSIC_CONSTRAINTS, describeConstraintProblem, normalizeConstraints, type SudokuConstraints } from './sudoku/SudokuConstraints'
 import type { Board, CandidateColorGrid, CandidateGrid } from './sudoku/types'
 import {
   DEFAULT_SETTINGS,
@@ -24,15 +25,34 @@ import {
  * an older version whose shape has since changed) must never break the
  * page, same rule as loadCustomSwatchColors. */
 
-const SETTINGS_STORAGE_KEY = 'sudoku-solver-settings'
-const GRID_STORAGE_KEY = 'sudoku-solver-grid'
-const WELCOME_DISMISSED_STORAGE_KEY = 'sudoku-solver-welcome-dismissed'
+// The Variant solver page shares this origin (and so this localStorage) with
+// the Classic one, but is its own app: its puzzle and its settings are saved
+// under their own keys, so neither page ever loads the other's grid (a
+// Killer's cages mean nothing to the Classic page) or overwrites its
+// settings. Set once, by the page's entry module, before the first render.
+let storagePrefix = 'sudoku-solver'
+
+export function selectVariantStorage(): void {
+  storagePrefix = 'sudoku-solver-variants'
+}
+
+/** Which page's storage is selected - the Saved Puzzles list (savedPuzzles.ts)
+ * keeps one list per page under this prefix and tags every entry with it. */
+export const storagePage = (): 'classic' | 'variant' => (storagePrefix === 'sudoku-solver' ? 'classic' : 'variant')
+export const savedPuzzlesStorageKey = () => `${storagePrefix}-saved-puzzles`
+
+const settingsStorageKey = () => `${storagePrefix}-settings`
+const gridStorageKey = () => `${storagePrefix}-grid`
+const welcomeDismissedStorageKey = () => `${storagePrefix}-welcome-dismissed`
+const givensEntryStorageKey = () => `${storagePrefix}-givens-entry`
 
 export interface SavedGrid {
   board: Board
   givens: boolean[][]
   candidates: CandidateGrid
   candidateColors: CandidateColorGrid
+  /** Variant solver only: the puzzle's Jigsaw regions and Killer cages. */
+  constraints?: SudokuConstraints
 }
 
 function readJson(key: string): unknown {
@@ -56,11 +76,23 @@ function writeJson(key: string, value: unknown): void {
 /** Whether the welcome popup's "Never show again" was ticked. Its own key,
  * not an AppSetting: "Reset to defaults" shouldn't bring the popup back. */
 export function loadWelcomeDismissed(): boolean {
-  return readJson(WELCOME_DISMISSED_STORAGE_KEY) === true
+  return readJson(welcomeDismissedStorageKey()) === true
 }
 
 export function saveWelcomeDismissed(dismissed: boolean): void {
-  writeJson(WELCOME_DISMISSED_STORAGE_KEY, dismissed)
+  writeJson(welcomeDismissedStorageKey(), dismissed)
+}
+
+/** Whether the page was left in the middle of "Create From Empty Grid"
+ * (Generate Puzzle menu): the digits typed so far are saved as ordinary,
+ * still editable cells, so this is what brings the "Confirm givens" banner
+ * back with them after a reload. */
+export function loadGivensEntry(): boolean {
+  return readJson(givensEntryStorageKey()) === true
+}
+
+export function saveGivensEntry(active: boolean): void {
+  writeJson(givensEntryStorageKey(), active)
 }
 
 /** One saved value, or undefined if it isn't a value that setting can
@@ -106,7 +138,7 @@ function readSetting<K extends keyof AppSettings>(key: K, value: unknown): AppSe
  * since the save simply takes its default. */
 export function loadSavedSettings(): AppSettings {
   const settings: AppSettings = { ...DEFAULT_SETTINGS }
-  const saved = readJson(SETTINGS_STORAGE_KEY)
+  const saved = readJson(settingsStorageKey())
   if (!saved || typeof saved !== 'object') {
     return settings
   }
@@ -120,7 +152,7 @@ export function loadSavedSettings(): AppSettings {
 }
 
 export function saveSettings(settings: AppSettings): void {
-  writeJson(SETTINGS_STORAGE_KEY, settings)
+  writeJson(settingsStorageKey(), settings)
 }
 
 function isGrid<T>(value: unknown, isCell: (cell: unknown) => cell is T): value is T[][] {
@@ -157,7 +189,7 @@ const isPaintCell = (cell: unknown): cell is CandidateColorGrid[number][number] 
 
 /** The puzzle as it was left, or null if nothing (valid) was saved. */
 export function loadSavedGrid(): SavedGrid | null {
-  const saved = readJson(GRID_STORAGE_KEY)
+  const saved = readJson(gridStorageKey())
   if (!saved || typeof saved !== 'object') {
     return null
   }
@@ -170,9 +202,47 @@ export function loadSavedGrid(): SavedGrid | null {
   ) {
     return null
   }
-  return { board, givens, candidates, candidateColors }
+  return { board, givens, candidates, candidateColors, constraints: readConstraints((saved as Record<string, unknown>).constraints) }
+}
+
+/** Saved regions/cages, or undefined (= a standard grid) if there are none
+ * or they aren't a well-formed layout. */
+export function readConstraints(value: unknown): SudokuConstraints | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+  const { regions, cages, diagonals, antiKnight, entropy } = value as Record<string, unknown>
+  const isCell = (cell: unknown): cell is [number, number] =>
+    Array.isArray(cell) && cell.length === 2 && cell.every((n) => Number.isInteger(n) && n >= 0 && n <= 8)
+  if (regions !== null && !isGrid(regions, isDigit)) {
+    return undefined
+  }
+  if (
+    !Array.isArray(cages) ||
+    !cages.every(
+      (cage) =>
+        cage !== null &&
+        typeof cage === 'object' &&
+        typeof (cage as Record<string, unknown>).sum === 'number' &&
+        Array.isArray((cage as Record<string, unknown>).cells) &&
+        ((cage as Record<string, unknown>).cells as unknown[]).every(isCell),
+    )
+  ) {
+    return undefined
+  }
+  const constraints = normalizeConstraints({
+    regions: regions as number[][] | null,
+    cages: cages as SudokuConstraints['cages'],
+    diagonals: diagonals === true,
+    antiKnight: antiKnight === true,
+    entropy: entropy === true,
+  })
+  if (constraints === CLASSIC_CONSTRAINTS) {
+    return undefined
+  }
+  return describeConstraintProblem(constraints) === null ? constraints : undefined
 }
 
 export function saveGrid(grid: SavedGrid): void {
-  writeJson(GRID_STORAGE_KEY, grid)
+  writeJson(gridStorageKey(), grid)
 }

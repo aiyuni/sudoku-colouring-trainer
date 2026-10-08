@@ -1,3 +1,4 @@
+import { isStandardLayout } from './SudokuConstraints'
 import type { CandidateElimination } from './SudokuPairFinder'
 import { BOX_SIZE } from './SudokuRules'
 import type { Cell } from './SudokuUnits'
@@ -55,6 +56,11 @@ export interface SueDeCoqInstance {
 
 export class SudokuSueDeCoqFinder {
   find(board: Board, candidates: CandidateGrid): SueDeCoqInstance[] {
+    // Written for a line crossing a 3x3 box in three cells; a Jigsaw region
+    // crosses a line in anything from one to nine, which this doesn't handle.
+    if (!isStandardLayout()) {
+      return []
+    }
     const maskOf = (row: number, col: number): number => {
       if (board[row][col] !== 0) return 0
       let mask = 0

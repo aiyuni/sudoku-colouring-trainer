@@ -24,6 +24,7 @@ Thumbs.db
 CLAUDE.md
 DOUBLE_DRAGON_HANDOFF.md
 DRAGON_COLOURING_HANDOFF.md
+VARIANT_SOLVER_HANDOFF.md
 .claude/
 # Research harnesses, stock-generation scripts and ad-hoc scratch files
 frontend/dragon-research/
@@ -35,4 +36,8 @@ frontend/ocr-fixtures/
 # Sudoku Explainer's Java sources and the Maven/TeaVM build that compiles
 # them. The app only needs the build output, which is committed in
 # frontend/src/se-rating/
+# The same for the Variant page's rating (SukakuExplainer's sources plus the
+# Killer techniques); its build output is committed in
+# frontend/src/variant-rating/
+/variant-rating/
 /se-rating/

@@ -1,11 +1,13 @@
 import type { SolvePathOptions, SolvePathWorkerRequest, SolvePathWorkerResponse } from './solvePath.worker'
 import { buildSolvePath, type SolvePathResult } from './techniqueEngine'
+import { activeConstraints, withConstraints } from './sudoku/SudokuConstraints'
 import type { Board, CandidateGrid } from './sudoku/types'
 
 export type { SolvePathOptions } from './solvePath.worker'
 
 function runOnMainThread(board: Board, candidates: CandidateGrid, givens: boolean[][], options: SolvePathOptions): SolvePathResult {
-  return buildSolvePath(
+  return withConstraints(options.constraints ?? activeConstraints(), () =>
+    buildSolvePath(
     board,
     candidates,
     new Set(options.allowedRule3Techniques),
@@ -32,6 +34,7 @@ function runOnMainThread(board: Board, candidates: CandidateGrid, givens: boolea
     options.preferEasierDoubleDragons,
     options.preferEasiestDragonTechniques,
     options.minBaseMedusaCandidates,
+    ),
   )
 }
 

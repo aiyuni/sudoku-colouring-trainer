@@ -1,7 +1,8 @@
 import { markedCandidateDigits } from './boardUtils'
+import { isAntiKnight, knightCellsOf, seesCell, unitLabel } from './SudokuConstraints'
 import type { CandidateElimination } from './SudokuPairFinder'
 import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import { sudokuUnits } from './SudokuUnits'
+import { boxOf, isStandardLayout, sudokuUnits, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 export type AicLinkKind = 'strong' | 'weak'
@@ -207,12 +208,7 @@ export function candidateKey(row: number, col: number, digit: number): string {
 }
 
 function sameUnit(a: readonly [number, number], b: readonly [number, number]): boolean {
-  const [ar, ac] = a
-  const [br, bc] = b
-  if (ar === br || ac === bc) {
-    return true
-  }
-  return Math.floor(ar / BOX_SIZE) === Math.floor(br / BOX_SIZE) && Math.floor(ac / BOX_SIZE) === Math.floor(bc / BOX_SIZE)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 export interface LinkGraphs {
@@ -266,6 +262,31 @@ export function buildLinkGraphs(board: Board, candidates: CandidateGrid): LinkGr
           addEdge(weakAdjacency, key1, key2)
           if (withCandidate.length === 2) {
             addEdge(strongAdjacency, key1, key2)
+          }
+        }
+      }
+    }
+  }
+
+  // Anti-Knight (Variant page): two cells a knight's move apart can't hold
+  // the same digit either - a weak link with no unit behind it, so never a
+  // strong one. Pairs already weakly linked through a unit can't be a
+  // knight's move apart in the same row or column, but can share a box, so
+  // those are skipped rather than listed twice.
+  if (isAntiKnight()) {
+    for (let digit = 1; digit <= 9; digit++) {
+      for (let row = 0; row < BOARD_SIZE; row++) {
+        for (let col = 0; col < BOARD_SIZE; col++) {
+          if (board[row][col] !== 0 || !candidates[row][col][digit - 1]) {
+            continue
+          }
+          for (const [r2, c2] of knightCellsOf(row, col)) {
+            // Each pair once (from its upper cell), and only if no unit
+            // links it already.
+            if (r2 < row || board[r2][c2] !== 0 || !candidates[r2][c2][digit - 1] || seesCell(row, col, r2, c2)) {
+              continue
+            }
+            addEdge(weakAdjacency, registerNode(row, col, digit), registerNode(r2, c2, digit))
           }
         }
       }
@@ -467,10 +488,6 @@ function cellText(row: number, col: number): string {
   return `r${row + 1}c${col + 1}`
 }
 
-function boxOf(row: number, col: number): number {
-  return Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE)
-}
-
 type LineKind = 'row' | 'column'
 
 /** How many unsolved cells of a unit still hold `digit`, per unit kind -
@@ -511,7 +528,7 @@ function isPairIn(counts: DigitUnitCounts, kind: 'row' | 'column' | 'box', a: Ai
   return boxOf(a.row, a.col) === boxOf(b.row, b.col) && counts.box[digit][boxOf(a.row, a.col)] === 2
 }
 
-function sameBox(a: AicCandidate, b: AicCandidate): boolean {
+function inSameBox(a: AicCandidate, b: AicCandidate): boolean {
   return boxOf(a.row, a.col) === boxOf(b.row, b.col)
 }
 
@@ -560,8 +577,8 @@ function classifySingleDigitPattern(
       isPairIn(counts, kind, a, b) &&
       isPairIn(counts, kind, c, d) &&
       sameLine(cross, b, c) &&
-      !sameBox(a, b) &&
-      !sameBox(c, d)
+      !inSameBox(a, b) &&
+      !inSameBox(c, d)
     ) {
       return {
         pattern: 'Skyscraper',
@@ -573,7 +590,7 @@ function classifySingleDigitPattern(
     ['row', 'column'],
     ['column', 'row'],
   ] as const) {
-    if (isPairIn(counts, first, a, b) && isPairIn(counts, second, c, d) && sameBox(b, c) && !sameBox(a, b) && !sameBox(c, d)) {
+    if (isPairIn(counts, first, a, b) && isPairIn(counts, second, c, d) && inSameBox(b, c) && !inSameBox(a, b) && !inSameBox(c, d)) {
       return {
         pattern: 'Two-String Kite',
         text: `${digit} appears ${pairText(first, a, b)} and ${pairText(second, c, d)}, and ${cellText(b.row, b.col)} and ${cellText(c.row, c.col)} share box ${boxOf(b.row, b.col) + 1}`,
@@ -641,6 +658,13 @@ export interface EmptyRectangleIntersection {
  */
 export function findEmptyRectangleIntersections(board: Board, candidates: CandidateGrid): EmptyRectangleIntersection[] {
   const out: EmptyRectangleIntersection[] = []
+  // An Empty Rectangle is described on a 3x3 box (its top-left corner, its
+  // three rows and columns, "not in the same band as the box"). The logic
+  // would carry over to a Jigsaw region, but that is a variant-specific
+  // technique not written yet - none are found on a Jigsaw.
+  if (!isStandardLayout()) {
+    return out
+  }
   for (let digit = 1; digit <= 9; digit++) {
     for (let box = 0; box < BOARD_SIZE; box++) {
       const top = Math.floor(box / BOX_SIZE) * BOX_SIZE
@@ -848,6 +872,10 @@ function classifyYWing(candidates: CandidateGrid, nodes: readonly AicCandidate[]
 /** "row 4", "column 3", "box 7" for an index into sudokuUnits(). */
 function unitName(index: number): string {
   // sudokuUnits() order: the 9 rows, then the 9 columns, then the 9 boxes.
+  // (An X-Sudoku's two diagonals come after them, Variant page only.)
+  if (index >= 3 * BOARD_SIZE) {
+    return unitLabel(index)
+  }
   const kind = index < BOARD_SIZE ? 'row' : index < 2 * BOARD_SIZE ? 'column' : 'box'
   return `${kind} ${(index % BOARD_SIZE) + 1}`
 }

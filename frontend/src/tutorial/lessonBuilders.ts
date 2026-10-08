@@ -55,6 +55,13 @@ const extendedUrFinder = new SudokuExtendedUniqueRectangleFinder()
 // ---------------------------------------------------------------- helpers
 
 type UnitKind = 'row' | 'column' | 'box'
+
+/** The BUG+N finder can also name a diagonal (an X-Sudoku unit, Variant page
+ * only). The lessons are all Classic positions, where it never does; this
+ * only narrows the type. */
+function lessonUnitKind(kind: UnitKind | 'diagonal' | null): UnitKind | null {
+  return kind === 'diagonal' ? null : kind
+}
 interface Unit {
   kind: UnitKind
   index: number
@@ -1647,7 +1654,7 @@ export function buildBugPlusNLesson(id: string, title: string, hint: string, sta
     const cell = triCells[0]
     const name = cellName(cell[0], cell[1])
     const digit = instance.solved.digit
-    const unit = unitContaining(unitKind ?? 'row', cell)
+    const unit = unitContaining(lessonUnitKind(unitKind) ?? 'row', cell)
     const inUnit = unit.cells
       .filter(([r, c]) => state.board[r][c] === 0 && state.candidates[r][c][digit - 1])
       .map(([r, c]) => ref(r, c, digit))
@@ -1703,7 +1710,7 @@ export function buildBugPlusNLesson(id: string, title: string, hint: string, sta
         spotlight: { digits: bugDigits },
       }
     }
-    const unit = unitContaining(unitKind, [r, c])
+    const unit = unitContaining(lessonUnitKind(unitKind) ?? 'row', [r, c])
     return {
       badge: 'Count',
       caption: `In ${unitPhrase(unit)}, ${bugDigit} appears three times - one too many for the pattern. So ${name}'s extra digit is ${bugDigit}.`,

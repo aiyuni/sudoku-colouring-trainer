@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test:ocr": "rolldown ocr-fixtures/run.ts --format esm --platform node --external tesseract.js -o ocr-fixtures/.out/run.mjs && node ocr-fixtures/.out/run.mjs"
+    "test:ocr": "rolldown ocr-fixtures/run.ts --format esm --platform node --external tesseract.js -o ocr-fixtures/.out/run.mjs && node ocr-fixtures/.out/run.mjs",
+    "test:saved-puzzles": "rolldown saved-puzzle-tests/run.ts --format esm --platform node -o saved-puzzle-tests/.out/run.mjs && node saved-puzzle-tests/.out/run.mjs",
+    "test:variant-rating": "node variant-rating-fixtures/run.mjs",
+    "test:variants": "rolldown variant-tests/run.ts --format esm --platform node -o variant-tests/.out/run.mjs && node variant-tests/.out/run.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

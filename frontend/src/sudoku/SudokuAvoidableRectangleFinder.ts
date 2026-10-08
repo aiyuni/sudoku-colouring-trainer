@@ -1,5 +1,7 @@
+import { uniquenessHolds } from './SudokuConstraints'
 import type { CandidateElimination } from './SudokuPairFinder'
-import type { Cell } from './SudokuUnits'
+import { spansTwoBoxes } from './SudokuUniqueRectangleFinder'
+import { type Cell, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 /** Which cells are the puzzle's givens (true) - as opposed to solved by the
@@ -26,9 +28,8 @@ export interface AvoidableRectangleInstance {
   reasonText: string
 }
 
-const boxOf = (row: number, col: number) => Math.floor(row / 3) * 3 + Math.floor(col / 3)
 const cellRef = ([row, col]: Cell) => `r${row + 1}c${col + 1}`
-const sees = (a: Cell, b: Cell) => a[0] === b[0] || a[1] === b[1] || boxOf(a[0], a[1]) === boxOf(b[0], b[1])
+const sees = (a: Cell, b: Cell) => sharesHouseOrLink(a[0], a[1], b[0], b[1])
 
 /**
  * Avoidable Rectangles: a Unique Rectangle some of whose cells are already
@@ -57,6 +58,11 @@ const sees = (a: Cell, b: Cell) => a[0] === b[0] || a[1] === b[1] || boxOf(a[0],
  */
 export class SudokuAvoidableRectangleFinder {
   find(board: Board, candidates: CandidateGrid, givens: GivenMask | null): AvoidableRectangleInstance[] {
+    // A deadly pattern is only deadly when both of its fillings satisfy every
+    // constraint - a Killer cage's sum tells them apart (see uniquenessHolds).
+    if (!uniquenessHolds()) {
+      return []
+    }
     if (!givens) {
       return []
     }
@@ -68,8 +74,10 @@ export class SudokuAvoidableRectangleFinder {
       for (let r2 = r1 + 1; r2 < 9; r2++) {
         for (let c1 = 0; c1 < 9; c1++) {
           for (let c2 = c1 + 1; c2 < 9; c2++) {
-            const boxes = new Set([boxOf(r1, c1), boxOf(r1, c2), boxOf(r2, c1), boxOf(r2, c2)])
-            if (boxes.size !== 2) {
+            // Exactly two boxes, an aligned pair of corners in each (on a
+            // Jigsaw two regions can also hold the corners diagonally, which
+            // is no deadly pattern - see spansTwoBoxes).
+            if (!spansTwoBoxes(r1, r2, c1, c2)) {
               continue
             }
             // Cyclic order, so corners i and i + 2 are diagonal.

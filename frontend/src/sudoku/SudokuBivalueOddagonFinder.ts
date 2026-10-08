@@ -1,7 +1,6 @@
 import { markedCandidateDigits } from './boardUtils'
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOX_SIZE } from './SudokuRules'
-import type { Cell } from './SudokuUnits'
+import { type Cell, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 /**
@@ -55,12 +54,7 @@ export interface BivalueOddagonInstance {
 }
 
 function sameUnit(a: readonly [number, number], b: readonly [number, number]): boolean {
-  const [ar, ac] = a
-  const [br, bc] = b
-  if (ar === br || ac === bc) {
-    return true
-  }
-  return Math.floor(ar / BOX_SIZE) === Math.floor(br / BOX_SIZE) && Math.floor(ac / BOX_SIZE) === Math.floor(bc / BOX_SIZE)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 /** One node of the loop-search graph for a given digit pair: either a pure

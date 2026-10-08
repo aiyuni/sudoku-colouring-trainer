@@ -15,13 +15,23 @@ interface HintModalProps {
   onClose: () => void
   /** A hint's "Learn this technique" link: open How It Works there. */
   onOpenTutorial: (target: TutorialTarget) => void
+  /** False on the Variant page, which has no How It Works to link to. */
+  showLearnLinks?: boolean
 }
 
 /** The Techniques tab's Hint popup: the easiest technique on the grid, one
  * hint at a time (see hints.ts for what each one says). Centred over a
  * dimmed backdrop like ConfirmDialog; closes on the X, the Close button,
  * Escape, or a click on the backdrop. */
-export default function HintModal({ hint, wrongCandidates = false, revealed, onNextHint, onClose, onOpenTutorial }: HintModalProps) {
+export default function HintModal({
+  hint,
+  wrongCandidates = false,
+  revealed,
+  onNextHint,
+  onClose,
+  onOpenTutorial,
+  showLearnLinks = true,
+}: HintModalProps) {
   useAnalyticsArea('Hint', AREA_LAYER.dialog)
   const titleId = useId()
   const nextButtonRef = useRef<HTMLButtonElement>(null)
@@ -102,7 +112,7 @@ export default function HintModal({ hint, wrongCandidates = false, revealed, onN
                 <li key={index} className={index === steps.length - 1 ? 'hint-step-latest' : undefined}>
                   <span className="hint-step-label">{index === hint.steps.length - 1 && index > 0 ? 'Answer' : `Hint ${index + 1}`}</span>
                   <p>{step.text}</p>
-                  {step.learn && (
+                  {showLearnLinks && step.learn && (
                     <button type="button" className="hint-learn-link" onClick={() => onOpenTutorial(step.learn!)}>
                       Learn this technique
                     </button>

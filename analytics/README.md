@@ -140,6 +140,32 @@ A quiz also leaves `events` rows (`category = 'quiz'`, `name` = `Started` /
 `Completed`, `label` = the quiz id), so it shows in a visit's timeline on the
 dashboard. **Export → Practice quiz answers** downloads `quiz_answers` as CSV.
 
+### Saved puzzles
+
+The Saved Puzzles dialog (both pages) keeps a visitor's saves in their own
+browser only. What is sent here is one row per action, in the same batches,
+stored in `saved_puzzle_events` (migration `0005`; its comment explains every
+column): `action` = `save` (a new entry) / `update` (saved over an entry) /
+`open` / `delete`, `page` = `classic` / `variant`, `variant` = `Classic`,
+`Killer`, `Killer Jigsaw`, `X-Sudoku`..., `save_id` = the entry (the same
+across its updates, opens and delete), `name` = what the visitor called it.
+
+A save or update row holds **the exact position** in `state`, as text the import
+box of that page reads: paste it there to see the grid as the visitor saved it,
+candidates and colours included (Classic: a Sudoku.Coach state string, what
+Copy Puzzle As-Is copies; Variant: this solver's JSON). `puzzle` is the puzzle
+alone, as Copy Original writes it.
+
+| view | one row per | use it for |
+|---|---|---|
+| `saved_puzzles` | saved entry | who saved what: latest name and position, times saved / opened, `deleted_at` |
+| `saved_puzzle_log` | action | the timeline; an open or delete row gets the `state` that save held then |
+
+Each action also leaves an `events` row (`category = 'saved puzzle'`, `name` =
+`Save` / `Update` / `Open` / `Delete`, `label` = `<page> · <variant> · <name>`),
+so it shows in a visit's timeline on the dashboard. **Export → Saved puzzles**
+downloads `saved_puzzle_events` as CSV.
+
 ### Setup (once)
 
 ```sh
@@ -220,6 +246,15 @@ $D1 "SELECT * FROM quiz_summary ORDER BY runs DESC"
 
 # the questions people most often get wrong first time
 $D1 "SELECT * FROM quiz_question_summary WHERE answers >= 5 ORDER BY first_try_pct LIMIT 20"
+
+# saved puzzles: who has saved what (state = paste into that page's import box)
+$D1 "SELECT visitor_id, visitor_label, page, variant, name, last_saved_at, times_saved, times_opened, deleted_at, state FROM saved_puzzles ORDER BY last_saved_at DESC LIMIT 50"
+
+# one visitor's saved-puzzle actions, newest first
+$D1 "SELECT occurred_at, action, page, variant, name, filled_cells, state FROM saved_puzzle_log WHERE visitor_id = '<id>'"
+
+# saves, reopens and deletes per day and page
+$D1 "SELECT substr(occurred_at, 1, 10) AS day, page, action, COUNT(*) n, COUNT(DISTINCT visitor_id) visitors FROM saved_puzzle_log GROUP BY 1, 2, 3 ORDER BY day DESC"
 
 # imports with the visitor who made them
 $D1 "SELECT occurred_at, visitor_id, name, label AS puzzle FROM events WHERE category = 'import' ORDER BY occurred_at DESC LIMIT 50"

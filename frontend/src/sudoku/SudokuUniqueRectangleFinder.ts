@@ -1,7 +1,8 @@
+import { hasDiagonals, onActiveDiagonal, uniquenessHolds } from './SudokuConstraints'
 import { markedCandidateDigits } from './boardUtils'
 import type { CandidateElimination } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE } from './SudokuRules'
-import { sudokuUnits, type Cell } from './SudokuUnits'
+import { BOARD_SIZE } from './SudokuRules'
+import { boxOf, boxWord, sameBox, sudokuUnits, type Cell } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 export type UniqueRectangleTypeName =
@@ -92,7 +93,7 @@ export function sameUnit(a: readonly [number, number], b: readonly [number, numb
   if (ar === br || ac === bc) {
     return true
   }
-  return Math.floor(ar / BOX_SIZE) === Math.floor(br / BOX_SIZE) && Math.floor(ac / BOX_SIZE) === Math.floor(bc / BOX_SIZE)
+  return sameBox(ar, ac, br, bc)
 }
 
 /** Every row/column/box unit containing *both* cells - 0 for a diagonal
@@ -147,7 +148,7 @@ function houseLabel(house: readonly Cell[]): string {
   if (house.every(([, c]) => c === c0)) {
     return `column ${c0 + 1}`
   }
-  return `box ${Math.floor(r0 / BOX_SIZE) * BOX_SIZE + Math.floor(c0 / BOX_SIZE) + 1}`
+  return `${boxWord()} ${boxOf(r0, c0) + 1}`
 }
 
 /** Every unsolved cell outside the rectangle that still has `digit` marked
@@ -471,6 +472,35 @@ export function explainUniqueRectangle(ur: UniqueRectangleInstance, candidates: 
   return { typeLabel, text, placements }
 }
 
+/** Whether the rectangle's four corners lie in exactly two boxes, two
+ * corners of one row (or of one column) in each. That is what makes four
+ * cells holding only {a, b} a deadly pattern: swapping a and b then leaves
+ * every row, column *and box* with the same digits. On a standard grid it is
+ * "the rows share a band xor the columns share a stack" (both puts all four
+ * in one box, neither spreads them over four). On a Jigsaw it has to be
+ * asked of the regions themselves - a rectangle over three or four regions,
+ * or with a region holding two diagonal corners, is no deadly pattern.
+ *
+ * On an X-Sudoku the swap must leave the two diagonals alone as well, and a
+ * rectangle has at most one corner on each, so any corner on a diagonal
+ * changes what that diagonal holds: no deadly pattern either. Every
+ * rectangle-shaped uniqueness technique (this finder, Avoidable Rectangle,
+ * UR-AIC, the Complex AIC graph) enumerates through here, so this is the
+ * one place that rule lives. */
+export function spansTwoBoxes(r1: number, r2: number, c1: number, c2: number): boolean {
+  const topLeft = boxOf(r1, c1)
+  const topRight = boxOf(r1, c2)
+  const bottomLeft = boxOf(r2, c1)
+  const bottomRight = boxOf(r2, c2)
+  if (
+    !(topLeft === topRight && bottomLeft === bottomRight && topLeft !== bottomLeft) &&
+    !(topLeft === bottomLeft && topRight === bottomRight && topLeft !== topRight)
+  ) {
+    return false
+  }
+  return !(hasDiagonals() && (onActiveDiagonal(r1, c1) || onActiveDiagonal(r1, c2) || onActiveDiagonal(r2, c1) || onActiveDiagonal(r2, c2)))
+}
+
 export class SudokuUniqueRectangleFinder {
   /** `mergeTypes: false` skips `mergeSameRectangle`, so every instance keeps
    * its own single type and only its own eliminations - for the How It Works
@@ -478,18 +508,18 @@ export class SudokuUniqueRectangleFinder {
    * type often fires on the same rectangle too. Everything that applies
    * eliminations wants the default (see mergeSameRectangle for why). */
   find(board: Board, candidates: CandidateGrid, { mergeTypes = true }: { mergeTypes?: boolean } = {}): UniqueRectangleInstance[] {
+    // A deadly pattern is only deadly when both of its fillings satisfy every
+    // constraint - a Killer cage's sum tells them apart (see uniquenessHolds).
+    if (!uniquenessHolds()) {
+      return []
+    }
     const instances: UniqueRectangleInstance[] = []
 
     for (let r1 = 0; r1 < BOARD_SIZE - 1; r1++) {
       for (let r2 = r1 + 1; r2 < BOARD_SIZE; r2++) {
-        const sameBoxRow = Math.floor(r1 / BOX_SIZE) === Math.floor(r2 / BOX_SIZE)
         for (let c1 = 0; c1 < BOARD_SIZE - 1; c1++) {
           for (let c2 = c1 + 1; c2 < BOARD_SIZE; c2++) {
-            const sameBoxCol = Math.floor(c1 / BOX_SIZE) === Math.floor(c2 / BOX_SIZE)
-            // Exactly two boxes among the four cells: rows share a box-band
-            // xor columns do - both true puts all four in one box, both
-            // false spreads them across four boxes.
-            if (sameBoxRow === sameBoxCol) {
+            if (!spansTwoBoxes(r1, r2, c1, c2)) {
               continue
             }
 

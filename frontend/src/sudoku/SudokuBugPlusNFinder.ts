@@ -1,5 +1,6 @@
+import { uniquenessHolds } from './SudokuConstraints'
 import { markedCandidateDigits } from './boardUtils'
-import { sudokuUnits, type Cell } from './SudokuUnits'
+import { sudokuUnits, type Cell, sharesHouseOrLink } from './SudokuUnits'
 import type { Board, CandidateGrid } from './types'
 
 export interface BugCandidateRef {
@@ -21,7 +22,7 @@ export interface BugPlusNCell {
    * rare BUG+2/BUG+3 case where other tri-value cells in every unit of this
    * one skew each count (the digit is still proven by the whole-grid check). */
   unit: readonly Cell[] | null
-  unitKind: 'row' | 'column' | 'box' | null
+  unitKind: 'row' | 'column' | 'box' | 'diagonal' | null
 }
 
 /** BUG+N, N = 1, 2 or 3 - one technique (one rank, one Dynamic Dragon
@@ -41,18 +42,23 @@ export interface BugPlusNInstance {
 
 /** Which kind of unit a set of cells belongs to - used to say "row",
  * "column", or "box" instead of the vaguer "section". */
-function classifyUnitKind(cells: readonly Cell[]): 'row' | 'column' | 'box' {
+function classifyUnitKind(cells: readonly Cell[]): 'row' | 'column' | 'box' | 'diagonal' {
   if (cells.every(([r]) => r === cells[0][0])) {
     return 'row'
   }
   if (cells.every(([, c]) => c === cells[0][1])) {
     return 'column'
   }
+  // An X-Sudoku's diagonals are units too (Variant page): nine cells with no
+  // two in one row, which no box or Jigsaw region can be.
+  if (cells.length > 3 && cells.every(([r], i) => cells.findIndex(([r2]) => r2 === r) === i)) {
+    return 'diagonal'
+  }
   return 'box'
 }
 
 function sees(a: Cell, b: Cell): boolean {
-  return a[0] === b[0] || a[1] === b[1] || (Math.floor(a[0] / 3) === Math.floor(b[0] / 3) && Math.floor(a[1] / 3) === Math.floor(b[1] / 3))
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 /** Beyond BUG+3 the pattern is too far from all-bivalue to be worth naming
@@ -93,6 +99,11 @@ const MAX_N = 3
  */
 export class SudokuBugPlusNFinder {
   find(board: Board, candidates: CandidateGrid): BugPlusNInstance | null {
+    // A deadly pattern is only deadly when both of its fillings satisfy every
+    // constraint - a Killer cage's sum tells them apart (see uniquenessHolds).
+    if (!uniquenessHolds()) {
+      return null
+    }
     const triValue: { cell: Cell; digits: number[] }[] = []
 
     for (let row = 0; row < 9; row++) {

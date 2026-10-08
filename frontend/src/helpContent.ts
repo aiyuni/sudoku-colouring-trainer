@@ -465,6 +465,18 @@ export const HELP_TABS: HelpTab[] = [
     intro: 'We can specify what type of Dragon Colouring puzzles to generate here.  However, unless you are looking for the hardest of hard puzzles (Beyond Hell/Almost Impossible SC category), there is no reason to touch these default settings.',
     sections: [
       {
+        title: 'Your own puzzle',
+        items: [
+          {
+            name: 'Create From Empty Grid',
+            description:
+              'Clears the grid so you can enter a puzzle of your own. Fill in its givens, then click "Confirm givens" under the grid: ' +
+              'the digits become fixed givens and you can solve the puzzle as usual. ' +
+              'The givens are only accepted when they have exactly one solution - otherwise you are told why and can keep editing.',
+          },
+        ],
+      },
+      {
         title: 'Puzzle generation',
         intro: 'Enabling an AIC in Technique Selections unticks its matching "disregards" box.',
         items: [

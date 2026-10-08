@@ -1,9 +1,10 @@
 import { buildMedusaChainInstance, cellRef, medusaFinder, type TechniqueCandidateRef, type TechniqueInstance } from './techniqueEngine'
+import { unitLabel } from './sudoku/SudokuConstraints'
 import type { DragonMove } from './sudoku/SudokuDragonFinder'
 import type { ChainColor } from './sudoku/SudokuMedusaFinder'
 import { autocompleteMedusa, type MedusaSeed } from './sudoku/SudokuMedusaAutocompleter'
 import { formatCandidate } from './sudoku/SudokuDragonTargetFinder'
-import { sudokuUnits, type Cell } from './sudoku/SudokuUnits'
+import { boxOf, sudokuUnits, type Cell } from './sudoku/SudokuUnits'
 import type { Board, CandidateGrid } from './sudoku/types'
 import { tutorialTargetFor, type TutorialTarget } from './tutorial/tutorialLinks'
 
@@ -46,11 +47,12 @@ export function colouringHintKind(instance: TechniqueInstance): ColouringHintKin
 
 /** sudokuUnits() order: rows 0-8, columns 9-17, boxes 18-26. */
 function unitName(index: number): string {
-  return index < 9 ? `row ${index + 1}` : index < 18 ? `column ${index - 8}` : `box ${index - 17}`
+  // 27 and 28 are an X-Sudoku's diagonals (Variant page).
+  return index >= 27 ? unitLabel(index) : index < 9 ? `row ${index + 1}` : index < 18 ? `column ${index - 8}` : `box ${index - 17}`
 }
 
 function boxName(row: number, col: number): string {
-  return `box ${Math.floor(row / 3) * 3 + Math.floor(col / 3) + 1}`
+  return `box ${boxOf(row, col) + 1}`
 }
 
 /** Indexes (into sudokuUnits()) of every unit holding all of `cells`. */
@@ -115,6 +117,20 @@ function techniqueBlurb(instance: TechniqueInstance): string {
   const id = instance.id
   if (id.startsWith('naked-single')) return 'Some cell has only one candidate left.'
   if (id.startsWith('hidden-single')) return 'Some digit has only one place left in a row, column or box.'
+  // Variant solver: the Killer cage techniques.
+  if (id.startsWith('killer-cage-sum')) return 'A cage has one empty cell left, so its sum says what that cell is.'
+  if (id.startsWith('killer-cage-combinations'))
+    return "Some candidate fits no way of filling its cage: different digits, each from its own cell's candidates, adding up to the cage's sum."
+  if (id.startsWith('killer-cage-locked'))
+    return 'A cage needs a certain digit whichever way it is filled, so cells that see every place it could go in the cage lose it.'
+  if (id.startsWith('entropy-square'))
+    return 'Some 2x2 square has only one cell left for one of its three groups - low (1-3), middle (4-6), high (7-9) - or only two cells left for two of them.'
+  if (id.startsWith('variant-locked-knight'))
+    return "Some digit has only a few places left in a row, column or box, and one cell elsewhere sees every one of them - counting a knight's move as seeing."
+  if (id.startsWith('variant-locked-diagonal'))
+    return "Some digit has only a few places left in a unit, and they line up on a diagonal (or the diagonal's places all sit in one box)."
+  if (id.startsWith('killer-45-'))
+    return 'Every row, column and box adds up to 45. The cages lying inside (or covering) some of them leave a sum for the few cells that stick in or out.'
   if (id.startsWith('locked-candidate-pointing'))
     return "A digit's candidates inside one box all lie in the same row or column."
   if (id.startsWith('locked-candidate-claiming'))
@@ -197,6 +213,58 @@ function detailSteps(instance: TechniqueInstance, board: Board, candidates: Cand
   const usedDigits = uniqueSorted(instance.usedCandidates.map((c) => c.digit))
   const eliminatedText = listAnd(instance.eliminatedCandidates.map(formatCandidate))
 
+  if (id.startsWith('entropy-square')) {
+    const [top, left] = usedCells[0]
+    return [
+      { text: 'Every 2x2 square needs a low (1-3), a middle (4-6) and a high (7-9) digit. Look for a square that is short of room for one of them.' },
+      {
+        text: `Look at the 2x2 square ${cellRef(top, left)}-${cellRef(top + 1, left + 1)}. Which of its cells can still hold each group?`,
+      },
+    ]
+  }
+  if (id.startsWith('variant-locked-')) {
+    const digit = usedDigits[0]
+    return [
+      { text: `Look at where ${digit} can still go.` },
+      {
+        text: `${digit} is down to ${cellsText(usedCells)} in one unit. Which other cells see all of those${
+          id.startsWith('variant-locked-knight') ? " (a knight's move counts)" : ' (the diagonals count)'
+        }?`,
+      },
+    ]
+  }
+  if (id.startsWith('killer-cage-')) {
+    const [row, col] = usedCells[0]
+    const size = usedCells.length
+    const where = size === 1 ? `the one-cell cage at ${cellRef(row, col)}` : `the cage of ${size} cells starting at ${cellRef(row, col)}`
+    if (id.startsWith('killer-cage-sum')) {
+      return [{ text: `Look at ${where}.` }, { text: 'Only one of its cells is still empty. What must it be for the cage to reach its sum?' }]
+    }
+    if (id.startsWith('killer-cage-locked')) {
+      return [
+        { text: `Look at ${where}.` },
+        { text: `Every way of filling it uses a ${usedDigits[0]}. Which cells outside the cage see all the places that ${usedDigits[0]} could go?` },
+      ]
+    }
+    return [
+      { text: `Look at ${where}.` },
+      { text: 'Which sets of different digits add up to its sum? Then check each cell: can it really hold each of its candidates in one of those sets?' },
+    ]
+  }
+  if (id.startsWith('killer-45-')) {
+    // The notation opens with the houses and their total ("Rows 1-2 add up to 90; ...").
+    const houses = instance.notation.split(';')[0]
+    const cells = (instance.medusaHighlightCells ?? []).map(([row, col]) => cellRef(row, col))
+    return [
+      { text: `${houses}.` },
+      {
+        text: id.startsWith('killer-45-innie')
+          ? 'Add up the cages lying wholly inside. What is left over is the total of the other cells there.'
+          : 'Add up every cage that covers them and take the total away. What is left over is the total of the cells sticking out.',
+      },
+      { text: `Those cells are ${listAnd(cells)}.` },
+    ]
+  }
   if (id.startsWith('naked-single') || id.startsWith('hidden-single')) {
     const { row, col, digit } = instance.solvedCandidates[0]
     if (id.startsWith('naked-single')) {

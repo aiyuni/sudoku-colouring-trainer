@@ -1,3 +1,4 @@
+import { setActiveConstraints, type SudokuConstraints } from './sudoku/SudokuConstraints'
 import type { Board, CandidateGrid } from './sudoku/types'
 import type { Rule3Technique } from './sudoku/SudokuDragonFinder'
 import type { FishTechnique } from './sudoku/SudokuFishFinder'
@@ -45,6 +46,11 @@ export interface SolvePathOptions {
   /** "Dragon: require 3+ base Medusa candidates": the smallest starting
    * Medusa a Dragon may have (0 = no filter). */
   minBaseMedusaCandidates: number
+  /** Variant solver only: the puzzle's Jigsaw regions and Killer cages
+   * (SudokuConstraints.ts). Grid data rather than a setting, but it rides
+   * here because the whole search runs under it: the worker has its own copy
+   * of the engine, with its own active constraints. Left out = Classic. */
+  constraints?: SudokuConstraints
 }
 
 export interface SolvePathWorkerRequest {
@@ -65,6 +71,7 @@ self.onmessage = (event: MessageEvent<SolvePathWorkerRequest>) => {
   const { board, candidates, givens, options } = event.data
   let response: SolvePathWorkerResponse
   try {
+    setActiveConstraints(options.constraints ?? null)
     response = {
       result: buildSolvePath(
         board,

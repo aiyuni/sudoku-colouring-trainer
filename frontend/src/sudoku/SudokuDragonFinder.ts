@@ -14,7 +14,7 @@ import {
 } from './SudokuMedusaFinder'
 import { SudokuNakedSubsetFinder, type NakedSubsetInstance } from './SudokuNakedSubsetFinder'
 import { SudokuPairFinder, type NakedPairInstance } from './SudokuPairFinder'
-import { BOARD_SIZE, BOX_SIZE, SudokuRules } from './SudokuRules'
+import { BOARD_SIZE, SudokuRules } from './SudokuRules'
 import { SudokuGenericAicFinder } from './SudokuGenericAicFinder'
 import { SudokuAlsXzFinder, type AlsXzInstance } from './SudokuAlsXzFinder'
 import {
@@ -29,7 +29,8 @@ import {
   type ShortAicInstance,
   type ShortAicPattern,
 } from './SudokuShortAicFinder'
-import { sudokuUnits } from './SudokuUnits'
+import { ENTROPY_SQUARES, activeConstraints, constraintsVersion, entropyGroupOf } from './SudokuConstraints'
+import { boxCells, boxOf, sudokuUnits, sharesHouseOrLink } from './SudokuUnits'
 import { SudokuUniqueRectangleFinder, type UniqueRectangleInstance } from './SudokuUniqueRectangleFinder'
 import { SudokuExtendedUniqueRectangleFinder } from './SudokuExtendedUniqueRectangleFinder'
 import { SudokuGroupedAicFinder } from './SudokuGroupedAicFinder'
@@ -698,29 +699,29 @@ interface Rule3ChainStep {
  * BUG+1, Bivalue Oddagon Type 1). */
 type Rule3Conclusion =
   | { kind: 'single candidate' }
-  | { kind: 'hidden single'; unitKind: 'row' | 'column' | 'box' }
+  | { kind: 'hidden single'; unitKind: 'row' | 'column' | 'box' | 'diagonal' }
   | { kind: 'direct' }
 
 /** Which kind of unit a set of cells belongs to - used to say "row",
  * "column", or "box" instead of the vaguer "section" wherever a
  * conclusion follows from a specific unit sudokuUnits() produced. */
-function classifyUnitKind(cells: readonly (readonly [number, number])[]): 'row' | 'column' | 'box' {
+function classifyUnitKind(cells: readonly (readonly [number, number])[]): 'row' | 'column' | 'box' | 'diagonal' {
   if (cells.every(([r]) => r === cells[0][0])) {
     return 'row'
   }
   if (cells.every(([, c]) => c === cells[0][1])) {
     return 'column'
   }
+  // An X-Sudoku's diagonals are units too (Variant page): nine cells with no
+  // two in one row, which no box or Jigsaw region can be.
+  if (cells.length > 3 && cells.every(([r], i) => cells.findIndex(([r2]) => r2 === r) === i)) {
+    return 'diagonal'
+  }
   return 'box'
 }
 
 function sameUnit(a: readonly [number, number], b: readonly [number, number]): boolean {
-  const [ar, ac] = a
-  const [br, bc] = b
-  if (ar === br || ac === bc) {
-    return true
-  }
-  return Math.floor(ar / BOX_SIZE) === Math.floor(br / BOX_SIZE) && Math.floor(ac / BOX_SIZE) === Math.floor(bc / BOX_SIZE)
+  return sharesHouseOrLink(a[0], a[1], b[0], b[1])
 }
 
 /**
@@ -800,21 +801,32 @@ const OPTIMIZE_MAX_RULE3_FALLBACK_SIMULATIONS = 60
 const OPTIMIZE_MAX_RULE3_FALLBACK_SIMULATIONS_LATER_PHASES = 15
 
 /** Every cell index (row * 9 + col) sharing a row, column or box with each
- * cell - the cell itself included, as sameUnit counts it. Fixed, so built
- * once. */
-const PEERS_WITH_SELF: readonly (readonly number[])[] = Array.from({ length: 81 }, (_, cell) => {
-  const r = Math.floor(cell / 9)
-  const c = cell % 9
-  const peers: number[] = []
-  for (let other = 0; other < 81; other++) {
-    const r2 = Math.floor(other / 9)
-    const c2 = other % 9
-    if (r === r2 || c === c2 || (Math.floor(r / 3) === Math.floor(r2 / 3) && Math.floor(c / 3) === Math.floor(c2 / 3))) {
-      peers.push(other)
-    }
+ * cell - the cell itself included, as sameUnit counts it. Fixed for a given
+ * set of constraints (the boxes are a Jigsaw's regions on the Variant page),
+ * so built once per set. */
+let peersWithSelfTable: readonly (readonly number[])[] | null = null
+let peersWithSelfVersion = -1
+
+function peersWithSelf(): readonly (readonly number[])[] {
+  if (peersWithSelfTable && peersWithSelfVersion === constraintsVersion()) {
+    return peersWithSelfTable
   }
-  return peers
-})
+  peersWithSelfVersion = constraintsVersion()
+  peersWithSelfTable = Array.from({ length: 81 }, (_, cell) => {
+    const r = Math.floor(cell / 9)
+    const c = cell % 9
+    const peers: number[] = []
+    for (let other = 0; other < 81; other++) {
+      const r2 = Math.floor(other / 9)
+      const c2 = other % 9
+      if (sharesHouseOrLink(r, c, r2, c2)) {
+        peers.push(other)
+      }
+    }
+    return peers
+  })
+  return peersWithSelfTable
+}
 
 /** seen[(digit - 1) * 81 + row * 9 + col]: some node passing `include`, of
  * that digit, is in a different cell sharing a row, column or box with this
@@ -822,13 +834,14 @@ const PEERS_WITH_SELF: readonly (readonly number[])[] = Array.from({ length: 81 
  * Extension Rule 1's seesPrimary) asked, own cell excluded. */
 function seenByNodes(nodes: Iterable<DragonNode>, include: (n: DragonNode) => boolean): Uint8Array {
   const seen = new Uint8Array(9 * 81)
+  const peersTable = peersWithSelf()
   for (const n of nodes) {
     if (!include(n)) {
       continue
     }
     const cell = n.row * 9 + n.col
     const base = (n.digit - 1) * 81
-    for (const peer of PEERS_WITH_SELF[cell]) {
+    for (const peer of peersTable[cell]) {
       if (peer !== cell) {
         seen[base + peer] = 1
       }
@@ -852,6 +865,7 @@ function hasAnyElimination(nodes: readonly DragonNode[], board: Board, candidate
   const cellNodeCount = new Uint8Array(81)
   const cellFirstDigit = new Uint8Array(81)
   const colored = new Uint8Array(81 * 9)
+  const peersTable = peersWithSelf()
   for (const n of nodes) {
     const cell = n.row * 9 + n.col
     const side = sideOf(n.color) === 'A' ? 0 : 1
@@ -867,7 +881,7 @@ function hasAnyElimination(nodes: readonly DragonNode[], board: Board, candidate
       cellFirstDigit[cell] = n.digit
     }
     colored[cell * 9 + n.digit - 1] = 1
-    for (const peer of PEERS_WITH_SELF[cell]) {
+    for (const peer of peersTable[cell]) {
       sees[base + peer] = 1
     }
   }
@@ -966,7 +980,7 @@ interface HiddenSingleFind {
   row: number
   col: number
   digit: number
-  unitKind: 'row' | 'column' | 'box'
+  unitKind: 'row' | 'column' | 'box' | 'diagonal'
   /** The unit's own 9 cells - a hidden single's validity rests on *all* of
    * them (every other one no longer holding this digit), not just the
    * resulting cell, so this is what dependency-tracking needs to check a
@@ -1044,7 +1058,9 @@ export class SudokuDragonFinder {
    * map. Results are only ever read, never mutated, by the simulation and
    * the moves it builds, so sharing them is safe. */
   private memoFind<T>(finder: string, grid: string, compute: () => T): T {
-    const key = `${finder}|${grid}`
+    // The constraints are part of the input too: the same marks under other
+    // Jigsaw regions (or cages) have other answers.
+    const key = `${constraintsVersion()}|${finder}|${grid}`
     if (this.finderMemo.has(key)) {
       const hit = this.finderMemo.get(key) as T
       // Least recently used goes first: re-insert on a hit.
@@ -2494,11 +2510,12 @@ export class SudokuDragonFinder {
       }
     }
     const seen = new Set<string>()
-    const boxRow = Math.floor(row / BOX_SIZE) * BOX_SIZE
-    const boxCol = Math.floor(col / BOX_SIZE) * BOX_SIZE
-    const peers: Array<[number, number]> = []
+    // Row, column and box peers interleaved cell by cell - the order the
+    // eliminations have always been listed in (the box in reading order).
+    const box = boxCells(boxOf(row, col))
+    const peers: Array<readonly [number, number]> = []
     for (let i = 0; i < BOARD_SIZE; i++) {
-      peers.push([row, i], [i, col], [boxRow + Math.floor(i / BOX_SIZE), boxCol + (i % BOX_SIZE)])
+      peers.push([row, i], [i, col], box[i])
     }
     for (const [r, c] of peers) {
       const key = cellKey(r, c)
@@ -3964,7 +3981,7 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
    * single is worded by rule3ExtensionClause instead. */
   private hiddenSingleClause(
     secondary: DragonColor,
-    cell: { row: number; col: number; digit: number; unitKind: 'row' | 'column' | 'box' },
+    cell: { row: number; col: number; digit: number; unitKind: 'row' | 'column' | 'box' | 'diagonal' },
   ): string {
     return `a hidden single at ${cellRef(cell.row, cell.col)}, since ${cell.digit} has nowhere else to go in its ${cell.unitKind}, so colour it ${colorLabel(secondary)}`
   }
@@ -4241,6 +4258,38 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     }
 
     const side: Side = covers.A ? 'A' : 'B'
+    // "Conflict-free" above means rows, columns and boxes - all Dragon's
+    // rules look at. Under Killer cages the full grid must also add up: one
+    // whose cage has the wrong sum (or a repeat) is no solution at all, just
+    // a side that turns out false in a way Dragon's rules don't see.
+    // The same goes for an Entropy puzzle's 2x2 squares: each must hold a
+    // low, a middle and a high digit, which no Dragon rule looks at either.
+    const { cages, entropy } = activeConstraints()
+    if (cages.length > 0 || entropy) {
+      const filled = board.map((row) => [...row])
+      for (const n of nodeMap.values()) {
+        if (sideOf(n.color) === side) {
+          filled[n.row][n.col] = n.digit
+        }
+      }
+      for (const cage of cages) {
+        const digits = cage.cells.map(([row, col]) => filled[row][col])
+        if (new Set(digits).size !== digits.length || digits.reduce((total, digit) => total + digit, 0) !== cage.sum) {
+          return null
+        }
+      }
+      if (entropy) {
+        for (const square of ENTROPY_SQUARES) {
+          let groups = 0
+          for (const [row, col] of square) {
+            groups |= 1 << entropyGroupOf(filled[row][col])
+          }
+          if (groups !== 7) {
+            return null
+          }
+        }
+      }
+    }
     return {
       id: '',
       kind: 'solution',
