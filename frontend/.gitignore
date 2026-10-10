@@ -13,6 +13,7 @@ dist-ssr
 ocr-fixtures/.out
 variant-tests/.out
 saved-puzzle-tests/.out
+share-link-tests/.out
 # tesseract.js caches its language data in the working directory (npm run test:ocr)
 eng.traineddata
 *.local

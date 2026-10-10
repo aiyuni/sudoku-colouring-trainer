@@ -113,6 +113,7 @@ import {
   savedPuzzleOfGrid,
   type SavedPuzzle,
 } from './savedPuzzles'
+import { decodeShareState, encodeShareState, shareLinkUrl, sharePayloadOf } from './shareLink'
 import {
   DEFAULT_SETTINGS,
   DRAGON_GENERATION_TIMEOUT_OPTIONS,
@@ -247,6 +248,13 @@ const AIC_RULE3_TECHNIQUES: ReadonlySet<Rule3Technique> = new Set<Rule3Technique
 ])
 const importer = new PuzzleImporter()
 const APP_VERSION = 'v0.8.8-beta'
+
+/** The root of the site this page is served from - what a share link
+ * (shareLink.ts) is built on: the deployed site's own address there, the
+ * dev server's here, so a link copied while developing opens locally. */
+function shareSiteUrl(): string {
+  return new URL(import.meta.env.BASE_URL, window.location.origin).href
+}
 
 /** The proven minimum number of givens a Sudoku needs to have a unique
  * solution - a board with fewer filled cells than this can never be
@@ -6105,6 +6113,11 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
    * import box and the paste shortcut. False (with the reason in the status
    * line) when the text isn't a puzzle. */
   async function importPuzzleText(text: string): Promise<boolean> {
+    // A share link ("Copy Link") pasted instead of opened.
+    const sharedPayload = sharePayloadOf(text)
+    if (sharedPayload !== null) {
+      return openSharedPuzzle(sharedPayload)
+    }
     // The Variant page's own puzzle text (givens, regions, cages, progress).
     // ...or a SudokuWiki Jigsaw / Killer string (shape=1&bd=..., or colours
     // and clue numbers).
@@ -6321,6 +6334,64 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       setImportText(puzzle)
     }
   }
+
+  /** "Copy Link": a link to this page with the whole position in it - what
+   * a Saved Puzzles entry holds - so opening it anywhere shows this grid
+   * (shareLink.ts). */
+  async function onCopyShareLink() {
+    const url = shareLinkUrl(encodeShareState(gridToSave()), variant, shareSiteUrl())
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast('Link copied to clipboard!')
+    } catch {
+      setStatus("Couldn't access the clipboard - here's the link to copy manually:")
+      setImportText(url)
+    }
+  }
+
+  /** Puts the position of a share link on the grid - one undoable step, like
+   * opening a saved puzzle, so the grid it replaces is an Undo away. A link
+   * that can't be read changes nothing and says why in the status line. */
+  function openSharedPuzzle(payload: string): boolean {
+    const decoded = decodeShareState(payload, variant)
+    if (!decoded.ok) {
+      setStatus(decoded.error)
+      trackEvent('share link', 'Open failed')
+      return false
+    }
+    // The link may be opened while a search or an import is still running:
+    // commit onto the grid as it is now.
+    latestRef.current.commitGrid(decoded.grid, null)
+    setOcrProofread(null)
+    setLayoutEditor(null)
+    setHighlightedDigit(null)
+    setStatus('Opened the shared puzzle. Undo brings back the grid you had before.')
+    trackEvent('share link', 'Open')
+    return true
+  }
+
+  // A share link opened directly, or pasted into the address bar of a tab
+  // already on this page (only the fragment changes, so nothing reloads).
+  // Once its puzzle is on the grid the fragment is taken off the address:
+  // from there the autosave is what a refresh restores - the shared position
+  // *and* whatever has been done to it since - where a link left in place
+  // would wipe that progress on every refresh. A link that couldn't be read
+  // stays in the address bar, to be looked at or corrected.
+  const openSharedPuzzleRef = useRef(openSharedPuzzle)
+  useLayoutEffect(() => {
+    openSharedPuzzleRef.current = openSharedPuzzle
+  })
+  useEffect(() => {
+    const openFromAddress = () => {
+      const payload = sharePayloadOf(window.location.hash)
+      if (payload !== null && openSharedPuzzleRef.current(payload)) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+    }
+    openFromAddress()
+    window.addEventListener('hashchange', openFromAddress)
+    return () => window.removeEventListener('hashchange', openFromAddress)
+  }, [])
 
   /** What a Saved Puzzles entry holds: the grid as it stands. A screenshot
    * import still being proofread is saved already locked, as the autosave
@@ -8487,6 +8558,9 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
             <button type="button" className="dropdown-item" onClick={() => setSavedPuzzlesList(loadSavedPuzzles())} disabled={busy}>
               Saved puzzles
             </button>
+            <button type="button" className="dropdown-item" onClick={onCopyShareLink} disabled={busy}>
+              Copy link to this grid
+            </button>
             {variant ? (
               <button type="button" className="dropdown-item" onClick={() => window.location.assign(import.meta.env.BASE_URL)}>
                 Classic solver
@@ -9111,6 +9185,15 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           }
         >
           Copy Original
+        </button>
+        <button
+          type="button"
+          className="copy-sc-button"
+          onClick={onCopyShareLink}
+          disabled={busy}
+          title="Copies a link to this page that opens with the grid exactly as it is now - givens, solved cells, candidates and colours. The whole position is in the link itself, so it works for anyone, on any device, for as long as this site does."
+        >
+          Copy Link
         </button>
       </div>
     </>
