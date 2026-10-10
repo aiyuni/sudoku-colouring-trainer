@@ -398,16 +398,20 @@ export const HELP_TABS: HelpTab[] = [
           {
             name: 'Prefer easiest techs within dragon',
             settingKey: 'techniquesListEasiestDragonTechniquesFirst',
-            description:
-              'The checkbox at the top of the Techniques tab. Decides the order of the Dynamic Dragon rows (and of the ' +
-              'Double Dynamic Dragon rows).\n\n' +
-              'ON: the Dragon that needs the easiest techniques comes first. First, the hardest technique group it uses ' +
-              '(Defaults, Advanced, Brutal, Unfair - the groups of Dragon Configuration\'s technique list). If tied, ' +
-              'the fewest techniques used within a step, counting only the Dragon\'s busiest step. If still ' +
-              'tied, the shortest Dragon.\n\n' +
-              'OFF: the shortest Dragon comes first, regardless of the technqiues used.\n\n' +
-              'Only the order of the list changes. It is separate from the Solve Path tab\'s checkbox of the same name: ' +
-              'neither affects the other.',
+description:
+'Controls the order of Dynamic Dragon and Double Dynamic Dragon rows in the Techniques tab.\n\n' +
+'ON: Sort by easiest techniques, then fewest techniques used in a single step, then shortest Dragon.\n\n' +
+'OFF: Sort by shortest Dragon, regardless of technique difficulty.\n\n' +
+'Only affects list order. Independent of the Solve Path tab\'s checkbox of the same name.',
+          },
+          {
+            name: 'Search for the easiest dragon',
+            settingKey: 'techniquesListSearchEasiestDragon',
+description:
+'Only available when "Prefer easiest techs within dragon" is ON. Affects the Techniques list only, not the Solve Path or Double Dynamic Dragons.\n\n' +
+'OFF: Use the first Dynamic Dragon found for each Medusa, even if it requires harder techniques.\n\n' +
+'ON: Search for the easiest Dragon by prioritizing technique groups (Defaults, Advanced, Brutal, Unfair), then fewer techniques within a step, then shortest Dragon. Only enabled techniques are used, and the max techniques per step is respected.\n\n' +
+'Easier Dragons may be longer and eliminate different candidates. The search is not guaranteed to find the absolute easiest Dragon, but can find them 99.9% of the time.',
           },
         ],
       },
@@ -433,26 +437,17 @@ export const HELP_TABS: HelpTab[] = [
             name: 'Prefer easiest techs within dragon',
             settingKey: 'preferEasiestDragonTechniques',
             description:
-              'Only available while Easy Solve is ON. Decides which Dragon a step takes when several of the same ' +
-              'kind are available - in practice, which Dynamic Dragon.\n\n' +
-              'ON: the Dragon that needs the easiest techniques wins. First, the hardest technique group it uses ' +
-              '(Defaults, Advanced, Brutal, Unfair - the groups of Dragon Configuration\'s technique list). If tied, ' +
-              'the fewest techniques chained in a single step, counting only the Dragon\'s busiest step. If still ' +
-              'tied, the shortest Dragon.\n\n' +
-              'OFF: the shortest Dragon wins, whatever techniques it needs.',
+            'Only available when Easy Solve is ON. Determines which Dragon is chosen when multiple Dragons of the same kind are available.\n\n' +
+            'ON: Prefer the easiest techniques, then the fewest techniques required in asingle step, then the shortest Dragon.\n\n' +
+            'OFF: Always prefer the shortest Dragon, regardless of technique difficulty.',
           },
           {
             name: 'Prefer easier double dragons',
             settingKey: 'preferEasierDoubleDragons',
             description:
-              'Only available while Easy Solve is ON (turning Easy Solve off turns this off too), and only matters ' +
-              'with Double Dynamic Dragon Colouring enabled.\n\n' +
-              'When every single Dynamic Dragon on the grid needs an Unfair technique, the Techniques list also shows ' +
-              'the Double Dynamic Dragons that work without any Unfair technique. Likewise, when every single Dynamic ' +
-              'Dragon needs something beyond the Defaults, it also shows the Double Dynamic Dragons that use only the ' +
-              'Defaults.\n\n' +
-              'ON: the solve path treats those Double Dynamic Dragons as easier than a single Dynamic Dragon.\n\n' +
-              'OFF: a Double Dynamic Dragon is always the hardest technique.',
+            'Only available when Easy Solve and Double Dynamic Dragon Colouring are enabled. Shows Double Dynamic Dragons that avoid Unfair techniques or use only Defaults when all single Dynamic Dragons require harder techniques.\n\n' +
+            'ON: Treat these Double Dynamic Dragons as easier than a single Dynamic Dragon.\n\n' +
+            'OFF: Double Dynamic Dragon is always the hardest technique.',
           },
           {
             name: 'Timeout',
@@ -479,6 +474,16 @@ export const HELP_TABS: HelpTab[] = [
               'Clears the grid so you can enter a puzzle of your own. Fill in its givens, then click "Confirm givens" under the grid: ' +
               'the digits become fixed givens and you can solve the puzzle as usual. ' +
               'The givens are only accepted when they have exactly one solution - otherwise you are told why and can keep editing.',
+          },
+        ],
+      },
+      {
+        title: 'Practice a non-colouring technique',
+        items: [
+          {
+            name: 'More…',
+            description:
+              'Here you can select a list of all enabled non-colouring techniques, and the generator will create a puzzle that can be solved using only those techniques. ',
           },
         ],
       },

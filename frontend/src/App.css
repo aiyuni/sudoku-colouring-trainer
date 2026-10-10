@@ -2813,25 +2813,58 @@ html:where([data-scheme="dark"]).app-busy .busy-cancel,
   color: var(--g-800);
 }
 
-.import-row {
+/* The card under the grid: importing on top, saving / copying below. A
+   .control-group like the ones beside the grid, so themes and the dark
+   scheme treat it the same. */
+.puzzle-io {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 0.5rem;
   margin: 1rem 0 0;
+  padding: 0.6rem 0.7rem 0.7rem;
+  container: puzzle-io / inline-size;
+}
+
+.puzzle-io > .control-label {
+  margin: 0 0 -0.15rem;
+}
+
+.puzzle-io > .control-label:not(:first-child) {
+  margin-top: 0.3rem;
+}
+
+.import-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.import-row > button {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  min-height: 2.3rem;
 }
 
 .import-input {
   flex: 1;
   min-width: 0;
-  min-height: 2.2rem;
+  min-height: 2.3rem;
   max-height: 10rem;
   resize: vertical;
   border: 1px solid var(--n-300);
   border-radius: 0.5rem;
-  padding: 0.55rem 0.75rem;
+  padding: 0.6rem 0.75rem;
   font: 500 0.8rem/1.2 'Segoe UI', system-ui, monospace;
   background: var(--surface);
   color: var(--n-900);
+}
+
+/* One line, cut short with "…": a wrapped placeholder showed half of its
+   second line in the one-row box. */
+.import-input::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .import-input:disabled {
@@ -2839,26 +2872,33 @@ html:where([data-scheme="dark"]).app-busy .busy-cancel,
   cursor: not-allowed;
 }
 
+/* Equal-width buttons: two by two, or all four in a row where the card is
+   wide enough for "Copy Puzzle As-Is" in a quarter of it. A container query
+   because the card follows the grid's width, not the window's; never three
+   and one. */
 .import-secondary-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
-  margin: 0.6rem 0 0;
 }
 
+@container puzzle-io (min-width: 36rem) {
+  .import-secondary-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* A single slim line the width of the card, the height of a button. */
 .image-import-drop {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
   gap: 0.3rem;
-  /* Narrow enough to share its row with Copy Puzzle As-Is and Copy Original; the text
-     wraps inside it rather than pushing the buttons onto their own line. */
-  flex: 1 1 9rem;
   min-width: 0;
-  padding: 0.6rem 0.75rem;
-  border: 2px dashed var(--n-300);
+  min-height: 2.3rem;
+  padding: 0.35rem 0.75rem;
+  border: 1.5px dashed var(--n-300);
   border-radius: 0.5rem;
   font-size: 0.8rem;
   color: var(--n-500);
@@ -2866,8 +2906,21 @@ html:where([data-scheme="dark"]).app-busy .busy-cancel,
   cursor: default;
 }
 
+.image-import-icon {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .copy-sc-button {
-  flex: 0 0 auto;
+  min-width: 0;
+  padding-inline: 0.4rem;
+  font-size: 0.85rem;
   white-space: nowrap;
 }
 
@@ -3822,7 +3875,7 @@ button.primary {
     'board tabs';
 }
 
-.compact-landscape > .header {
+.compact-landscape > .compact-header-row {
   grid-area: header;
   min-width: 0;
 }
@@ -4150,6 +4203,185 @@ button.primary {
   font-size: 1.1rem;
 }
 
+/* ---- tablets (.compact-tablet = the touch layout on anything but a phone) ----
+
+   A tablet used to get the desktop's full-length toolbar labels in the touch
+   layout, which wrapped onto three ragged rows on an iPad mini in portrait
+   (744px) and took ~150px of height out of the dock, so entering candidates
+   meant scrolling it. Now: the title row also holds the two "learn" buttons,
+   the toolbar is always one row of evenly filled buttons (icon + a short
+   word; Clear grid is in the "⋯" menu, as on a phone), the page uses the
+   screen's width, and the grid's size follows the screen's height so the dock
+   keeps enough room for a whole tab. Everything here is under .compact-tablet,
+   so neither the desktop page nor a phone can be reached by it. */
+
+.page.compact-portrait.compact-tablet {
+  max-width: 50rem;
+  padding-inline: calc(1rem + env(safe-area-inset-left)) calc(1rem + env(safe-area-inset-right));
+}
+
+.compact-header-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 var(--compact-gap);
+}
+
+.compact-header-row > .header {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compact-header-row .header h1 {
+  margin: 0;
+}
+
+.compact-header-actions {
+  display: flex;
+  flex: none;
+  gap: 0.4rem;
+}
+
+.compact-header-actions button {
+  min-height: 2.5rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+:where([data-scheme="dark"]) .compact-header-actions button {
+  color: #93c5fd;
+  border-color: #1e3a5f;
+  background: var(--n-850);
+}
+
+/* One row, every button a direct flex item of the toolbar (its groups are
+   display: contents here), each growing by the same share so the row ends
+   flush with the grid's page column instead of ragged. */
+.compact-tablet .main-toolbar {
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+}
+
+.compact-tablet .toolbar-group {
+  display: contents;
+}
+
+.compact-tablet .main-toolbar .toolbar-segment > button,
+.compact-tablet .main-toolbar .toolbar-hint-button,
+.compact-tablet .main-toolbar .dropdown-menu {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compact-tablet .main-toolbar .dropdown-menu > .dropdown-trigger {
+  width: 100%;
+}
+
+.compact-tablet .main-toolbar .toolbar-segment > button,
+.compact-tablet .main-toolbar .toolbar-hint-button,
+.compact-tablet .main-toolbar .dropdown-menu > .dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.5rem;
+  font-size: 0.875rem;
+  /* The label's leading space in the JSX keeps the words apart for the
+     analytics' button name; the gap does the spacing on screen. */
+  white-space: nowrap;
+}
+
+.compact-tablet .main-toolbar .toolbar-label {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-tablet .main-toolbar .toolbar-hint-button .toolbar-label,
+.compact-tablet .main-toolbar .dropdown-trigger .toolbar-label {
+  /* Drop the JSX's leading space (see above). */
+  margin-left: -0.25em;
+}
+
+/* Undo / Redo are their arrows alone unless the row is wide (the words
+   would cost the menus theirs on an iPad mini), and "⋯" has no word:
+   fixed-size buttons at the two ends of the row. */
+@media (orientation: landscape), (max-width: 49.99rem) {
+  .compact-tablet .main-toolbar .undo-trigger .toolbar-label,
+  .compact-tablet .main-toolbar .redo-trigger .toolbar-label {
+    display: none;
+  }
+
+  .compact-tablet .main-toolbar .toolbar-segment > .undo-trigger,
+  .compact-tablet .main-toolbar .toolbar-segment > .redo-trigger {
+    flex: 0 0 3.25rem;
+  }
+}
+
+.compact-tablet .main-toolbar .dropdown-menu:has(> .more-trigger) {
+  flex: 0 0 var(--compact-touch);
+}
+
+.compact-tablet .main-toolbar .more-trigger {
+  padding-inline: 0;
+  font-size: 1.1rem;
+}
+
+/* Not enough width for the words (a small tablet in portrait; the control
+   column beside the grid in landscape, which is the screen's width less the
+   grid's ~32rem): icons only, like a phone, still filling the row. Media
+   queries rather than a container query on the toolbar, because a container
+   would become the containing block of the menus' position: fixed panels. */
+@media (orientation: portrait) and (max-width: 45.99rem), (orientation: landscape) and (max-width: 77.99rem) {
+  .compact-tablet .main-toolbar .toolbar-label {
+    display: none;
+  }
+
+  .compact-tablet .main-toolbar .toolbar-segment > .undo-trigger,
+  .compact-tablet .main-toolbar .toolbar-segment > .redo-trigger,
+  .compact-tablet .main-toolbar .toolbar-hint-button,
+  .compact-tablet .main-toolbar .dropdown-menu {
+    flex: 1 1 0;
+  }
+
+  .compact-tablet .main-toolbar .toolbar-hint-button,
+  .compact-tablet .main-toolbar .dropdown-menu > .dropdown-trigger {
+    font-size: 1.1rem;
+  }
+}
+
+/* Portrait: the grid takes what the screen's height leaves once the title,
+   toolbar, tabs and a dock tall enough for the Digits or Colour tab without
+   scrolling (~30.5rem together) are taken off - bigger than the desktop's
+   32rem on a tall iPad, smaller on a short 8" tablet, where a full-width
+   grid used to leave the dock a ~12rem strip. A browser without dvh drops
+   this declaration and keeps the plain 32rem grid. */
+.compact-tablet.compact-portrait > .compact-board > .grid {
+  width: min(100%, clamp(26rem, calc(100dvh - 30.5rem), 40rem));
+}
+
+/* A grid past 32rem keeps the desktop's proportions: the digits grow with
+   it (5.94cqi and 2.66cqi are the desktop sizes at 32rem) instead of
+   stopping at their desktop sizes in ever larger cells. */
+.compact-tablet .compact-board .cell {
+  font-size: min(max(1.9rem, 5.94cqi), 7.6cqi);
+}
+
+.compact-tablet .compact-board .candidate {
+  font-size: min(max(0.85rem, 2.66cqi), 3.6cqi);
+}
+
+.compact-tablet .compact-board .grid.grid-killer .candidate {
+  font-size: min(max(0.72rem, 2.25cqi), 2.55cqi);
+}
+
 /* ---- Digits / Colour tabs: 3x3 pads become one row of 9 ---- */
 
 .compact-layout .control-group {
@@ -4286,28 +4518,18 @@ button.primary {
 
 /* ---- Import tab ---- */
 
-.compact-layout .import-row,
-.compact-layout .import-secondary-row {
+/* The dock tab is the frame already: no card inside it. */
+.compact-layout .puzzle-io {
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
 }
 
 .compact-layout .import-row button,
-.compact-layout .copy-sc-button {
-  min-height: var(--compact-touch);
-}
-
-/* Shares the row with the two copy buttons, as on desktop. The copy buttons
-   are ~110px each, so on a ~360px phone the drop zone only gets ~80px: a low
-   flex-basis keeps it on the row (its text wraps inside it) instead of
-   wrapping the whole box onto a line of its own. */
+.compact-layout .copy-sc-button,
 .compact-layout .image-import-drop {
-  flex-basis: 4rem;
   min-height: var(--compact-touch);
-  padding-inline: 0.5rem;
-}
-
-.compact-layout .copy-sc-button {
-  padding-inline: 0.6rem;
 }
 
 .compact-layout .image-import-browse {
@@ -5293,8 +5515,335 @@ button.primary {
   background: #172554;
 }
 
-/* The dialog's button, at the end of the import row. */
-.saved-puzzles-trigger {
-  flex: 0 0 auto;
-  white-space: nowrap;
+/* ---- Practice puzzle picker (practice/PracticePuzzleDialog.tsx) ----
+   The confirm dialog's backdrop and card, wider, with the technique list in
+   four collapsible sections. Blue accept button, as for an import: nothing
+   here is a risky choice. */
+.practice-dialog {
+  width: min(36rem, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.practice-dialog .confirm-icon {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.practice-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.practice-categories {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0.6rem;
+  padding-right: 0.25rem;
+  overflow-y: auto;
+  max-height: min(52vh, 30rem);
+}
+
+.practice-category {
+  border: 1px solid var(--n-300);
+  border-radius: 0.6rem;
+}
+
+.practice-category-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: var(--n-100);
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.practice-category-header:hover {
+  background: var(--n-200);
+}
+
+.practice-caret {
+  flex: none;
+  width: 1rem;
+  color: var(--n-500);
+}
+
+.practice-category-count {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--n-500);
+}
+
+.practice-techniques {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+}
+
+.practice-technique {
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+}
+
+.practice-technique-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.practice-technique-button {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.55rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.practice-technique-button:hover:not(:disabled) {
+  background: var(--n-100);
+}
+
+.practice-technique-selected .practice-technique-button:hover:not(:disabled) {
+  background: transparent;
+}
+
+.practice-technique-button:disabled {
+  cursor: not-allowed;
+}
+
+.practice-technique-off .practice-technique-name {
+  color: var(--n-400);
+}
+
+.practice-radio {
+  flex: none;
+  align-self: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  border: 2px solid var(--n-400);
+  border-radius: 50%;
+}
+
+.practice-technique-selected .practice-radio {
+  border-color: #2563eb;
+  background: radial-gradient(#2563eb 0 45%, transparent 50%);
+}
+
+.practice-technique-off .practice-radio {
+  border-color: var(--n-300);
+}
+
+.practice-technique-name {
+  font-weight: 600;
+}
+
+.practice-off-note {
+  font-size: 0.8rem;
+  color: var(--n-500);
+}
+
+.practice-patterns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0 0.5rem 0.45rem 2rem;
+}
+
+.practice-pattern {
+  padding: 0.18rem 0.6rem;
+  border: 1px solid var(--n-300);
+  border-radius: 999px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.practice-pattern:hover:not(:disabled) {
+  border-color: #60a5fa;
+}
+
+.practice-pattern-selected,
+.practice-pattern-selected:hover:not(:disabled) {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.practice-pattern:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.practice-status {
+  min-height: 2.6rem;
+}
+
+.practice-status .practice-status-line {
+  margin: 0.3rem 0;
+  font-size: 0.88rem;
+}
+
+.practice-status-none {
+  color: var(--n-500);
+}
+
+.practice-status-timeout,
+.practice-status-failed {
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.5rem;
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.practice-progress {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--n-200);
+  overflow: hidden;
+}
+
+.practice-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: #2563eb;
+  transition: width 200ms linear;
+}
+
+.confirm-actions .practice-generate {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.confirm-actions .practice-generate:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.confirm-actions .practice-generate:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+:where([data-scheme="dark"]) .practice-dialog .confirm-icon {
+  background: #172554;
+  color: #93c5fd;
+}
+
+:where([data-scheme="dark"]) .practice-category {
+  border-color: var(--n-600);
+}
+
+:where([data-scheme="dark"]) .practice-category-header {
+  background: var(--n-700);
+}
+
+:where([data-scheme="dark"]) .practice-category-header:hover {
+  background: var(--n-600);
+}
+
+:where([data-scheme="dark"]) .practice-category-count,
+:where([data-scheme="dark"]) .practice-off-note,
+:where([data-scheme="dark"]) .practice-status-none {
+  color: var(--n-400);
+}
+
+:where([data-scheme="dark"]) .practice-technique-selected {
+  border-color: #60a5fa;
+  background: #172554;
+}
+
+:where([data-scheme="dark"]) .practice-technique-button:hover:not(:disabled) {
+  background: var(--n-700);
+}
+
+:where([data-scheme="dark"]) .practice-technique-selected .practice-technique-button:hover:not(:disabled) {
+  background: transparent;
+}
+
+:where([data-scheme="dark"]) .practice-technique-off .practice-technique-name {
+  color: var(--n-500);
+}
+
+:where([data-scheme="dark"]) .practice-technique-selected .practice-radio {
+  border-color: #60a5fa;
+  background: radial-gradient(#60a5fa 0 45%, transparent 50%);
+}
+
+:where([data-scheme="dark"]) .practice-technique-off .practice-radio {
+  border-color: var(--n-600);
+}
+
+:where([data-scheme="dark"]) .practice-pattern {
+  border-color: var(--n-600);
+  background: var(--n-800);
+}
+
+:where([data-scheme="dark"]) .practice-pattern-selected,
+:where([data-scheme="dark"]) .practice-pattern-selected:hover:not(:disabled) {
+  border-color: #3b82f6;
+  background: #2563eb;
+  color: #fff;
+}
+
+:where([data-scheme="dark"]) .practice-status-timeout,
+:where([data-scheme="dark"]) .practice-status-failed {
+  background: #451a03;
+  color: #fde68a;
+}
+
+:where([data-scheme="dark"]) .practice-progress {
+  background: var(--n-700);
+}
+
+.practice-from-start {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.1rem 0 0.4rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--n-300);
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+
+.practice-from-start input {
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0.15rem 0 0;
+}
+
+.practice-from-start-note {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--n-600);
+}
+
+:where([data-scheme="dark"]) .practice-from-start {
+  border-color: var(--n-600);
+}
+
+:where([data-scheme="dark"]) .practice-from-start-note {
+  color: var(--n-400);
 }

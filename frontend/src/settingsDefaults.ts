@@ -115,6 +115,11 @@ export interface AppSettings {
    * first instead of shortest first. Its own setting - independent of the
    * Solve Path's preferEasiestDragonTechniques, neither affects the other. */
   techniquesListEasiestDragonTechniquesFirst: boolean
+  /** Techniques tab, only while the setting above is on: each chain's Dynamic
+   * Dragon row is the easiest one a tiered search reaches (technique group,
+   * then techniques per step, then length - findEasiestDynamicDragon), not
+   * the first Dragon the search builds. The list only. */
+  techniquesListSearchEasiestDragon: boolean
   solvePathTimeoutMs: number
   /** Keyboard shortcuts (Settings -> Keyboard shortcuts), see hotkeys.ts. */
   hotkeys: HotkeyBindings
@@ -163,6 +168,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   preferEasierDoubleDragons: false,
   preferEasiestDragonTechniques: true,
   techniquesListEasiestDragonTechniquesFirst: true,
+  techniquesListSearchEasiestDragon: false,
   solvePathTimeoutMs: 12_000,
   hotkeys: DEFAULT_HOTKEYS,
 }

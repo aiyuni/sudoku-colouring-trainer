@@ -135,6 +135,23 @@ export interface DragonExtendOptions {
    * either way - exactly as when false), only how much it reports, so
    * callers that only need to know if a chain resolves can leave it off. */
   exhaustive?: boolean
+  /** A work budget for the whole run, in Extension Rule 3 simulation steps
+   * (one pass of extensionRule3Moves' inner loop: every technique finder
+   * tried once on one hypothetical grid) plus the states the Optimize search
+   * settles (searchFewerExtensions). When it runs out the run is
+   * abandoned and extend() returns null - "no answer", not "stuck". Unset
+   * (every caller but techniqueEngine's findEasiestDynamicDragon), nothing
+   * is counted and nothing changes.
+   *
+   * It exists because some option combinations have no bound of their own:
+   * under the AIC limit every AIC of a tier is tried in its own branch, and
+   * a per-step limit keeps the search going through all of them (2026-10-09:
+   * 84 s for one Techniques list, 2 s without the limit). A caller
+   * that only wants "a better Dragon, if one is cheap to find" sets this
+   * and keeps what it had on null. A step count, not a clock, so the same
+   * grid and settings always give the same answer. Only honoured by
+   * extend(). */
+  rule3StepBudget?: number
   /** Optimize Dragons - defaults to false (the original behaviour: the two
    * sides take turns to extend). When true, each stretch of colouring up to
    * an elimination (the first one, and in exhaustive mode each later one)
@@ -753,6 +770,10 @@ function sameUnit(a: readonly [number, number], b: readonly [number, number]): b
  * runs live, on every board/candidate change). */
 const MAX_RULE3_SIMULATION_STEPS = 200
 
+/** Thrown from the simulation when DragonExtendOptions.rule3StepBudget runs
+ * out, caught in extend(). */
+const RULE3_STEP_BUDGET_SPENT = new Error('Extension Rule 3 step budget spent')
+
 /** "Limit to 1 AIC per step" while collecting every move (Optimize Dynamic
  * Dragons' enumeration, Autocomplete): the most AIC branches one simulation
  * tries - see extensionRule3Moves. A single move (the default loop) tries
@@ -1046,6 +1067,13 @@ export class SudokuDragonFinder {
   /** Extension Rule 3 finder results by hypothetical grid - see memoFind. */
   private readonly finderMemo = new Map<string, unknown>()
 
+  /** What is left of the running extend()'s rule3StepBudget; Infinity (and
+   * never anything else) when the caller set none. */
+  private rule3StepsLeft = Infinity
+  /** Simulation steps the last budgeted extend() used (its whole budget when
+   * it was abandoned), for a caller sharing one budget between several runs. */
+  lastRule3StepsUsed = 0
+
   /** Every Rule 3 technique finder is a pure function of (board,
    * candidates), and the same hypothetical grid comes up again and again:
    * the default path, Optimize's fallback and Optimize Dynamic's every-move
@@ -1110,7 +1138,25 @@ export class SudokuDragonFinder {
     for (const n of seed) {
       nodeMap.set(nodeKey(n.row, n.col, n.digit), n)
     }
-    return this.extendFromState(nodeMap, [this.buildMedusaMove(seed)], board, candidates, options)
+    const budget = options.rule3StepBudget
+    if (budget === undefined) {
+      return this.extendFromState(nodeMap, [this.buildMedusaMove(seed)], board, candidates, options)
+    }
+    // Nothing the run leaves behind is half-done when it is abandoned: the
+    // finder memo only ever holds finished finder results, and everything
+    // else is local to the run.
+    this.rule3StepsLeft = budget
+    try {
+      return this.extendFromState(nodeMap, [this.buildMedusaMove(seed)], board, candidates, options)
+    } catch (error) {
+      if (error !== RULE3_STEP_BUDGET_SPENT) {
+        throw error
+      }
+      return null
+    } finally {
+      this.lastRule3StepsUsed = budget - Math.max(this.rule3StepsLeft, 0)
+      this.rule3StepsLeft = Infinity
+    }
   }
 
   /** Double Dragon Colouring's first Dragon: plain Dragon Colouring (the
@@ -2275,6 +2321,12 @@ export class SudokuDragonFinder {
               if (++statesTried > (continuing ? OPTIMIZE_MAX_SEARCH_STATES_LATER_PHASES : OPTIMIZE_MAX_SEARCH_STATES)) {
                 return null
               }
+              // DragonExtendOptions.rule3StepBudget: a state the search
+              // settles is a unit of work too (the per-phase cap above still
+              // lets an Exhaustive run with many phases go on for minutes).
+              if (--this.rule3StepsLeft < 0) {
+                throw RULE3_STEP_BUDGET_SPENT
+              }
               const outcome = settle(child)
               if (outcome.kind === 'extend') {
                 next.push(child)
@@ -2941,10 +2993,21 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
     const emit = (move: DragonMove): boolean => {
       const [n] = move.colored
       const key = nodeKey(n.row, n.col, n.digit)
-      if (known.has(key) || emitted.has(key)) {
+      if (known.has(key)) {
         return false
       }
+      // Into `known` whatever happens next, or emitForcedCells finds the
+      // same cell again for ever. Until 2026-10-09 a candidate that was
+      // already reported but not `known` returned before this line - which
+      // is exactly a candidate an AIC branch reported, met again on the main
+      // line (whose `known` is put back after the branch): an endless loop
+      // in the every-move enumeration (Optimize Dynamic Dragons) under the
+      // AIC limit. Looking for one move (`limit` 1) it could not happen:
+      // nothing is reported before the search ends.
       known.set(key, n)
+      if (emitted.has(key)) {
+        return false
+      }
       if ((move.dynamicTechniques?.length ?? 0) > maxTechniquesPerStep) {
         return false
       }
@@ -3031,6 +3094,10 @@ description: `Medusa extension(s) using promoted Colour(s): ${added
      * (stop), false when nothing more applies. */
     const run = (hypCandidates: CandidateGrid, steps: Rule3ChainStep[], aicMode: AicMode): boolean => {
     for (let step = 0; step < MAX_RULE3_SIMULATION_STEPS; step++) {
+      // DragonExtendOptions.rule3StepBudget (Infinity, so never, without one).
+      if (--this.rule3StepsLeft < 0) {
+        throw RULE3_STEP_BUDGET_SPENT
+      }
       let appliedSomething = false
       const grid = gridKey(hypBoard, hypCandidates)
 

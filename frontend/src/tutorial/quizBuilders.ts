@@ -635,8 +635,8 @@ function colouringQuestions(options: {
         : outsideReason(pick),
     explain:
       remaining > need
-        ? 'The rest of the chain is coloured the same way, one link at a time.'
-        : 'That is the whole chain: every link coloured, colours alternating.',
+        ? 'The rest is coloured the same way, one link at a time.'
+        : 'That is the whole colouring: every link coloured, colours alternating.',
     doneFrame: { coloured: order, spotlight },
   }
   return [whichColour, extend]

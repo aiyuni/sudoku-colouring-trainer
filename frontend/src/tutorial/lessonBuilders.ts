@@ -800,7 +800,7 @@ function medusaConclusionFrames(
       {
         badge: 'Result',
         caption: wholeChain
-          ? `So ${falseColor} is false and ${trueColor} is true. Colouring the rest of the chain the same way, every ${trueColor} candidate is a solution and every ${falseColor} candidate goes.`
+          ? `So ${falseColor} is false and ${trueColor} is true. Colouring the rest of the Medusa the same way, every ${trueColor} candidate is a solution and every ${falseColor} candidate goes.`
           : `So ${trueColor} is true: it solves its cells, and every ${falseColor} candidate goes.`,
         coloured: wholeChain ?? coloured,
         links: wholeChain ? [] : arrows,

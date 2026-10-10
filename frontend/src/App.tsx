@@ -170,6 +170,8 @@ import { techniqueUnavailableReason, type TechniqueKey } from './sudoku/variantA
 import { VariantGridOverlay } from './variant/VariantGridOverlay'
 import { VariantLayoutPanel, type LayoutEditor } from './variant/VariantLayoutPanel'
 import { VariantImportDialog, type VariantImportChoice } from './variant/VariantImportDialog'
+import { PracticePuzzleDialog } from './practice/PracticePuzzleDialog'
+import type { PracticeSolverSettings } from './practice/practiceTargets'
 import { VARIANT_HELP_QUICKSTART, VARIANT_HELP_QUICKSTART_HEADING, variantHelpTabs } from './variant/variantHelpContent'
 import {
   singleFinder,
@@ -1791,6 +1793,10 @@ interface TechniquePanelProps {
    * Dragon rows. Independent of the Solve Path's one above. */
   listEasiestDragonTechniquesFirst: boolean
   onToggleListEasiestDragonTechniquesFirst: () => void
+  /** "Search for the easiest dragon": which Dragon each chain's row is. Only
+   * settable (and only applied) while the checkbox above is ticked. */
+  listSearchEasiestDragon: boolean
+  onToggleListSearchEasiestDragon: () => void
   solvePathTimeoutMs: number
   onSolvePathTimeoutChange: (event: ChangeEvent<HTMLSelectElement>) => void
   panelRef?: Ref<HTMLDivElement>
@@ -1861,6 +1867,8 @@ function TechniquePanel({
   onTogglePreferEasiestDragonTechniques,
   listEasiestDragonTechniquesFirst,
   onToggleListEasiestDragonTechniquesFirst,
+  listSearchEasiestDragon,
+  onToggleListSearchEasiestDragon,
   solvePathTimeoutMs,
   onSolvePathTimeoutChange,
   panelRef,
@@ -2011,6 +2019,18 @@ function TechniquePanel({
               onChange={onToggleListEasiestDragonTechniquesFirst}
             />
             Prefer easiest techs within dragon
+          </label>
+          <label
+            className="technique-list-option"
+            title="Which Dynamic Dragon each Medusa base gets. On: the easiest one the solver can find - Defaults techniques only first, then Advanced, Brutal and Unfair added in turn; then the fewest techniques in any one step; then the shortest Dragon. Off: the first Dragon the solver builds. Often a longer Dragon, and slower to list. Techniques list only. Needs 'Prefer easiest techs within dragon'."
+          >
+            <input
+              type="checkbox"
+              checked={listSearchEasiestDragon && listEasiestDragonTechniquesFirst}
+              disabled={!listEasiestDragonTechniquesFirst}
+              onChange={onToggleListSearchEasiestDragon}
+            />
+            Search for the easiest dragon
           </label>
           <p className="technique-empty" style={{ marginBottom: '0.75rem' }}>
             Click on a technique and click on the "Apply" button to execute the technique.
@@ -2740,6 +2760,34 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     if (finnedSwordfishEnabled) enabled.add('finned swordfish')
     return enabled
   }, [xWingEnabled, finnedXWingEnabled, swordfishEnabled, finnedSwordfishEnabled])
+  // The practice-puzzle picker's view of the Technique Selections: which
+  // techniques it may offer, and what its generator counts as easier.
+  const practiceSettings = useMemo<PracticeSolverSettings>(
+    () => ({
+      shortSingleDigitAicEnabled,
+      shortAicEnabled,
+      genericAicEnabled,
+      enabledFish: [...enabledFish],
+      alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
+      enabledExotic: [...enabledExotic],
+      doubleDragonEnabled,
+    }),
+    [
+      shortSingleDigitAicEnabled,
+      shortAicEnabled,
+      genericAicEnabled,
+      enabledFish,
+      alsXzEnabled,
+      urAicEnabled,
+      alsAicEnabled,
+      groupedAicEnabled,
+      enabledExotic,
+      doubleDragonEnabled,
+    ],
+  )
   // Invariants, kept by the toggle handlers rather than derived at read
   // time (so the stored state never says something the checkboxes can't):
   //  - genericAicEnabled implies shortAicEnabled implies shortSingleDigitAicEnabled
@@ -2784,6 +2832,12 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   const [listEasiestDragonTechniquesFirst, setListEasiestDragonTechniquesFirst] = useState(
     initialSettings.techniquesListEasiestDragonTechniquesFirst,
   )
+  // "Search for the easiest dragon", under it: only applied while the
+  // checkbox above is ticked, and keeps its value while that one is off
+  // (as the Solve Path's checkboxes do under Easy Solve).
+  const [listSearchEasiestDragon, setListSearchEasiestDragon] = useState(
+    initialSettings.techniquesListSearchEasiestDragon,
+  )
   const [solvePathTimeoutMs, setSolvePathTimeoutMs] = useState(initialSettings.solvePathTimeoutMs)
   const [dynamicDragonAutoSolveIncludesAics, setDynamicDragonAutoSolveIncludesAics] = useState(
     initialSettings.dynamicDragonAutoSolveIncludesAics,
@@ -2806,11 +2860,20 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // page's list as last read from localStorage - re-read on every open, so a
   // save made in another tab is there.
   const [savedPuzzlesList, setSavedPuzzlesList] = useState<SavedPuzzle[] | null>(null)
+  // Generate Puzzle -> "More...": the technique picker (Classic page) and
+  // the last pick made in it. Session-only view state.
+  const [practiceDialogOpen, setPracticeDialogOpen] = useState(false)
+  const [practiceTargetId, setPracticeTargetId] = useState<string | null>(null)
+  const [practiceFromStart, setPracticeFromStart] = useState(false)
   const [confirmAllPossibleTechniquesOpen, setConfirmAllPossibleTechniquesOpen] = useState(false)
   // Where How It Works is open (null: closed) - a hint's "Learn this
   // technique" link opens it on that technique's tab/sub-tab.
   const [tutorialTarget, setTutorialTarget] = useState<TutorialTarget | null>(null)
   const { compact, phone, landscape } = useCompactLayout()
+  // Touch layout on a tablet: the phone's one-row toolbar, but with a short
+  // word beside each icon while the row has the width for it (App.css hides
+  // the words, `.toolbar-label`, when it doesn't).
+  const tablet = compact && !phone
   // Touch device with no hardware keyboard: the Keyboard Input switches and
   // keyboard-shortcut settings are hidden (always true on desktop).
   const hasKeyboard = useHasKeyboard(compact)
@@ -3188,6 +3251,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       minBaseMedusaFilter,
       allPossibleTechniques,
       listEasiestDragonTechniquesFirst,
+      listSearchEasiestDragon: listSearchEasiestDragon && listEasiestDragonTechniquesFirst,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -3215,6 +3279,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       minBaseMedusaFilter,
       allPossibleTechniques,
       listEasiestDragonTechniquesFirst,
+      listSearchEasiestDragon,
       effectiveAllowedRule3Techniques,
       shortAicEnabled,
       shortSingleDigitAicEnabled,
@@ -3303,6 +3368,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
         analysis.allPossibleTechniques,
         false,
         analysis.listEasiestDragonTechniquesFirst,
+        analysis.listSearchEasiestDragon,
       )),
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
@@ -3310,6 +3376,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       candidatesAccurate,
       analysis.allPossibleTechniques,
       analysis.listEasiestDragonTechniquesFirst,
+      analysis.listSearchEasiestDragon,
       analysis.enabledFish,
       analysis.enabledExotic,
       analysis.alsXzEnabled,
@@ -3664,6 +3731,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       preferEasierDoubleDragons,
       preferEasiestDragonTechniques,
       techniquesListEasiestDragonTechniquesFirst: listEasiestDragonTechniquesFirst,
+      techniquesListSearchEasiestDragon: listSearchEasiestDragon,
       solvePathTimeoutMs,
       hotkeys,
     }),
@@ -3710,6 +3778,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       preferEasierDoubleDragons,
       preferEasiestDragonTechniques,
       listEasiestDragonTechniquesFirst,
+      listSearchEasiestDragon,
       solvePathTimeoutMs,
       hotkeys,
     ],
@@ -5106,6 +5175,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     setPreferEasierDoubleDragons(DEFAULT_SETTINGS.preferEasierDoubleDragons)
     setPreferEasiestDragonTechniques(DEFAULT_SETTINGS.preferEasiestDragonTechniques)
     setListEasiestDragonTechniquesFirst(DEFAULT_SETTINGS.techniquesListEasiestDragonTechniquesFirst)
+    setListSearchEasiestDragon(DEFAULT_SETTINGS.techniquesListSearchEasiestDragon)
     setSolvePathTimeoutMs(DEFAULT_SETTINGS.solvePathTimeoutMs)
     setAicLimitPerDragonStep(DEFAULT_SETTINGS.aicLimitPerDragonStep)
     setMaxTechniquesPerDragonStep(DEFAULT_SETTINGS.maxTechniquesPerDragonStep)
@@ -5166,6 +5236,10 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
 
   function toggleListEasiestDragonTechniquesFirst() {
     setListEasiestDragonTechniquesFirst((current) => !current)
+  }
+
+  function toggleListSearchEasiestDragon() {
+    setListSearchEasiestDragon((current) => !current)
   }
 
   function onDragonGenerationTimeoutChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -7392,28 +7466,30 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           className="undo-trigger"
           onClick={undo}
           disabled={busy || !canUndo}
-          aria-label={phone ? 'Undo' : undefined}
-          title={phone ? 'Undo' : undefined}
+          aria-label={compact ? 'Undo' : undefined}
+          title={compact ? 'Undo' : undefined}
         >
           <UndoRedoIcon direction="undo" />
-          {!phone && <span>Undo</span>}
+          {!phone && <span className="toolbar-label">Undo</span>}
         </button>
         <button
           type="button"
           className="redo-trigger"
           onClick={redo}
           disabled={busy || !canRedo}
-          aria-label={phone ? 'Redo' : undefined}
-          title={phone ? 'Redo' : undefined}
+          aria-label={compact ? 'Redo' : undefined}
+          title={compact ? 'Redo' : undefined}
         >
           <UndoRedoIcon direction="redo" />
-          {!phone && <span>Redo</span>}
+          {!phone && <span className="toolbar-label">Redo</span>}
         </button>
         </div>
-        {/* On a phone, Clear grid / Learn techniques / ? move into the
-            "⋯" menu at the end so the toolbar stays one row - every row
-            above the grid comes out of the dock's height. */}
-        {!phone && (
+        {/* In the touch layout the toolbar stays one row - every row above
+            the grid comes out of the dock's height. Clear grid moves into
+            the "⋯" menu at the end; Learn techniques / Quickstart go there
+            too on a phone, and beside the page title on a tablet
+            (tabletHeaderActions). */}
+        {!compact && (
           <button type="button" className="clear-grid-trigger" onClick={onClear} disabled={busy}>
             Clear grid
           </button>
@@ -7434,12 +7510,12 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           title="Get a hint about the easiest technique on the grid, one step at a time."
         >
           <span aria-hidden="true">💡</span>
-          {!phone && ' Hint'}
+          {!phone && <span className="toolbar-label"> Hint</span>}
         </button>
       )}
 
       <div className="toolbar-group toolbar-group-end">
-        {!phone && (
+        {!compact && (
           <div className="toolbar-segment">
             {variant ? (
               // How It Works teaches on Classic positions, so it lives on the
@@ -7486,13 +7562,18 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
                 ) : (
                   '🧩'
                 )
+              ) : tablet ? (
+                <>
+                  {generating ? '⏳' : '🧩'}
+                  <span className="toolbar-label"> {generating ? 'Generating…' : 'Puzzle'}</span>
+                </>
               ) : (
                 <>
                   {generating ? 'Generating…' : 'Puzzle'} <span className="dropdown-caret">▾</span>
                 </>
               )
             }
-            ariaLabel={phone ? (generating ? 'Generating puzzle' : 'Puzzle') : undefined}
+            ariaLabel={compact ? (generating ? 'Generating puzzle' : 'Puzzle') : undefined}
             buttonClassName="generate-puzzle-trigger"
             closeOnItemClick
           >
@@ -7617,6 +7698,12 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
               ) : (
                 '🧩'
               )
+            ) : tablet ? (
+              // Tablet: the phone's icon plus a short name.
+              <>
+                {generating ? '⏳' : '🧩'}
+                <span className="toolbar-label"> {generating ? 'Generating…' : 'Puzzle'}</span>
+              </>
             ) : (
             <>
               {generating ? (
@@ -7640,7 +7727,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
             </>
             )
           }
-          ariaLabel={phone ? (generating ? 'Generating puzzle' : 'Generate Puzzle') : undefined}
+          ariaLabel={compact ? (generating ? 'Generating puzzle' : 'Generate Puzzle') : undefined}
           buttonClassName="generate-puzzle-trigger"
         >
           <div className="dropdown-section">
@@ -7697,7 +7784,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
               disabled={busy || !doubleDragonEnabled}
               title={
                 doubleDragonEnabled
-                  ? 'Picks a puzzle state where plain Dragon Colouring is stuck on every chain, but Double Dragon Colouring can progress (a Dynamic Dragon may too)'
+                  ? 'Picks a puzzle state where plain Dragon Colouring is stuck, but Double Dragon Colouring can progress (a Dynamic Dragon may too)'
                   : 'Turn on Double Dragon Colouring in Dragon Configuration first'
               }
             >
@@ -7731,6 +7818,15 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
               }
             >
               Double Dynamic Dragon Colouring puzzle
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => setPracticeDialogOpen(true)}
+              disabled={busy}
+              title="Pick any other technique (or one of its named patterns) and get a puzzle state where it is the easiest technique that can make progress"
+            >
+              More…
             </button>
           </div>
           <div className="dropdown-divider" />
@@ -7801,7 +7897,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
             </label>
             <label
               className="menu-checkbox"
-              title="When on, a Dynamic Dragon puzzle is a state where plain Dragon Colouring is stuck on every chain, so Dynamic Dragon is the only way forward. These are too rare to generate live, so one is picked instantly from a built-in stock instead. When off, plain Dragon may still work on some other chain."
+              title="When on, a Dynamic Dragon puzzle is a state where plain Dragon Colouring is stuck, so Dynamic Dragon is the only way forward. These are too rare to generate live, so one is picked instantly from a built-in stock instead. When off, some other plain Dragon may still work."
             >
               <input
                 type="checkbox"
@@ -7856,13 +7952,17 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           label={
             phone ? (
               '🐉'
+            ) : tablet ? (
+              <>
+                🐉<span className="toolbar-label"> Dragon</span>
+              </>
             ) : (
               <>
                 Dragon Configuration <span className="dropdown-caret">▾</span>
               </>
             )
           }
-          ariaLabel={phone ? 'Dragon Configuration' : undefined}
+          ariaLabel={compact ? 'Dragon Configuration' : undefined}
           buttonClassName="dragon-config-trigger"
           align="right"
         >
@@ -7945,7 +8045,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
               title={
                 dynamicDragonDisabled
                   ? 'Dynamic Dragons are disabled, so this has no effect'
-                  : 'The most technique applications (of any kind) a single Dynamic Dragon Colouring step may chain to find its new colour. Naked and hidden singles do not count.'
+                  : 'The most technique applications (of any kind) a single Dynamic Dragon Colouring step may use to find its new colour. Naked and hidden singles do not count.'
               }
             >
               Max techniques per step
@@ -7968,7 +8068,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
               className="menu-checkbox"
               title={
                 doubleDynamicDragonUnavailableReason ??
-                  'When on, the solver also looks for Double Dynamic Dragon Colouring: two linked Dragons, like Double Dragon Colouring, where at least one of them is Dynamic. Only chains single Dynamic Dragon is stuck on are used. Follows the Dynamic Dragon settings (techniques, AIC limit, max techniques per step), Exhaustive Dragon Colouring and Optimize Dynamic Dragons. Also enables the Double Dynamic Dragon practice puzzle.'
+                  'When on, the solver also looks for Double Dynamic Dragon Colouring: two linked Dragons, like Double Dragon Colouring, where at least one of them is Dynamic. Only Dragons that single Dynamic Dragon Colouring is stuck on are used. Follows the Dynamic Dragon settings (techniques, AIC limit, max techniques per step), Exhaustive Dragon Colouring and Optimize Dynamic Dragons. Also enables the Double Dynamic Dragon practice puzzle.'
               }
             >
               <input
@@ -8082,13 +8182,18 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           label={
             phone ? (
               <MedusaIcon />
+            ) : tablet ? (
+              <>
+                <MedusaIcon />
+                <span className="toolbar-label"> Select Techs</span>
+              </>
             ) : (
               <>
                 <MedusaIcon /> Technique Selections <span className="dropdown-caret">▾</span>
               </>
             )
           }
-          ariaLabel={phone ? 'Technique Selections' : undefined}
+          ariaLabel={compact ? 'Technique Selections' : undefined}
           buttonClassName="technique-selections-trigger"
           align="right"
         >
@@ -8404,13 +8509,17 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           label={
             phone ? (
               '⚙'
+            ) : tablet ? (
+              <>
+                ⚙<span className="toolbar-label"> Settings</span>
+              </>
             ) : (
               <>
                 ⚙ Settings <span className="dropdown-caret">▾</span>
               </>
             )
           }
-          ariaLabel={phone ? 'Settings' : undefined}
+          ariaLabel={compact ? 'Settings' : undefined}
           buttonClassName="settings-trigger"
           panelClassName="settings-panel"
           align="right"
@@ -8539,7 +8648,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           </div>
         </DropdownMenu>
         </div>
-        {phone && (
+        {compact && (
           <DropdownMenu
           trackingName="More"
             label="⋯"
@@ -8549,38 +8658,79 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
             closeOnItemClick
           >
             {/* The page title, hidden above the toolbar on a phone. */}
-            <h3 className="dropdown-section-title">
-              {variant ? 'Variant Sudoku Colouring Solver' : 'Sudoku Colouring Solver/Trainer'} {APP_VERSION}
-            </h3>
+            {phone && (
+              <h3 className="dropdown-section-title">
+                {variant ? 'Variant Sudoku Colouring Solver' : 'Sudoku Colouring Solver/Trainer'} {APP_VERSION}
+              </h3>
+            )}
             <button type="button" className="dropdown-item" onClick={onClear} disabled={busy}>
               Clear grid
             </button>
             <button type="button" className="dropdown-item" onClick={() => setSavedPuzzlesList(loadSavedPuzzles())} disabled={busy}>
-              Saved puzzles
+              Save and load puzzles
             </button>
             <button type="button" className="dropdown-item" onClick={onCopyShareLink} disabled={busy}>
               Copy link to this grid
             </button>
-            {variant ? (
-              <button type="button" className="dropdown-item" onClick={() => window.location.assign(import.meta.env.BASE_URL)}>
-                Classic solver
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="dropdown-item"
-                title="Learn the colouring techniques, step by step"
-                onClick={() => setTutorialTarget({ tab: 'basics' })}
-              >
-                Learn techniques
+            {/* A tablet has these two beside the page title instead. */}
+            {phone &&
+              (variant ? (
+                <button type="button" className="dropdown-item" onClick={() => window.location.assign(import.meta.env.BASE_URL)}>
+                  Classic solver
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="dropdown-item"
+                  title="Learn the colouring techniques, step by step"
+                  onClick={() => setTutorialTarget({ tab: 'basics' })}
+                >
+                  Learn techniques
+                </button>
+              ))}
+            {phone && (
+              <button type="button" className="dropdown-item" onClick={() => setHelpOpen({})}>
+                Settings guide (?)
               </button>
             )}
-            <button type="button" className="dropdown-item" onClick={() => setHelpOpen({})}>
-              Settings guide (?)
-            </button>
           </DropdownMenu>
         )}
       </div>
+    </div>
+  )
+
+  // Tablet touch layout: the two "learn" buttons sit on the title's row,
+  // which is there anyway, so the toolbar under it fits one row.
+  const tabletHeaderActions = (
+    <div className="compact-header-actions">
+      {variant ? (
+        <button
+          type="button"
+          className="how-it-works-trigger"
+          title="Open the Classic solver, where the colouring techniques are taught step by step"
+          onClick={() => window.location.assign(import.meta.env.BASE_URL)}
+        >
+          Classic solver
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="how-it-works-trigger"
+          title="Learn the colouring techniques, step by step"
+          onClick={() => setTutorialTarget({ tab: 'basics' })}
+        >
+          Learn techniques
+        </button>
+      )}
+      <button
+        type="button"
+        className="quickstart-trigger"
+        aria-haspopup="dialog"
+        title="What do the settings do?"
+        onClick={() => setHelpOpen({})}
+      >
+        Quickstart
+      </button>
     </div>
   )
 
@@ -8675,6 +8825,8 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       onTogglePreferEasiestDragonTechniques={togglePreferEasiestDragonTechniques}
       listEasiestDragonTechniquesFirst={listEasiestDragonTechniquesFirst}
       onToggleListEasiestDragonTechniquesFirst={toggleListEasiestDragonTechniquesFirst}
+      listSearchEasiestDragon={listSearchEasiestDragon}
+      onToggleListSearchEasiestDragon={toggleListSearchEasiestDragon}
       solvePathTimeoutMs={solvePathTimeoutMs}
       onSolvePathTimeoutChange={onSolvePathTimeoutChange}
       panelRef={techniquePanelRef}
@@ -9099,102 +9251,109 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           )}
         </div>
       )}
-      <div className="import-row">
-        <textarea
-          className="import-input"
-          placeholder={
-            variant
-              ? 'Paste a SudokuWiki Jigsaw / Killer string, or a puzzle copied from here'
-              : 'Paste a sudoku grid in any format (Sudoku.Coach, 81-char string, etc.)'
-          }
-          rows={1}
-          value={importText}
-          disabled={busy}
-          onChange={(event) => setImportText(event.target.value)}
-        />
-        <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
-          Import
-        </button>
-        {/* Next to Import - the other way of getting a puzzle onto the grid -
-            rather than in the toolbar, which has no room left on one row.
-            A phone also has it in the toolbar's "⋯" menu. */}
-        <button
-          type="button"
-          className="saved-puzzles-trigger"
-          aria-haspopup="dialog"
-          title="Save the puzzle on the grid with all your progress - digits, candidates and colours - or open one you saved earlier. Kept in this browser."
-          onClick={() => setSavedPuzzlesList(loadSavedPuzzles())}
-          disabled={busy}
-        >
-          Saved puzzles
-        </button>
-      </div>
-
-      <div className="import-secondary-row" ref={importSecondaryRowRef}>
+      {/* One card, in the style of the control groups beside the grid: getting a
+          puzzle in (text or screenshot) on top, saving and copying it out
+          below. Its bottom edge is what the Techniques panel is fitted to. */}
+      <div className="control-group puzzle-io" ref={importSecondaryRowRef}>
+        <p className="control-label">Import a puzzle</p>
+        <div className="import-row">
+          <textarea
+            className="import-input"
+            placeholder={
+              variant
+                ? 'Paste a SudokuWiki Jigsaw / Killer string, or a puzzle copied from here'
+                : 'Paste a puzzle: 81-character string, Sudoku.Coach state, share link…'
+            }
+            rows={1}
+            value={importText}
+            disabled={busy}
+            onChange={(event) => setImportText(event.target.value)}
+          />
+          <button type="button" onClick={onImport} disabled={busy || importText.trim().length === 0}>
+            Import
+          </button>
+        </div>
         {/* On the Variant page a screenshot is read as a Jigsaw (regions and
-            digits); the wording below says so. */}
-        {(
-          <div
-            className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
-            onDragOver={(event) => {
-              event.preventDefault()
-              setOcrDragActive(true)
-            }}
-            onDragLeave={() => setOcrDragActive(false)}
-            onDrop={onImageDrop}
-            onPaste={onImagePaste}
-            tabIndex={0}
-            role="button"
-            aria-label="Drop or paste a Sudoku grid screenshot to read it"
+            digits). */}
+        <div
+          className={['image-import-drop', ocrDragActive ? 'active' : ''].filter(Boolean).join(' ')}
+          onDragOver={(event) => {
+            event.preventDefault()
+            setOcrDragActive(true)
+          }}
+          onDragLeave={() => setOcrDragActive(false)}
+          onDrop={onImageDrop}
+          onPaste={onImagePaste}
+          tabIndex={0}
+          role="button"
+          aria-label="Drop or paste a Sudoku grid screenshot to read it"
+        >
+          <svg className="image-import-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2.5" />
+            <circle cx="8.5" cy="10" r="1.6" />
+            <path d="M4 17l5-4.5 3.5 3 3-2.5L20 17" />
+          </svg>
+          <span>{ocrBusy ? 'Reading screenshot…' : 'Drag or paste a screenshot here, or '}</span>
+          {!ocrBusy && (
+            <label className="image-import-browse">
+              upload
+              <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
+            </label>
+          )}
+        </div>
+
+        <p className="control-label">Save &amp; share</p>
+        {/* Saved puzzles sits with the copy buttons - the other ways of
+            keeping a position - rather than in the toolbar, which has no
+            room left on one row. A phone also has it in the toolbar's "⋯"
+            menu. */}
+        <div className="import-secondary-row">
+          <button
+            type="button"
+            className="copy-sc-button saved-puzzles-trigger"
+            aria-haspopup="dialog"
+            title="Save the puzzle on the grid with all your progress - digits, candidates and colours - or open one you saved earlier. Kept in this browser."
+            onClick={() => setSavedPuzzlesList(loadSavedPuzzles())}
+            disabled={busy}
           >
-            <span>
-              {ocrBusy
-                ? 'Reading screenshot…'
-                : 'Drag or paste a screenshot, or '}
-            </span>
-            {!ocrBusy && (
-              <label className="image-import-browse">
-                upload
-                <input type="file" accept="image/*" onChange={onImageFileSelected} disabled={busy} />
-              </label>
-            )}
-          </div>
-        )}
-        <button
-          type="button"
-          className="copy-sc-button"
-          onClick={onCopyPuzzleAsIs}
-          disabled={busy}
-          title={
-            variant
-              ? 'Copies the puzzle and the current progress (solved cells and candidates) to your clipboard as a SudokuWiki Jigsaw / Killer string. Paste it into the import box here, or load it on sudokuwiki.org. Colours on candidates are not part of that format.'
-              : 'Copies the current progress - givens, solved cells, candidates and colours - to your clipboard. Pastes into Sudoku.Coach (without the colours) or back into this app.'
-          }
-        >
-          Copy Puzzle As-Is
-        </button>
-        <button
-          type="button"
-          className="copy-sc-button"
-          onClick={onCopyOriginal}
-          disabled={busy}
-          title={
-            variant
-              ? 'Copies just the puzzle - its givens, regions and cages - to your clipboard as a SudokuWiki Jigsaw / Killer string'
-              : 'Copies just the original puzzle (its givens) as an 81-character string (0 = empty) to your clipboard'
-          }
-        >
-          Copy Original
-        </button>
-        <button
-          type="button"
-          className="copy-sc-button"
-          onClick={onCopyShareLink}
-          disabled={busy}
-          title="Copies a link to this page that opens with the grid exactly as it is now - givens, solved cells, candidates and colours. The whole position is in the link itself, so it works for anyone, on any device, for as long as this site does."
-        >
-          Copy Link
-        </button>
+            Save & View Saved puzzles
+          </button>
+          <button
+            type="button"
+            className="copy-sc-button"
+            onClick={onCopyPuzzleAsIs}
+            disabled={busy}
+            title={
+              variant
+                ? 'Copies the puzzle and the current progress (solved cells and candidates) to your clipboard as a SudokuWiki Jigsaw / Killer string. Paste it into the import box here, or load it on sudokuwiki.org. Colours on candidates are not part of that format.'
+                : 'Copies the current progress - givens, solved cells, candidates and colours - to your clipboard. Pastes into Sudoku.Coach (without the colours) or back into this app.'
+            }
+          >
+            Copy Puzzle As-Is
+          </button>
+          <button
+            type="button"
+            className="copy-sc-button"
+            onClick={onCopyOriginal}
+            disabled={busy}
+            title={
+              variant
+                ? 'Copies just the puzzle - its givens, regions and cages - to your clipboard as a SudokuWiki Jigsaw / Killer string'
+                : 'Copies just the original puzzle (its givens) as an 81-character string (0 = empty) to your clipboard'
+            }
+          >
+            Copy Original
+          </button>
+          <button
+            type="button"
+            className="copy-sc-button"
+            onClick={onCopyShareLink}
+            disabled={busy}
+            title="Copies a link to this page that opens with the grid exactly as it is now - givens, solved cells, candidates and colours. The whole position is in the link itself, so it works for anyone, on any device, for as long as this site does."
+          >
+            Copy Link
+          </button>
+        </div>
       </div>
     </>
   )
@@ -9864,6 +10023,31 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           }}
         />
       )}
+      {practiceDialogOpen && !variant && (
+        <PracticePuzzleDialog
+          settings={practiceSettings}
+          timeBudgetMs={dragonGenerationTimeoutMs}
+          initialTargetId={practiceTargetId}
+          onTargetChange={setPracticeTargetId}
+          fromStart={practiceFromStart}
+          onFromStartChange={setPracticeFromStart}
+          onGenerated={(state, target, outcome, fromStart) => {
+            setPracticeDialogOpen(false)
+            // The page stayed usable while the workers searched, so commit
+            // through the latest grid/history, not this render's.
+            latestRef.current.commitGrid({ board: state.board, givens: state.givens, candidates: state.candidates })
+            setHighlightedDigit(null)
+            setStatus(
+              `New ${target.name} puzzle loaded${outcome.kind === 'found' && outcome.fromStock ? ' (from the pre-generated collection)' : ''}: ` +
+                (fromStart
+                  ? `solve it with the easiest techniques and you reach a point where ${target.name} is the easiest way on.`
+                  : `${target.name} is the easiest technique that makes progress here.`),
+            )
+            trackEvent('task', `generate: practice ${target.id}${fromStart ? ' from start' : ''}`, outcome.kind === 'found' && outcome.fromStock ? 'stock' : 'completed', outcome.elapsedMs)
+          }}
+          onClose={() => setPracticeDialogOpen(false)}
+        />
+      )}
       {savedPuzzlesList && (
         <SavedPuzzlesModal
           puzzles={savedPuzzlesList}
@@ -9979,7 +10163,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           variant ? 'variant-page' : '',
           'compact-layout',
           landscape ? 'compact-landscape' : 'compact-portrait',
-          phone ? 'compact-phone' : '',
+          phone ? 'compact-phone' : 'compact-tablet',
           techniqueFocused ? 'compact-technique-focused' : '',
         ]
           .filter(Boolean)
@@ -9988,7 +10172,12 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
         onKeyUp={onKeyUp}
         onPaste={onScopedPaste}
       >
-        {!phone && header}
+        {!phone && (
+          <div className="compact-header-row">
+            {header}
+            {tabletHeaderActions}
+          </div>
+        )}
         {toolbar}
         <div className="compact-board">{gridElement}</div>
         {/* Keyed on the tab so switching tabs starts the new one scrolled to

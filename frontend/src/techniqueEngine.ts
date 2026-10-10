@@ -460,8 +460,13 @@ export function computeStuckDynamicDragonExtensions(
   optimizeDynamic = false,
   maxTechniquesPerStep = Infinity,
   givens: GivenMask | null = null,
+  // The Techniques list's "Search for the easiest dragon" (the list only):
+  // each chain's Dragon is the easiest one findEasiestDynamicDragon reaches,
+  // not the first the search builds.
+  findEasiest = false,
 ) {
   const results: Array<{ chainKey: string; moves: DragonMove[]; hasBivalueCellLink: boolean }> = []
+  const easiestPool = { stepsLeft: EASIEST_DRAGON_LIST_STEP_BUDGET, tierStepsLeft: EASIEST_DRAGON_TIER_LIST_STEP_BUDGET }
   for (const chain of medusaFinder.findChains(board, candidates)) {
     if (filter === 'bivalue-seeded' && !chain.hasBivalueCellLink) {
       continue
@@ -486,7 +491,7 @@ export function computeStuckDynamicDragonExtensions(
     }
     // Optimize Dynamic Dragons implies the optimized search for Dynamic
     // Dragons, whether or not Optimize Dragons (plain) is on.
-    const result = dragonFinder.extend(chain, board, candidates, {
+    const options: DragonExtendOptions = {
       dynamic: true,
       allowedRule3Techniques,
       aicLimitPerStep,
@@ -495,7 +500,10 @@ export function computeStuckDynamicDragonExtensions(
       exhaustive,
       optimize: optimize || optimizeDynamic,
       optimizeDynamic,
-    })
+    }
+    const result = findEasiest
+      ? findEasiestDynamicDragon(chain, board, candidates, options, easiestPool)
+      : dragonFinder.extend(chain, board, candidates, options)
     if (!result) {
       continue
     }
@@ -506,6 +514,178 @@ export function computeStuckDynamicDragonExtensions(
     results.push({ chainKey, moves: result.moves, hasBivalueCellLink: chain.hasBivalueCellLink })
   }
   return results
+}
+
+/** The Rule 3 techniques that list hundreds of chains per grid. Under "Limit
+ * to 1 AIC per step" every chain of a tier is tried in its own branch
+ * (branchOnAicTier, uncapped when looking for one move), and a per-step
+ * limit throws away the branches that would otherwise end the search at
+ * once: measured 2026-10-09 on one fresh autofill (20 chains, 22 techniques,
+ * limit 3) 84 s, against 2 s with no limit and 0.9 s without these - 4823
+ * branches instead of 49. Without the AIC limit one Optimize Dynamic search
+ * over them still took 6.7 s and one limited run 1.2 s. */
+const PROLIFIC_AIC_RULE3_TECHNIQUES: readonly Rule3Technique[] = ['grouped aic', 'als-aic']
+
+/** findEasiestDynamicDragon's extra runs (fewer techniques per step, the
+ * shortest Dragon) are the kind that can run very long - a per-step limit
+ * under the AIC limit, the Optimize Dynamic search in Exhaustive mode, see
+ * DragonExtendOptions.rule3StepBudget - so each gets a budget of work
+ * (Extension Rule 3 simulation steps and Optimize search states), and all
+ * the chains of one list share a second
+ * one. A run that spends its budget is dropped and the Dragon found so far
+ * kept. Counted in steps, not time, so the list is the same every time.
+ * Calibration 2026-10-09 (6 top1465 puzzles, 1610 extra runs, 785 of them
+ * finding an easier Dragon): those 785 needed 53 steps at the median, 545 at
+ * the 99th percentile and 790 at most; a step costs about 1 ms, up to 6. */
+const EASIEST_DRAGON_RUN_STEP_BUDGET = 1000
+const EASIEST_DRAGON_LIST_STEP_BUDGET = 5000
+/** The same for the narrower-group runs (step 1), which are the ordinary
+ * search and normally take a few dozen steps - but the ordinary search has
+ * grids it runs away on too (one state, Exhaustive with the AIC limit and
+ * the Brutal group: minutes), and ticking a checkbox must not find them. A
+ * group whose run is cut off counts as not resolving the chain. */
+const EASIEST_DRAGON_TIER_LIST_STEP_BUDGET = 10000
+/** The highest per-step limit findEasiestDynamicDragon tries. */
+const EASIEST_DRAGON_MAX_LIMIT_TRIED = 4
+
+/** One chain's Dynamic Dragon for the Techniques list's "Search for the
+ * easiest dragon": the easiest by the three things "Prefer easiest techs
+ * within dragon" ranks rows by, in that order - the hardest group of
+ * RULE3_TECHNIQUE_GROUPS any step uses, the most techniques one step chains,
+ * the number of steps. `options` is the ordinary search's (what the row would
+ * be with the setting off); every run here only narrows it, so nothing the
+ * user has unticked or limited is ever used.
+ *
+ *  1. Group: the ordinary search with the Defaults group's ticked techniques
+ *     only, then with Advanced added, and so on - the first that resolves the
+ *     chain. Without this the search reaches for a harder technique the
+ *     moment one colour has nothing easier, even where the chain could be
+ *     finished without it (the example this was built on: 3 steps resting on
+ *     two Grouped AICs, against 57 steps of locked candidates and naked pairs).
+ *  2. Techniques per step: that group again with the per-step limit at 1, 2,
+ *     ... below what its Dragon needed - the first that resolves.
+ *  3. Steps: once more with the Optimize Dynamic Dragons search, kept only
+ *     if it is no harder by 1 and 2 and shorter.
+ *
+ * Each run is still the greedy search, so this is the easiest Dragon these
+ * runs reach, not a proof that no easier one exists - an error that can only
+ * show a harder Dragon than necessary, never a wrong one, and never a harder
+ * one than the ordinary search's (which is always a candidate). With
+ * Exhaustive on, an easier Dragon may run to fewer (or more) eliminations
+ * than the one it replaces.
+ *
+ * Every run but the ordinary search itself is on a budget (`pool`, see
+ * EASIEST_DRAGON_RUN_STEP_BUDGET), so the setting can cost a bounded amount
+ * on top of the list it replaces and no more. Steps 2 and 3 are skipped
+ * outright for a group that brings in one of PROLIFIC_AIC_RULE3_TECHNIQUES -
+ * hopeless there: a chain that needs such a group gets that group's own
+ * Dragon. */
+function findEasiestDynamicDragon(
+  chain: MedusaChain,
+  board: Board,
+  candidates: CandidateGrid,
+  options: DragonExtendOptions,
+  pool: { stepsLeft: number; tierStepsLeft: number },
+): { moves: DragonMove[] } | null {
+  const allowed = options.allowedRule3Techniques ?? new Set(DEFAULT_RULE3_TECHNIQUES)
+  const userLimit = options.maxTechniquesPerStep ?? Infinity
+  const harder = (a: { moves: DragonMove[] }, b: { moves: DragonMove[] }): number => {
+    const demandA = dragonMovesTechniqueDemand(a.moves)
+    const demandB = dragonMovesTechniqueDemand(b.moves)
+    return (
+      demandA.hardestGroup - demandB.hardestGroup ||
+      demandA.mostTechniquesInOneStep - demandB.mostTechniquesInOneStep ||
+      a.moves.length - b.moves.length
+    )
+  }
+  /** One of the extra runs, on what is left of the budgets. Null when it
+   * found nothing, ran out, or there was nothing left to run it on. */
+  const budgeted = (runOptions: DragonExtendOptions) => {
+    if (pool.stepsLeft <= 0) {
+      return null
+    }
+    const result = dragonFinder.extend(chain, board, candidates, {
+      ...runOptions,
+      rule3StepBudget: Math.min(EASIEST_DRAGON_RUN_STEP_BUDGET, pool.stepsLeft),
+    })
+    pool.stepsLeft -= dragonFinder.lastRule3StepsUsed
+    return result
+  }
+  // "naked pair" is always allowed inside the simulation, ticked or not, and
+  // a technique in no group (hidden single) has to go somewhere: both count
+  // as the first tier's.
+  const grouped = new Set(RULE3_TECHNIQUE_GROUPS.flatMap((group) => group.techniques))
+  const tier = new Set<Rule3Technique>([...allowed].filter((technique) => !grouped.has(technique)))
+  let previousSize = -1
+  for (const group of RULE3_TECHNIQUE_GROUPS) {
+    for (const technique of group.techniques) {
+      if (allowed.has(technique)) {
+        tier.add(technique)
+      }
+    }
+    // None of this group is ticked: the same search again.
+    if (tier.size === previousSize) {
+      continue
+    }
+    previousSize = tier.size
+    const tierOptions: DragonExtendOptions = { ...options, allowedRule3Techniques: new Set(tier) }
+    // The last group is the ordinary search itself (what the row is with the
+    // setting off), which runs as it always does; a narrower one is on a
+    // budget.
+    let best: { moves: DragonMove[] } | null
+    if (tier.size === allowed.size) {
+      best = dragonFinder.extend(chain, board, candidates, options)
+    } else if (pool.tierStepsLeft > 0) {
+      best = dragonFinder.extend(chain, board, candidates, {
+        ...tierOptions,
+        rule3StepBudget: Math.min(EASIEST_DRAGON_RUN_STEP_BUDGET, pool.tierStepsLeft),
+      })
+      pool.tierStepsLeft -= dragonFinder.lastRule3StepsUsed
+    } else {
+      best = null
+    }
+    if (!best) {
+      continue
+    }
+    if (!PROLIFIC_AIC_RULE3_TECHNIQUES.some((technique) => tier.has(technique))) {
+      const needed = dragonMovesTechniqueDemand(best.moves).mostTechniquesInOneStep
+      // Only the low limits: a Dragon needing ten techniques in a step is
+      // not made much easier by finding one that needs nine.
+      for (let limit = 1; limit < Math.min(needed, userLimit, EASIEST_DRAGON_MAX_LIMIT_TRIED + 1); limit++) {
+        const tighter = budgeted({ ...tierOptions, maxTechniquesPerStep: limit })
+        if (tighter && harder(tighter, best) < 0) {
+          best = tighter
+          break
+        }
+      }
+      // The shortest: the Optimize Dynamic search, held to what `best` needs
+      // per step. Already what every run above was when the setting is on.
+      if (!options.optimizeDynamic) {
+        const perStep = dragonMovesTechniqueDemand(best.moves).mostTechniquesInOneStep
+        const shortest = budgeted({
+          ...tierOptions,
+          maxTechniquesPerStep: Math.min(userLimit, Math.max(perStep, 1)),
+          optimize: true,
+          optimizeDynamic: true,
+        })
+        if (shortest && harder(shortest, best) < 0) {
+          best = shortest
+        }
+      }
+    }
+    // Never a harder row than with the setting off: with every technique
+    // allowed the search takes other turns, and now and then lands on a
+    // Dragon that is easier than anything the narrower runs reached (seen
+    // once in 121 rows of the sweep).
+    if (tier.size < allowed.size) {
+      const ordinary = dragonFinder.extend(chain, board, candidates, options)
+      if (ordinary && harder(ordinary, best) < 0) {
+        best = ordinary
+      }
+    }
+    return best
+  }
+  return null
 }
 
 /** Double Dragon Colouring (SudokuDragonFinder.findDoubleDragons) on every
@@ -918,6 +1098,12 @@ export function buildTechniqueInstances(
   // doesn't read the order): Dynamic and Double Dynamic Dragon rows are
   // listed easiest techniques first, then shortest, instead of shortest first.
   easiestDragonTechniquesFirst = false,
+  // The Techniques tab's "Search for the easiest dragon" (the list only, and
+  // only while the setting above is on - the caller sees to that): each
+  // chain's single Dynamic Dragon row is the easiest one a tiered search
+  // reaches, see findEasiestDynamicDragon. Double Dynamic rows are not
+  // searched this way.
+  searchEasiestDragon = false,
 ): TechniqueInstance[] {
   const instances: TechniqueInstance[] = []
   // The order of a batch of Dragon rows of one kind. The key is the one
@@ -1587,6 +1773,7 @@ export function buildTechniqueInstances(
     optimizeDynamicDragons,
     maxTechniquesPerDragonStep,
     givens,
+    searchEasiestDragon,
   )
   sortDragonRows(dynamicDragonExtensions)
   for (const { chainKey, moves } of dynamicDragonExtensions) {
