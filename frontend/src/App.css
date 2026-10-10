@@ -4359,12 +4359,13 @@ button.primary {
 
 /* Portrait: the grid takes what the screen's height leaves once the title,
    toolbar, tabs and a dock tall enough for the Digits or Colour tab without
-   scrolling (~30.5rem together) are taken off - bigger than the desktop's
-   32rem on a tall iPad, smaller on a short 8" tablet, where a full-width
-   grid used to leave the dock a ~12rem strip. A browser without dvh drops
-   this declaration and keeps the plain 32rem grid. */
+   scrolling (~25rem together, with the pads as number pads - see "tablet
+   number pads" below) are taken off - bigger than the desktop's 32rem on an
+   iPad, smaller on a short 8" tablet, where a full-width grid used to leave
+   the dock a ~12rem strip. A browser without dvh drops this declaration and
+   keeps the plain 32rem grid. */
 .compact-tablet.compact-portrait > .compact-board > .grid {
-  width: min(100%, clamp(26rem, calc(100dvh - 30.5rem), 40rem));
+  width: min(100%, clamp(26rem, calc(100dvh - 25rem), 46rem));
 }
 
 /* A grid past 32rem keeps the desktop's proportions: the digits grow with
@@ -4474,6 +4475,107 @@ button.primary {
 .compact-layout .paint-hint {
   margin: 0.35rem 0 0;
   font-size: 0.75rem;
+}
+
+/* ---- tablet number pads (Digits / Colour tabs) ----
+
+   By request: on a tablet the pads are 3x3 number pads again (as on the
+   desktop, and as Sudoku.Coach lays its pad out), two groups side by side,
+   instead of the phone's rows of nine stacked under each other. That is what
+   lets the grid above be bigger: the two tabs need ~13rem of dock, not ~19. */
+
+.compact-tablet .compact-dock-input,
+.compact-tablet .compact-dock-colour {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-content: start;
+}
+
+/* Nine swatches each with its shape picker need more width than nine digits. */
+.compact-tablet .compact-dock-colour {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.compact-tablet .control-pad {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0.35rem 0 0;
+}
+
+.compact-tablet .pad-button {
+  min-height: 2.4rem;
+}
+
+/* Landscape has the height to spare: finger-sized rows. */
+.compact-tablet.compact-landscape .pad-button {
+  min-height: 3rem;
+}
+
+/* Candidates: Autofill all / Clear all stand beside the pad as a column
+   (Sudoku.Coach's tools-beside-the-pad shape) rather than as a row under it,
+   so the group is exactly as tall as Solution next to it. */
+.compact-tablet .candidate-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 6.5rem);
+  grid-template-rows: auto 1fr;
+  column-gap: 0.4rem;
+}
+
+.compact-tablet .candidate-group > .control-header {
+  grid-column: 1 / -1;
+}
+
+.compact-tablet .candidate-bulk-actions {
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0.35rem 0 0;
+  padding: 0 0 0 0.4rem;
+  border-top: none;
+  border-left: 1px dashed var(--n-300);
+}
+
+.compact-tablet .bulk-action-button {
+  min-height: 0;
+}
+
+/* Colours: a 3x3 of swatches, each with its three shapes beside it. */
+.compact-tablet .paint-swatches {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.compact-tablet .paint-swatch-item {
+  flex-direction: row;
+  gap: 0.2rem;
+}
+
+.compact-tablet .paint-swatch-wrapper {
+  flex: 1 1 0;
+  width: auto;
+  height: 2.4rem;
+}
+
+.compact-tablet .paint-swatch {
+  height: 100%;
+}
+
+.compact-tablet .paint-shape-picker {
+  flex: 0 0 46%;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: none;
+  height: 2.4rem;
+}
+
+.compact-tablet .paint-shape-option + .paint-shape-option {
+  border-top: none;
+  border-left: 1px solid var(--g-300);
+}
+
+:where([data-scheme="dark"]) .compact-tablet .paint-shape-option + .paint-shape-option {
+  border-left-color: var(--n-600);
+}
+
+.compact-tablet.compact-landscape .paint-swatch-wrapper,
+.compact-tablet.compact-landscape .paint-shape-picker {
+  height: 3rem;
 }
 
 /* ---- Solve tab ---- */

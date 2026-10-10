@@ -10211,8 +10211,10 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
               className={['compact-tab', compactSection === id ? 'active' : ''].filter(Boolean).join(' ')}
               onClick={() => setCompactSection(id)}
             >
-              {/* The Variant page's tab also holds the layout editor. */}
-              {variant && id === 'import' ? 'Puzzle' : label}
+              {/* The Variant page's tab also holds the layout editor. A
+                  tablet's tab is wide enough to say that Saved puzzles and
+                  the link are in there too. */}
+              {variant && id === 'import' ? 'Puzzle' : tablet && id === 'import' ? 'Import or Load' : label}
             </button>
           ))}
         </nav>
