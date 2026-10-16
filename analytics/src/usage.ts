@@ -265,7 +265,9 @@ function parseBatch(raw: string): UsageBatch | null {
   return { visitor: b.visitor, visit: b.visit, areas, events, quiz: parseQuizAnswers(b.quiz), saves: parseSavedPuzzleActions(b.saves), context }
 }
 
-export async function handleSync(request: Request, db: D1Database, ctx: ExecutionContext): Promise<number> {
+/** `site` is the host of the page's (allowed) Origin, e.g.
+ * 'sudoku-trainer.sekaiproject.ca' - see index.ts. */
+export async function handleSync(request: Request, db: D1Database, ctx: ExecutionContext, site: string): Promise<number> {
   const raw = await request.text()
   if (raw.length > MAX_BODY_BYTES) {
     return 413
@@ -333,9 +335,9 @@ export async function handleSync(request: Request, db: D1Database, ctx: Executio
       .prepare(
         `INSERT INTO visits (visit_id, visitor_id, visit_number, started_at, last_seen_at, engaged_ms, page_loads,
                              country, region, city, device_type, device, os, os_version, browser, browser_version,
-                             user_agent, language, timezone, screen, viewport, referrer, campaign, standalone, dark_mode, is_bot)
+                             user_agent, language, timezone, screen, viewport, referrer, campaign, standalone, dark_mode, is_bot, site)
          VALUES (?1, ?2, (SELECT COUNT(*) + 1 FROM visits WHERE visitor_id = ?2), ?3, ?3, ?4, ?5,
-                 ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                 ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
          ON CONFLICT (visit_id) DO UPDATE SET
            last_seen_at = excluded.last_seen_at,
            engaged_ms = visits.engaged_ms + excluded.engaged_ms,
@@ -368,6 +370,7 @@ export async function handleSync(request: Request, db: D1Database, ctx: Executio
         c?.standalone ?? null,
         c?.darkMode ?? null,
         isBot,
+        site,
       ),
   )
   statements.push(

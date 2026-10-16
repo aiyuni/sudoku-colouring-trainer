@@ -251,10 +251,21 @@ const AIC_RULE3_TECHNIQUES: ReadonlySet<Rule3Technique> = new Set<Rule3Technique
 const importer = new PuzzleImporter()
 const APP_VERSION = 'v0.8.8-beta'
 
+/** The deployed site's root (GitHub Pages) - only used by the dev-only
+ * "Copy link uses" switch below; a build takes its own address instead. */
+const PRODUCTION_SITE_URL = 'https://aiyuni.github.io/sudoku-colouring-trainer/'
+/** localStorage: the dev-only switch for it (dev server only). */
+const SHARE_LINK_PRODUCTION_DEV_KEY = 'sudoku-solver.dev.shareLinkProduction'
+
 /** The root of the site this page is served from - what a share link
  * (shareLink.ts) is built on: the deployed site's own address there, the
- * dev server's here, so a link copied while developing opens locally. */
-function shareSiteUrl(): string {
+ * dev server's here, so a link copied while developing opens locally -
+ * unless the dev-only switch asks for the production address (to send
+ * someone a link to a position found while developing). */
+function shareSiteUrl(useProduction: boolean): string {
+  if (import.meta.env.DEV && useProduction) {
+    return PRODUCTION_SITE_URL
+  }
   return new URL(import.meta.env.BASE_URL, window.location.origin).href
 }
 
@@ -2627,6 +2638,28 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     })
   }
   const [aicDragonShown, setAicDragonShown] = useState<AicDragonShown>('chain')
+  // Dev server only: "Copy link" builds the link on the production site
+  // instead of this dev server (see shareSiteUrl). Off by default.
+  const [shareLinkProductionDev, setShareLinkProductionDev] = useState(() => {
+    if (!import.meta.env.DEV) {
+      return false
+    }
+    try {
+      return localStorage.getItem(SHARE_LINK_PRODUCTION_DEV_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggleShareLinkProductionDev = () => {
+    setShareLinkProductionDev((enabled) => {
+      try {
+        localStorage.setItem(SHARE_LINK_PRODUCTION_DEV_KEY, enabled ? '0' : '1')
+      } catch {
+        // Not remembered, that's all.
+      }
+      return !enabled
+    })
+  }
   const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
   // Techniques tab spoiler view: hidden by default, stays revealed until the
   // user hides it again (session only, not persisted).
@@ -6413,7 +6446,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
    * a Saved Puzzles entry holds - so opening it anywhere shows this grid
    * (shareLink.ts). */
   async function onCopyShareLink() {
-    const url = shareLinkUrl(encodeShareState(gridToSave()), variant, shareSiteUrl())
+    const url = shareLinkUrl(encodeShareState(gridToSave()), variant, shareSiteUrl(shareLinkProductionDev))
     try {
       await navigator.clipboard.writeText(url)
       showToast('Link copied to clipboard!')
@@ -7423,7 +7456,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   ) : (
     <header className="header">
       <h1>
-        Sudoku Colouring Solver/Trainer <span className="app-version">{APP_VERSION}</span>
+        Advanced Sudoku Trainer & Solver <span className="app-version">{APP_VERSION}</span>
       </h1>
       <p>
         Advanced Sudoku solver and trainer emphasizing Colouring techniques, such as Dragon Colouring. <br/> <div></div> <br/>
@@ -7432,7 +7465,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           Learn techniques
         </button>{' '}
         for a quick overview.  <br/>
-        For advanced Colourists and solvers, learn how to configure your { ' '}
+        For advanced Colourists and AIC solvers, learn how to configure your { ' '}
         <button type="button" className="header-link" onClick={() => setHelpOpen({tab: "Dragon Configuration"})}>
            Dragon settings
         </button>{' '} and enable your preferred { ' '}
@@ -8562,6 +8595,17 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
             {import.meta.env.DEV && (
               <button type="button" className="dropdown-item" aria-pressed={aicDragonDevEnabled} onClick={toggleAicDragonDev}>
                 AIC equivalent Dragon: {aicDragonDevEnabled ? 'ON' : 'OFF'} (dev only)
+              </button>
+            )}
+            {/* Dev server only: which site "Copy link" points at. */}
+            {import.meta.env.DEV && (
+              <button
+                type="button"
+                className="dropdown-item"
+                aria-pressed={shareLinkProductionDev}
+                onClick={toggleShareLinkProductionDev}
+              >
+                Copy link uses: {shareLinkProductionDev ? 'production site' : 'localhost'} (dev only)
               </button>
             )}
           </div>

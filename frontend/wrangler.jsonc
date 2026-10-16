@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The same build as GitHub Pages, served at https://sudoku-trainer.sekaiproject.ca by a
+  // static-assets-only Cloudflare Worker (no Worker code). Built with the default base "/"
+  // (VITE_BASE unset), unlike the Pages build, which lives under /<repo>/.
+  // Deployed by the workflow's "cloudflare" job, or by hand: `npm run deploy:cloudflare`.
+  "name": "sudoku-trainer",
+  "compatibility_date": "2026-09-01",
+
+  // Custom Domain: Cloudflare creates the DNS record and certificate on deploy
+  // (sekaiproject.ca is a zone on the same account as the other apps).
+  "routes": [{ "pattern": "sudoku-trainer.sekaiproject.ca", "custom_domain": true }],
+  "workers_dev": false,
+
+  "assets": {
+    "directory": "./dist",
+    // As on GitHub Pages: an unknown path gets dist/404.html (a copy of index.html, see
+    // vite.config.ts) with a 404 status; /variants redirects to /variants/.
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash"
+  }
+}

@@ -50,8 +50,12 @@ and add `VITE_ANALYTICS_URL` = the URL `npm run deploy` printed, plus `/import`
 (e.g. `https://sudoku-trainer-api.aiyuni.workers.dev/import`, not a placeholder).
 Rebuild or redeploy the site. If the variable is unset, the frontend sends nothing.
 
-If the site moves to another origin, add it to `ALLOWED_ORIGINS` in `wrangler.toml`
-and redeploy. Requests from any other origin are rejected with 403.
+The site is served from two origins - GitHub Pages and `https://sudoku-trainer.sekaiproject.ca`
+(`frontend/wrangler.jsonc`) - both in `ALLOWED_ORIGINS` in `wrangler.toml`. If it moves to or
+adds another, add it there and redeploy. Requests from any other origin are rejected with 403.
+Each visit and import records which one it came from (`visits.site` / `puzzle_imports.site`,
+the origin's host; migration 0006, NULL before 2026-10-15, when GitHub Pages was the only one).
+The `/admin` dashboard has a Site filter and breakdown, and counts NULL as GitHub Pages.
 
 ## Updating
 

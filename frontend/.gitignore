@@ -38,3 +38,6 @@ dragon-research/data/*-hits*.jsonl
 dragon-research/data/*-positions*.jsonl
 /double-dynamic-dragon-*.txt
 /practice-puzzle-stock-counts.txt
+
+# Wrangler state (wrangler.jsonc deploy of the built site)
+.wrangler/

@@ -2,7 +2,7 @@
 
 An advanced Sudoku web app and solver focused on helping you learn to solve Sudoku puzzles (of all difficulties) using human-friendly **Colouring techniques**, rather than guess-and-check, chain-based techniques, or brute force.  
 
-Try it here: https://aiyuni.github.io/sudoku-colouring-trainer/
+Try it here: https://sudoku-trainer.sekaiproject.ca (also on GitHub Pages: https://aiyuni.github.io/sudoku-colouring-trainer/)
 
 ## Features
 

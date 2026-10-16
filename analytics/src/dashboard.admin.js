@@ -10,6 +10,8 @@ const state = {
   to: '',
   visitor: '',
   visitorName: '',
+  // '' = every site; else a host, e.g. 'sudoku-trainer.sekaiproject.ca'.
+  site: '',
   bots: false,
   excluded: false,
   dailyMetric: 'visitors',
@@ -105,6 +107,7 @@ function query(extra) {
   if (from) params.set('from', from)
   if (to) params.set('to', to)
   if (state.visitor) params.set('visitor', state.visitor)
+  if (state.site) params.set('site', state.site)
   if (state.bots) params.set('bots', '1')
   if (state.excluded) params.set('excluded', '1')
   params.set('tz', String(-new Date().getTimezoneOffset()))
@@ -120,6 +123,7 @@ function saveHash() {
     params.set('to', state.to)
   }
   if (state.visitor) params.set('visitor', state.visitor)
+  if (state.site) params.set('site', state.site)
   if (state.bots) params.set('bots', '1')
   if (state.excluded) params.set('excluded', '1')
   history.replaceState(null, '', `#${params}`)
@@ -131,6 +135,7 @@ function loadHash() {
   state.from = params.get('from') || ''
   state.to = params.get('to') || ''
   state.visitor = params.get('visitor') || ''
+  state.site = params.get('site') || ''
   state.bots = params.get('bots') === '1'
   state.excluded = params.get('excluded') === '1'
 }
@@ -500,6 +505,7 @@ function renderWhen(d) {
 
 function renderAudience(a) {
   const dims = [
+    ['Site', a.site],
     ['Country', a.country],
     ['City', a.city],
     ['Device type', a.deviceType],
@@ -619,6 +625,7 @@ function renderVisits(rows) {
         { key: 'where', label: 'Where', render: (r) => [r.city, r.country].filter(Boolean).join(', ') },
         { key: 'device', label: 'Device', render: (r) => [r.device || r.device_type, r.browser].filter(Boolean).join(' · ') },
         { key: 'referrer', label: 'Came from', render: (r) => r.referrer || '' },
+        { key: 'site', label: 'Site' },
       ],
       { onRowClick: (r) => openVisit(r.visit_id), initialSort: { key: 'started_at' } },
     ),
@@ -649,6 +656,7 @@ async function openVisit(id) {
       ['OS / browser', [visit.os, visit.os_version, '·', visit.browser, visit.browser_version].filter(Boolean).join(' ')],
       ['Screen / viewport', [visit.screen, visit.viewport].filter(Boolean).join(' / ')],
       ['Language / time zone', [visit.language, visit.timezone].filter(Boolean).join(' / ')],
+      ['Site', visit.site],
       ['Came from', visit.referrer || '(direct)'],
       ['Campaign', visit.campaign || ''],
       ['Installed app / dark mode', `${visit.standalone ? 'yes' : 'no'} / ${visit.dark_mode ? 'yes' : 'no'}`],
@@ -708,6 +716,23 @@ function renderToolbar() {
       ['custom', 'Custom…'],
     ].map(([v, l]) => el('option', { value: v, selected: v === state.range, text: l })),
   )
+  // The two public deployments (visits.site); a dev server's localhost shows
+  // under "All sites" and in the Site breakdown.
+  const site = el(
+    'select',
+    {
+      'aria-label': 'Site',
+      onchange: (e) => {
+        state.site = e.target.value
+        refresh()
+      },
+    },
+    [
+      ['', 'All sites'],
+      ['sudoku-trainer.sekaiproject.ca', 'sudoku-trainer.sekaiproject.ca'],
+      ['aiyuni.github.io', 'GitHub Pages'],
+    ].map(([v, l]) => el('option', { value: v, selected: v === state.site, text: l })),
+  )
   const custom =
     state.range === 'custom'
       ? [
@@ -751,6 +776,7 @@ function renderToolbar() {
     ...[el('h1', { text: 'Sudoku Trainer · Usage' }),
     range,
     ...custom,
+    site,
     visitorChip,
     check('excluded', 'Include excluded'),
     check('bots', 'Include bots'),

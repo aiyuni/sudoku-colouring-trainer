@@ -20,8 +20,10 @@ fallthrough = true
 
 [vars]
 # Comma-separated origins allowed to POST imports and usage batches (CORS). Anything else is
-# rejected, so a random site can't point its users at this endpoint.
-ALLOWED_ORIGINS = "https://aiyuni.github.io,http://localhost:5173,http://127.0.0.1:5173"
+# rejected, so a random site can't point its users at this endpoint. The site is deployed
+# twice (GitHub Pages and sudoku-trainer.sekaiproject.ca); each row records which one
+# (the `site` column, migration 0006).
+ALLOWED_ORIGINS = "https://aiyuni.github.io,https://sudoku-trainer.sekaiproject.ca,http://localhost:5173,http://127.0.0.1:5173"
 
 [[d1_databases]]
 binding = "DB"

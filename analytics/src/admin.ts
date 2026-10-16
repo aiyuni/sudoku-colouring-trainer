@@ -127,8 +127,14 @@ async function handleLogin(request: Request, env: AdminEnv, password: string): P
 
 // ---------------------------------------------------------------- filters
 
+/** Which deployment a visit came from (visits.site, migration 0006). Rows
+ * from before that column existed are NULL; the only public deployment then
+ * was GitHub Pages, so they count as that. */
+export const SITE = "COALESCE(v.site, 'aiyuni.github.io')"
+
 /** The dashboard's filters, shared by every query: a date range (on the
- * visit's start), one visitor, and whether bots / excluded visitors count. */
+ * visit's start), one site, one visitor, and whether bots / excluded
+ * visitors count. */
 interface Filters {
   where: string
   params: unknown[]
@@ -153,6 +159,11 @@ function readFilters(url: URL): Filters {
   if (visitor) {
     conditions.push('v.visitor_id = ?')
     params.push(visitor)
+  }
+  const site = url.searchParams.get('site')
+  if (site) {
+    conditions.push(`${SITE} = ?`)
+    params.push(site)
   }
   if (url.searchParams.get('bots') !== '1') {
     conditions.push('v.is_bot = 0 AND vr.is_bot = 0')
@@ -224,6 +235,7 @@ async function overview(db: D1Database, f: Filters) {
              FROM ${EVENTS} ${where}
              GROUP BY 1, 2, 3 ORDER BY count DESC LIMIT 1000`, params),
     Promise.all([
+      dimension(SITE),
       dimension('v.country'),
       dimension("v.city || ', ' || v.country"),
       dimension('v.device_type'),
@@ -235,7 +247,7 @@ async function overview(db: D1Database, f: Filters) {
       dimension('v.screen'),
     ]),
   ])
-  const [country, city, deviceType, device, os, browser, referrer, language, screen] = dims
+  const [site, country, city, deviceType, device, os, browser, referrer, language, screen] = dims
   return {
     totals: { ...totals, returning_visitors: returning?.n ?? 0 },
     daily,
@@ -244,7 +256,7 @@ async function overview(db: D1Database, f: Filters) {
     visitNumbers,
     areas,
     events,
-    audience: { country, city, deviceType, device, os, browser, referrer, language, screen },
+    audience: { site, country, city, deviceType, device, os, browser, referrer, language, screen },
   }
 }
 
@@ -266,7 +278,7 @@ async function visitsList(db: D1Database, f: Filters) {
   return all(
     db,
     `SELECT v.visit_id, v.visitor_id, vr.label, v.visit_number, v.started_at, v.last_seen_at, v.engaged_ms, v.page_loads,
-            v.country, v.city, v.device_type, v.device, v.os, v.browser, v.referrer,
+            v.country, v.city, v.device_type, v.device, v.os, v.browser, v.referrer, ${SITE} AS site,
             (SELECT area FROM visit_areas y WHERE y.visit_id = v.visit_id ORDER BY engaged_ms DESC LIMIT 1) AS top_area,
             (SELECT COALESCE(SUM(count), 0) FROM events x WHERE x.visit_id = v.visit_id) AS actions
      FROM ${VISITS} ${f.where}
@@ -277,7 +289,7 @@ async function visitsList(db: D1Database, f: Filters) {
 
 async function visitDetail(db: D1Database, id: string) {
   const [visit, areas, events] = await Promise.all([
-    db.prepare(`SELECT v.*, vr.label FROM ${VISITS} WHERE v.visit_id = ?`).bind(id).first(),
+    db.prepare(`SELECT v.*, ${SITE} AS site, vr.label FROM ${VISITS} WHERE v.visit_id = ?`).bind(id).first(),
     all(db, 'SELECT area, engaged_ms, first_at, last_at FROM visit_areas WHERE visit_id = ? ORDER BY first_at', [id]),
     all(db, 'SELECT occurred_at, category, name, label, value, count FROM events WHERE visit_id = ? ORDER BY occurred_at, id', [id]),
   ])

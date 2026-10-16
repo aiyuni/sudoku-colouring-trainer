@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "deploy:cloudflare": "npm run build && npx --yes wrangler@4 deploy",
     "test:ocr": "rolldown ocr-fixtures/run.ts --format esm --platform node --external tesseract.js -o ocr-fixtures/.out/run.mjs && node ocr-fixtures/.out/run.mjs",
     "test:saved-puzzles": "rolldown saved-puzzle-tests/run.ts --format esm --platform node -o saved-puzzle-tests/.out/run.mjs && node saved-puzzle-tests/.out/run.mjs",
     "test:share-link": "rolldown share-link-tests/run.ts --format esm --platform node -o share-link-tests/.out/run.mjs && node share-link-tests/.out/run.mjs",

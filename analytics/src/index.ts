@@ -63,8 +63,12 @@ export default {
       return new Response(null, { status: 403 })
     }
 
+    // Which deployment the page was served from (migration 0006). Trusted:
+    // only an allowed origin gets here.
+    const site = new URL(origin).host
+
     if (url.pathname === '/sync') {
-      return new Response(null, { status: await handleSync(request, env.DB, ctx), headers: cors })
+      return new Response(null, { status: await handleSync(request, env.DB, ctx, site), headers: cors })
     }
 
     const text = await request.text()
@@ -88,8 +92,8 @@ export default {
       env.DB.prepare(
         `INSERT INTO puzzle_imports
            (puzzle, import_type, source_format, is_valid_puzzle, solve_status, clue_count, imported_at, country,
-            device_type, device, os, os_version, browser, browser_version, user_agent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            device_type, device, os, os_version, browser, browser_version, user_agent, site)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
         .bind(
           parsed.puzzle,
@@ -107,6 +111,7 @@ export default {
           device.browser,
           device.browserVersion,
           userAgent || null,
+          site,
         )
         .run()
         .catch((err) => console.error('D1 insert failed', err)),
