@@ -115,6 +115,17 @@ import {
 } from './savedPuzzles'
 import { decodeShareState, encodeShareState, shareLinkUrl, sharePayloadOf } from './shareLink'
 import {
+  encodeTechniqueReplay,
+  gridMatchesReplay,
+  replayLinkUrl,
+  replayStartGrid,
+  replayPayloadOf,
+  shareableDragonKind,
+  type ReplayDecodeResult,
+  type SharedDragonKind,
+  type TechniqueReplay,
+} from './techniqueShareLink'
+import {
   DEFAULT_SETTINGS,
   DRAGON_GENERATION_TIMEOUT_OPTIONS,
   SOLVE_PATH_TIMEOUT_OPTIONS,
@@ -133,6 +144,7 @@ import {
   saveGrid,
   saveSettings,
   saveWelcomeDismissed,
+  type SavedGrid,
 } from './persistedState'
 import { isNativePasteHotkey, keyNameOf, matchHotkey, type HotkeyBindings } from './hotkeys'
 import HotkeySettings from './HotkeySettings'
@@ -327,6 +339,14 @@ function createInitialGrid(variant: boolean): GridState {
     candidateColors: createEmptyCandidateColors(),
     constraints: CLASSIC_CONSTRAINTS,
   }
+}
+
+/** What a technique replay's header calls each kind of shared Dragon. */
+const REPLAY_KIND_NAMES: Record<SharedDragonKind, string> = {
+  dragon: 'Dragon Colouring',
+  'dynamic-dragon': 'Dynamic Dragon Colouring',
+  'double-dragon': 'Double Dragon Colouring',
+  'double-dynamic-dragon': 'Double Dynamic Dragon Colouring',
 }
 
 /** True on the Variant solver page (App's `variant` prop), for the module-
@@ -1059,12 +1079,19 @@ function DragonStepper({
   onDragonStep,
   substepIndex,
   onSubstep,
+  onShare,
+  onJumpToStep,
 }: {
   moves: DragonMove[]
   stepIndex: number
   onDragonStep: (delta: number) => void
   substepIndex: number | null
   onSubstep: (delta: number) => void
+  /** Techniques tab only: copies a link that replays this very Dragon
+   * (techniqueShareLink.ts). */
+  onShare?: () => void
+  /** A technique replay only: a "Go to step" list beside the counter. */
+  onJumpToStep?: (index: number) => void
 }) {
   const move = moves[stepIndex]
   const substeps = move.substeps
@@ -1075,9 +1102,23 @@ function DragonStepper({
         <button type="button" className="dragon-player-button" disabled={stepIndex <= 0} onClick={() => onDragonStep(-1)}>
           ◀ Rewind
         </button>
-        <span className="dragon-player-step">
-          Step {stepIndex + 1} / {moves.length}
-        </span>
+        {onJumpToStep ? (
+          <label className="dragon-player-step dragon-player-jump">
+            Step{' '}
+            <select value={stepIndex} onChange={(event) => onJumpToStep(Number(event.target.value))} aria-label="Go to step">
+              {moves.map((_, index) => (
+                <option key={index} value={index}>
+                  {index + 1}
+                </option>
+              ))}
+            </select>{' '}
+            / {moves.length}
+          </label>
+        ) : (
+          <span className="dragon-player-step">
+            Step {stepIndex + 1} / {moves.length}
+          </span>
+        )}
         <button
           type="button"
           className="dragon-player-button"
@@ -1086,6 +1127,16 @@ function DragonStepper({
         >
           Forward ▶
         </button>
+        {onShare && (
+          <button
+            type="button"
+            className="dragon-player-button dragon-share-button"
+            onClick={onShare}
+            title="Copy a link that opens this puzzle with exactly this Dragon, step by step - whatever the other person's settings are."
+          >
+            Share
+          </button>
+        )}
       </div>
       <p className="dragon-player-description">{regionWording(move.description)}</p>
       <DragonAicNote />
@@ -1185,6 +1236,7 @@ function TechniqueFocusView({
   onDragonStep,
   substepIndex,
   onSubstep,
+  onShare,
 }: {
   instance: TechniqueInstance
   onClose: () => void
@@ -1195,6 +1247,8 @@ function TechniqueFocusView({
   onDragonStep: (delta: number) => void
   substepIndex: number | null
   onSubstep: (delta: number) => void
+  /** A shareable Dragon row: copies its replay link (see DragonStepper). */
+  onShare?: () => void
 }) {
   const moves = instance.moves
   const move = moves ? moves[Math.min(stepIndex, moves.length - 1)] : null
@@ -1218,6 +1272,11 @@ function TechniqueFocusView({
         <DragonAicBadge instance={instance} />
         <AicDragonBadge instance={instance} />
         <TechniqueLearnButton instance={instance} onLearn={onLearn} />
+        {onShare && (
+          <button type="button" className="dragon-player-button dragon-share-button" onClick={onShare} title="Copy a link to this Dragon">
+            Share
+          </button>
+        )}
         <button type="button" className="technique-apply-button" disabled={!canApply} onClick={onApply}>
           Apply
         </button>
@@ -1664,7 +1723,7 @@ function TechniqueLearnButton({
 }) {
   // The lessons are Classic positions; the Variant page has no How It Works.
   const variant = useContext(VariantContext)
-  const target = tutorialTargetFor(instance.id)
+  const target = tutorialTargetFor(instance.id, instance.aicPattern)
   if (!target || variant) {
     return null
   }
@@ -1823,6 +1882,13 @@ interface TechniquePanelProps {
    * imported screenshot's digits are still waiting to be locked as givens -
    * until then a misread digit would make every technique wrong. */
   locked?: ReactNode
+  /** Copies a replay link for a Dragon row of the Techniques tab (only
+   * offered for rows shareableDragonKind accepts). */
+  onShareTechnique?: (instance: TechniqueInstance) => void
+  /** A technique replay (techniqueShareLink.ts): the panel is just the
+   * recorded row and its step player - no tabs, Hint, Apply or options. */
+  replayMode?: boolean
+  onJumpToDragonStep?: (index: number) => void
 }
 
 /** The panel to the left of the grid, with three tabs sharing one "Apply"
@@ -1886,8 +1952,51 @@ function TechniquePanel({
   fittedHeight,
   compact = false,
   locked,
+  onShareTechnique,
+  replayMode = false,
+  onJumpToDragonStep,
 }: TechniquePanelProps) {
   const fitted = fittedHeight != null
+  const shareOf = (instance: TechniqueInstance) =>
+    onShareTechnique && shareableDragonKind(instance) ? () => onShareTechnique(instance) : undefined
+  if (replayMode) {
+    return (
+      <div
+        ref={panelRef}
+        className={['technique-panel', 'technique-panel-replay', fitted ? 'technique-panel-fitted' : ''].filter(Boolean).join(' ')}
+        style={fitted ? { maxHeight: fittedHeight } : undefined}
+      >
+        <div className="technique-panel-header">
+          <h2 className="technique-replay-title">Shared technique</h2>
+        </div>
+        <div className="technique-panel-body">
+          <ul className="technique-list">
+            {instances.map((instance) => (
+              <li key={instance.id} className="technique-row">
+                <div className="technique-item active technique-replay-item">
+                  <span className="technique-name">
+                    {instance.name}
+                    <VariantConstraintBadge instance={instance} />
+                  </span>
+                  <span className="technique-notation">{regionWording(instance.notation)}</span>
+                </div>
+                {instance.moves && (
+                  <DragonStepper
+                    moves={instance.moves}
+                    stepIndex={Math.min(dragonStepIndex, instance.moves.length - 1)}
+                    onDragonStep={onDragonStep}
+                    substepIndex={dragonSubstepIndex}
+                    onSubstep={onDragonSubstep}
+                    onJumpToStep={onJumpToDragonStep}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    )
+  }
   if (locked) {
     return (
       <div
@@ -1913,6 +2022,7 @@ function TechniquePanel({
           onDragonStep={onDragonStep}
           substepIndex={dragonSubstepIndex}
           onSubstep={onDragonSubstep}
+          onShare={shareOf(focused)}
         />
       </div>
     )
@@ -2070,6 +2180,7 @@ function TechniquePanel({
                       onDragonStep={onDragonStep}
                       substepIndex={dragonSubstepIndex}
                       onSubstep={onDragonSubstep}
+                      onShare={shareOf(instance)}
                     />
                   )}
                   {isActive && <AicDragonNote instance={instance} />}
@@ -2523,10 +2634,25 @@ let nextBusyTaskId = 1
  * which are left out (puzzle generation and stocks, screenshot import, the
  * SE rating, How It Works).
  */
-export default function App({ variant = false }: { variant?: boolean } = {}) {
+export default function App({
+  variant = false,
+  replayLink = null,
+}: {
+  variant?: boolean
+  /** A technique share link (`#d=`, techniqueShareLink.ts) the page was
+   * opened with, read by main.tsx before the first render. A good one puts
+   * the page in replay mode: the recorded Dragon on its own grid, nothing
+   * searched, nothing saved over the user's own puzzle. A bad one opens the
+   * ordinary page with its error in the status line. */
+  replayLink?: ReplayDecodeResult | null
+} = {}) {
+  const replay: TechniqueReplay | null = replayLink?.ok ? replayLink.replay : null
   // The puzzle and settings the user left the page with (persistedState.ts),
   // read once on mount; the effects further down keep both saved.
   const [initialGrid] = useState<GridState>(() => {
+    if (replay) {
+      return replayStartGrid(replay)
+    }
     const saved = loadSavedGrid()
     // The Classic page never has (or loads) anything but the standard grid.
     return saved ? { ...saved, constraints: (variant && saved.constraints) || CLASSIC_CONSTRAINTS } : createInitialGrid(variant)
@@ -2577,7 +2703,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     col: 2,
   })
   const [highlightedDigit, setHighlightedDigit] = useState<number | null>(null)
-  const [activeTechniqueId, setActiveTechniqueId] = useState<string | null>(null)
+  const [activeTechniqueId, setActiveTechniqueId] = useState<string | null>(replay ? replay.instance.id : null)
   const [dragonStepIndex, setDragonStepIndex] = useState(0)
   // null = "not navigating - show every technique substep of the current
   // Dynamic Dragon Colouring step revealed at once" (the default, and the
@@ -2593,7 +2719,8 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // (import.meta.env.DEV) - so a build can never turn it on. Remembered across
   // reloads of the dev server only.
   const [dragonAicDevEnabled, setDragonAicDevEnabled] = useState(() => {
-    if (!import.meta.env.DEV) {
+    // Off in a technique replay: it would search the recorded Dragon for AICs.
+    if (!import.meta.env.DEV || replay) {
       return false
     }
     try {
@@ -2618,7 +2745,8 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // still shows the chain first), its equivalent, or its short equivalent
   // (session-only).
   const [aicDragonDevEnabled, setAicDragonDevEnabled] = useState(() => {
-    if (!import.meta.env.DEV) {
+    // Off in a technique replay: it would search the recorded Dragon for AICs.
+    if (!import.meta.env.DEV || replay) {
       return false
     }
     try {
@@ -2663,7 +2791,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   const [techniquePanelTab, setTechniquePanelTab] = useState<TechniquePanelTab>('techniques')
   // Techniques tab spoiler view: hidden by default, stays revealed until the
   // user hides it again (session only, not persisted).
-  const [techniquesRevealed, setTechniquesRevealed] = useState(false)
+  const [techniquesRevealed, setTechniquesRevealed] = useState(replay !== null)
   const [findInput, setFindInput] = useState('')
   const [findResult, setFindResult] = useState<FindResult | null>(null)
   const [autocompleteResult, setAutocompleteResult] = useState<AutocompleteResult | null>(null)
@@ -2882,7 +3010,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   const [helpOpen, setHelpOpen] = useState<{ tab?: string } | null>(null)
   // The welcome popup: open on every page load until its "Never show again"
   // is ticked.
-  const [welcomeOpen, setWelcomeOpen] = useState(() => !loadWelcomeDismissed())
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !replay && !loadWelcomeDismissed())
   /** The Hint popup (Techniques tab): open while non-null. */
   const [hintView, setHintView] = useState<{ hint: TechniqueHint | null; revealed: number } | null>(null)
   /** The last hint shown, kept after the popup closes: reopening it for the
@@ -2942,7 +3070,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   }, [compact])
   // The touch layout opens on the digit pads - entering and marking digits
   // is what a phone user does first; the Techniques list is a spoiler anyway.
-  const [compactSection, setCompactSection] = useState<CompactSection>('input')
+  const [compactSection, setCompactSection] = useState<CompactSection>(replay ? 'techniques' : 'input')
   const [importText, setImportText] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   // Every explicitly started long operation still running (see
@@ -2964,7 +3092,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // reload keeps that one going (loadGivensEntry): its digits are saved as
   // they are, not locked, since half-entered givens are no puzzle yet.
   const [ocrProofread, setOcrProofread] = useState<{ historyIndex: number; imageUrl: string | null } | null>(() =>
-    !variant && loadGivensEntry() && initialGrid.givens.every((row) => row.every((given) => !given))
+    !variant && !replay && loadGivensEntry() && initialGrid.givens.every((row) => row.every((given) => !given))
       ? { historyIndex: 0, imageUrl: null }
       : null,
   )
@@ -2984,16 +3112,22 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     return () => URL.revokeObjectURL(imageUrl)
   }, [ocrProofread])
   useEffect(() => {
-    if (!variant) {
+    if (!variant && !replay) {
       saveGivensEntry(givensEntryVisible)
     }
-  }, [variant, givensEntryVisible])
+  }, [variant, replay, givensEntryVisible])
   const busy = busyTasks.length > 0
   const busyKinds = new Set(busyTasks.map((t) => t.kind))
   const solving = busyKinds.has('solve')
   const generating = busyKinds.has('generate')
   const ocrBusy = busyKinds.has('ocr')
-  const [status, setStatus] = useState('Grid status')
+  const [status, setStatus] = useState(() =>
+    replayLink && !replayLink.ok
+      ? replayLink.error
+      : replay
+        ? 'Opened a shared technique. Any candidate work here is not saved.'
+        : 'Grid status',
+  )
 
   const filled = useMemo(
     () => board.flat().filter((value) => value !== 0).length,
@@ -3206,7 +3340,8 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   }, [board, givens, givensSolveResult, puzzleSolveResult, filled])
   // Sudoku Explainer rates Classic puzzles; it knows nothing of cages or
   // regions, so the Variant page shows no rating at all.
-  const seRating = useSeRating(variant ? null : seRatedPuzzle)
+  // A technique replay runs no solver beyond the brute-force check: no rating.
+  const seRating = useSeRating(variant || replay ? null : seRatedPuzzle)
   const seRatingLine = seRating && seRatingText(seRating, 'puzzle')
   // Variant page: the puzzle's rating on the SE scale from the variant rater
   // (variantRating.ts - SukakuExplainer for a Jigsaw, its engine plus this
@@ -3214,7 +3349,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // what is rated: the givens when they make a puzzle with one solution, else
   // the grid as it stands; nothing for a puzzle with no regions or cages.
   const variantRatingTarget = useMemo(() => {
-    if (!variant || ocrProofreadVisible) {
+    if (!variant || ocrProofreadVisible || replay) {
       return null
     }
     if (givensSolveResult.status === 'solved') {
@@ -3226,7 +3361,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     }
     return puzzleSolveResult.status === 'solved' && filled < 81 ? variantRatingRequest(board, board.map((row) => row.map(() => false)), constraints) : null
     // givensKey stands for the givens on the board.
-  }, [variant, ocrProofreadVisible, givensSolveResult, puzzleSolveResult, filled, board, givens, constraints])
+  }, [variant, ocrProofreadVisible, replay, givensSolveResult, puzzleSolveResult, filled, board, givens, constraints])
   const variantRating = useVariantRating(variantRatingTarget)
   const variantRatingLine = variantRating && variantRatingTarget && variantRatingText(variantRating, variantRatingTarget.system)
 
@@ -3266,7 +3401,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     [seRatedPuzzle, puzzleSolveResult, candidatesAccurate, filled, board, candidates],
   )
   const seCurrentIsPuzzle = seCurrentPosition === seRatedPuzzle
-  const seCurrentOwnRating = useSeRating(variant || seCurrentIsPuzzle ? null : seCurrentPosition, false)
+  const seCurrentOwnRating = useSeRating(variant || replay || seCurrentIsPuzzle ? null : seCurrentPosition, false)
   const seCurrentRating = seCurrentIsPuzzle ? seRating : seCurrentOwnRating
   const seCurrentRatingLine = seCurrentRating && seRatingText(seCurrentRating, 'current')
 
@@ -3337,7 +3472,8 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // What the indicator says while `analysis` catches up - worded after what
   // actually changed, since that's what the user just did.
   const analysisBusyTask = useMemo((): BusyTask | null => {
-    if (!analysisPending) {
+    // A technique replay lists nothing it would have to recompute.
+    if (!analysisPending || replay) {
       return null
     }
     const live = liveAnalysisInputs
@@ -3361,7 +3497,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
       title: 'Applying settings…',
       detail: `Recomputing the techniques list with the new settings.${slowSettingsNote}`,
     }
-  }, [analysisPending, liveAnalysisInputs, analysis])
+  }, [analysisPending, liveAnalysisInputs, analysis, replay])
 
   // Nothing is listed while a cell's correct digit has been removed from its
   // candidates (by request): the finders trust the marks as given, so every
@@ -3369,9 +3505,13 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // deeper. The panel and the Hint popup say so instead (`wrongCandidates`).
   // candidatesAccurate is live while `analysis` is a frame behind; for that
   // one frame the two may disagree, which shows nothing worse than a blink.
+  // A technique replay lists its recorded row and nothing else: no search
+  // runs, so the viewer's settings (or wrong marks) can't change or hide it.
   const techniqueInstances = useMemo(
     () =>
-      !candidatesAccurate
+      replay
+        ? [replay.instance]
+        : !candidatesAccurate
         ? NO_TECHNIQUE_INSTANCES
         : // `analysis` is a frame behind the grid, so for that frame its
           // constraints may not be the active ones (a new puzzle just loaded).
@@ -3406,6 +3546,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     // Not keyed on `analysis` itself: easySolveEnabled (and the
     // solvability-only fields) changing mustn't redo this.
     [
+      replay,
       candidatesAccurate,
       analysis.allPossibleTechniques,
       analysis.listEasiestDragonTechniquesFirst,
@@ -3828,12 +3969,17 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     // back is the digits as they stood, as givens - same as "Lock as givens".
     // Givens being typed in ("Create From Empty Grid") are saved as they
     // are: that entry carries on after a reload (see ocrProofread).
+    // A technique replay's grid is never saved: the user's own puzzle stays
+    // what the next ordinary visit opens.
+    if (replay) {
+      return
+    }
     saveGrid(
       ocrProofreadVisible && !givensEntryVisible
         ? { ...grid, givens: grid.board.map((row) => row.map((value) => value !== 0)) }
         : grid,
     )
-  }, [grid, ocrProofreadVisible, givensEntryVisible])
+  }, [grid, ocrProofreadVisible, givensEntryVisible, replay])
   const gridFilled = board.every((row) => row.every((value) => value !== 0)) && conflictedCells.size === 0
   useEffect(() => {
     if (gridFilled) {
@@ -4162,10 +4308,10 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   const freshAutofill = useMemo(() => withConstraints(constraints, () => freshAutofillCandidates(board)), [board, constraints])
   const solvabilityRequest = useMemo(
     () =>
-      puzzleSolveResult.status === 'solved' && candidatesAccurate
+      puzzleSolveResult.status === 'solved' && candidatesAccurate && !replay
         ? { board, candidates: freshAutofill, givens, options: solvabilityOptions }
         : null,
-    [board, freshAutofill, givens, puzzleSolveResult, candidatesAccurate, solvabilityOptions],
+    [board, freshAutofill, givens, puzzleSolveResult, candidatesAccurate, solvabilityOptions, replay],
   )
   const bruteSolvePath = useWorkerSolvePath(solvabilityRequest)
 
@@ -5280,6 +5426,10 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   }
 
   function onSelectTechnique(id: string) {
+    // A technique replay keeps its one recorded row selected.
+    if (replay) {
+      return
+    }
     if (id !== activeTechniqueId) {
       const selected = techniqueInstances.find((t) => t.id === id)
       if (selected) {
@@ -5323,6 +5473,13 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     // absent) substeps - always restart that move's substep player at
     // "fully revealed" rather than carrying over an index from whichever
     // move was on screen before.
+    setDragonSubstepIndex(null)
+  }
+
+  /** A technique replay's "Go to step" list. */
+  function onJumpToDragonStep(index: number) {
+    const maxIndex = (highlightedTechnique?.moves?.length ?? 1) - 1
+    setDragonStepIndex(Math.min(maxIndex, Math.max(0, index)))
     setDragonSubstepIndex(null)
   }
 
@@ -6220,6 +6377,22 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
    * import box and the paste shortcut. False (with the reason in the status
    * line) when the text isn't a puzzle. */
   async function importPuzzleText(text: string): Promise<boolean> {
+    // A technique replay works on its one shared position only.
+    if (replay) {
+      setStatus('This page only shows the shared technique. Use "Open the full solver" to import a puzzle.')
+      return false
+    }
+    // A technique link (a Dragon's Share) pasted instead of opened: it is
+    // read before the page renders (main.tsx), so go to it.
+    const replayPayload = replayPayloadOf(text)
+    if (replayPayload !== null) {
+      if (window.location.hash === `#d=${replayPayload}`) {
+        window.location.reload()
+      } else {
+        window.location.assign(`#d=${replayPayload}`)
+      }
+      return true
+    }
     // A share link ("Copy Link") pasted instead of opened.
     const sharedPayload = sharePayloadOf(text)
     if (sharedPayload !== null) {
@@ -6333,6 +6506,10 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
    * copying from some apps puts a rendered image on the clipboard next to the
    * text; an image with no usable text beside it goes to OCR. */
   async function importFromClipboard(text: string, image: Blob | null) {
+    if (replay) {
+      void importPuzzleText(text)
+      return
+    }
     const trimmed = text.trim()
     if (trimmed && (await importPuzzleText(trimmed))) {
       return
@@ -6456,6 +6633,84 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     }
   }
 
+  /** A Dragon row's Share: a link that replays exactly this Dragon, on the
+   * position it was found on (techniqueShareLink.ts). The rows come from
+   * `analysis` (a frame behind the live grid), so that is the position
+   * recorded; the candidate colours are the live ones. The clipboard write
+   * is handed the link as a promise, so the click still counts as the
+   * gesture that allows it (Safari) while the log is being compressed. */
+  async function onShareTechnique(instance: TechniqueInstance) {
+    const position: SavedGrid = {
+      board: analysis.board,
+      givens: ocrProofreadVisible ? analysis.board.map((row) => row.map((value) => value !== 0)) : analysis.givens,
+      candidates: analysis.candidates,
+      candidateColors: grid.candidateColors,
+      constraints: analysis.constraints,
+    }
+    const urlPromise = encodeTechniqueReplay(position, instance).then((payload) =>
+      replayLinkUrl(payload, variant, shareSiteUrl(shareLinkProductionDev)),
+    )
+    const trackingName = techniqueTrackingName(instance.name)
+    try {
+      if (typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'text/plain': urlPromise.then((url) => new Blob([url], { type: 'text/plain' })) }),
+        ])
+      } else {
+        await navigator.clipboard.writeText(await urlPromise)
+      }
+      showToast('Link to this Dragon copied to clipboard!')
+      trackEvent('technique share', 'Copy', trackingName)
+    } catch {
+      try {
+        const url = await urlPromise
+        try {
+          await navigator.clipboard.writeText(url)
+          showToast('Link to this Dragon copied to clipboard!')
+          trackEvent('technique share', 'Copy', trackingName)
+        } catch {
+          setStatus("Couldn't access the clipboard - here's the link to this Dragon to copy manually:")
+          setImportText(url)
+        }
+      } catch {
+        setStatus("Couldn't make a link for this Dragon in this browser.")
+        trackEvent('technique share', 'Copy failed', trackingName)
+      }
+    }
+  }
+
+  /** Technique replay: the recorded position back on the grid - one undoable
+   * step, so whatever the viewer had done is an Undo away. */
+  function onResetReplayGrid() {
+    if (!replay) {
+      return
+    }
+    commitGrid(replayStartGrid(replay), null)
+    setDragonStepIndex(0)
+    setDragonSubstepIndex(null)
+    setStatus('The grid is back to the shared position. Undo brings back what you had.')
+  }
+
+  /** Technique replay: leaves for the ordinary solver - with the grid as it
+   * stands now (as a position share link, so it opens as one undoable step
+   * over the user's own puzzle), or with the user's own puzzle. */
+  function onLeaveReplay(withThisGrid: boolean) {
+    const base = shareSiteUrl(false)
+    window.location.assign(
+      withThisGrid ? shareLinkUrl(encodeShareState(grid), variant, base) : `${base}${variant ? 'variants/' : ''}`,
+    )
+  }
+
+  /** Technique replay: copies the link the page was opened with. */
+  async function onCopyReplayLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      showToast('Link copied to clipboard!')
+    } catch {
+      setStatus(`Couldn't access the clipboard - copy the link from the address bar.`)
+    }
+  }
+
   /** Puts the position of a share link on the grid - one undoable step, like
    * opening a saved puzzle, so the grid it replaces is an Undo away. A link
    * that can't be read changes nothing and says why in the status line. */
@@ -6489,7 +6744,23 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     openSharedPuzzleRef.current = openSharedPuzzle
   })
   useEffect(() => {
-    const openFromAddress = () => {
+    // A technique link is read before the first render (main.tsx), so one
+    // pasted into the address bar of an open tab reloads the page - as does
+    // any new fragment while a replay is open.
+    if (replay) {
+      const reload = () => window.location.reload()
+      window.addEventListener('hashchange', reload)
+      return () => window.removeEventListener('hashchange', reload)
+    }
+    const openFromAddress = (event?: HashChangeEvent) => {
+      if (replayPayloadOf(window.location.hash) !== null) {
+        // Not on the first call: a link main.tsx couldn't read is what
+        // opened this ordinary page (its error is in the status line).
+        if (event) {
+          window.location.reload()
+        }
+        return
+      }
       const payload = sharePayloadOf(window.location.hash)
       if (payload !== null && openSharedPuzzleRef.current(payload)) {
         window.history.replaceState(null, '', window.location.pathname + window.location.search)
@@ -6498,7 +6769,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     openFromAddress()
     window.addEventListener('hashchange', openFromAddress)
     return () => window.removeEventListener('hashchange', openFromAddress)
-  }, [])
+  }, [replay])
 
   /** What a Saved Puzzles entry holds: the grid as it stands. A screenshot
    * import still being proofread is saved already locked, as the autosave
@@ -7433,7 +7704,37 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   // below (unchanged - three columns around the grid), and the touch layout
   // (useCompactLayout), which pins the grid and puts every control group
   // behind one of the dock's tabs. Both reuse the exact same elements.
-  const header = variant ? (
+  // A technique replay (techniqueShareLink.ts) gets its own header: what was
+  // shared, how to read it, and the ways out to the ordinary solver.
+  const replayGridChanged = replay !== null && !gridMatchesReplay(grid, replay)
+  const replayHeader = replay && (
+    <header className="header replay-header">
+      <h1>
+        Shared technique: {replay.instance.name} <span className="app-version">{APP_VERSION}</span>
+      </h1>
+      <p className="replay-intro">
+        This link only shows one specific <b>{REPLAY_KIND_NAMES[replay.kind]}</b> technique in this puzzle. No other techniques are shown. 
+      </p>
+      {replayGridChanged && (
+        <p className="replay-changed-note" role="note">
+          Your grid no longer matches the shared position, so a step may show less than it was recorded with (a candidate you
+          removed can't be lit). <b>Reset to shared position</b> puts it back - Undo then returns your changes.
+        </p>
+      )}
+      <div className="replay-actions">
+        <button type="button" onClick={() => void onCopyReplayLink()}>
+          Copy this link
+        </button>
+        <button type="button" onClick={() => onLeaveReplay(true)} title="Open this grid, as it stands now, in the full solver">
+          Continue in the full solver
+        </button>
+        <button type="button" onClick={() => onLeaveReplay(false)} title="Open the full solver with your own puzzle">
+          Open the full solver
+        </button>
+      </div>
+    </header>
+  )
+  const header = replay ? replayHeader : variant ? (
     <header className="header">
       <h1>
         Variant Sudoku Colouring Solver <span className="app-version">{APP_VERSION}</span>
@@ -7488,35 +7789,56 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
     </header>
   )
 
-  const toolbar = (
+  const undoRedoSegment = (
+    <div className="toolbar-segment">
+    <button
+      type="button"
+      className="undo-trigger"
+      onClick={undo}
+      disabled={busy || !canUndo}
+      aria-label={compact ? 'Undo' : undefined}
+      title={compact ? 'Undo' : undefined}
+    >
+      <UndoRedoIcon direction="undo" />
+      {!phone && <span className="toolbar-label">Undo</span>}
+    </button>
+    <button
+      type="button"
+      className="redo-trigger"
+      onClick={redo}
+      disabled={busy || !canRedo}
+      aria-label={compact ? 'Redo' : undefined}
+      title={compact ? 'Redo' : undefined}
+    >
+      <UndoRedoIcon direction="redo" />
+      {!phone && <span className="toolbar-label">Redo</span>}
+    </button>
+    </div>
+  )
+
+  // A technique replay's toolbar: Undo / Redo for the viewer's own edits, and
+  // the way back to the recorded position.
+  const toolbar = replay ? (
+    <div className="main-toolbar">
+      <div className="toolbar-group">
+        {undoRedoSegment}
+        <button
+          type="button"
+          className="clear-grid-trigger"
+          onClick={onResetReplayGrid}
+          disabled={busy || !replayGridChanged}
+          title="Put the shared position back on the grid (one step - Undo returns your changes)"
+        >
+          Reset to shared position
+        </button>
+      </div>
+    </div>
+  ) : (
     <div className="main-toolbar">
       <div className="toolbar-group">
         {/* Icons on a phone, so the one-row toolbar still fits the 💡 Hint.
             Desktop: Undo and Redo are one joined pair (.toolbar-segment). */}
-        <div className="toolbar-segment">
-        <button
-          type="button"
-          className="undo-trigger"
-          onClick={undo}
-          disabled={busy || !canUndo}
-          aria-label={compact ? 'Undo' : undefined}
-          title={compact ? 'Undo' : undefined}
-        >
-          <UndoRedoIcon direction="undo" />
-          {!phone && <span className="toolbar-label">Undo</span>}
-        </button>
-        <button
-          type="button"
-          className="redo-trigger"
-          onClick={redo}
-          disabled={busy || !canRedo}
-          aria-label={compact ? 'Redo' : undefined}
-          title={compact ? 'Redo' : undefined}
-        >
-          <UndoRedoIcon direction="redo" />
-          {!phone && <span className="toolbar-label">Redo</span>}
-        </button>
-        </div>
+        {undoRedoSegment}
         {/* In the touch layout the toolbar stays one row - every row above
             the grid comes out of the dock's height. Clear grid moves into
             the "⋯" menu at the end; Learn techniques / Quickstart go there
@@ -8810,6 +9132,9 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
 
   const techniquePanel = (
     <TechniquePanel
+      replayMode={replay !== null}
+      onJumpToDragonStep={onJumpToDragonStep}
+      onShareTechnique={replay ? undefined : onShareTechnique}
       locked={techniquesLockedNotice}
       tab={techniquePanelTab}
       onTabChange={onTechniquePanelTabChange}
@@ -9957,7 +10282,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           (grid has {filled}/81 cells filled{variant ? `; ${variantName(constraints)} puzzle` : ''})
         </span>
       </p>
-      <p className={['solvability', `solvability-${solvability.kind}`].join(' ')}>{solvabilityText(solvability)}</p>
+      {!replay && <p className={['solvability', `solvability-${solvability.kind}`].join(' ')}>{solvabilityText(solvability)}</p>}
     </>
   )
 
@@ -9997,7 +10322,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
 
       {/* The welcome popup introduces the Classic trainer; the Variant
           page's header and Variant Sudoku help tab do that job there. */}
-      {welcomeOpen && !variant && (
+      {welcomeOpen && !variant && !replay && (
         <WelcomeModal
           onDismiss={(neverShowAgain, link) => {
             if (neverShowAgain) {
@@ -10165,7 +10490,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
   if (compact) {
     // A selected Techniques-list row fills the dock (TechniqueFocusView).
     const techniqueFocused =
-      compactSection === 'techniques' && techniquePanelTab === 'techniques' && techniquesRevealed && activeTechnique != null
+      !replay && compactSection === 'techniques' && techniquePanelTab === 'techniques' && techniquesRevealed && activeTechnique != null
     const dockContent: Record<CompactSection, ReactNode> = {
       techniques: techniquePanel,
       input: (
@@ -10184,10 +10509,10 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
         <>
           <div className="compact-status">
             {statusLines}
-            {variant ? variantRatingElement : seRatingElement}
+            {!replay && (variant ? variantRatingElement : seRatingElement)}
           </div>
-          {autosolveGroup}
-          {actionsRow}
+          {!replay && autosolveGroup}
+          {!replay && actionsRow}
         </>
       ),
       import: (
@@ -10216,11 +10541,15 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
         onKeyUp={onKeyUp}
         onPaste={onScopedPaste}
       >
-        {!phone && (
-          <div className="compact-header-row">
-            {header}
-            {tabletHeaderActions}
-          </div>
+        {replay ? (
+          header
+        ) : (
+          !phone && (
+            <div className="compact-header-row">
+              {header}
+              {tabletHeaderActions}
+            </div>
+          )
         )}
         {toolbar}
         <div className="compact-board">{gridElement}</div>
@@ -10244,7 +10573,8 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
           {dockContent[compactSection]}
         </div>
         <nav className="compact-tabs" role="tablist" aria-label="Control panels">
-          {COMPACT_SECTIONS.map(({ id, label }) => (
+          {/* A technique replay has nothing to import or load. */}
+          {COMPACT_SECTIONS.filter(({ id }) => !replay || id !== 'import').map(({ id, label }) => (
             <button
               key={id}
               type="button"
@@ -10288,16 +10618,17 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
         <div className="grid-column" ref={gridColumnRef}>
           {gridElement}
 
-          {variant ? variantRatingElement : seRatingElement}
+          {/* A technique replay runs no rating, import or brute force. */}
+          {!replay && (variant ? variantRatingElement : seRatingElement)}
 
-          {importRows}
+          {!replay && importRows}
 
           {/* Right under the import rows, not below the status lines. */}
-          {actionsRow}
+          {!replay && actionsRow}
         </div>
 
         <div className="controls">
-          {variantLayoutPanel}
+          {!replay && variantLayoutPanel}
 
           {solutionGroup}
 
@@ -10307,7 +10638,7 @@ export default function App({ variant = false }: { variant?: boolean } = {}) {
 
           {highlightGroup}
 
-          {autosolveGroup}
+          {!replay && autosolveGroup}
         </div>
       </div>
 

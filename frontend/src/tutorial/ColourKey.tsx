@@ -2,7 +2,7 @@ import { TUTORIAL_COLOUR_HEX, type TutorialColor, type TutorialFrame } from './t
 
 // What each look on the board means - shown under the lesson player and the
 // practice quiz, and only the ones the pictures in hand actually use.
-type LegendKind = TutorialColor | 'split' | 'eliminated' | 'solved' | 'link' | 'helper'
+type LegendKind = TutorialColor | 'split' | 'eliminated' | 'solved' | 'link' | 'weakLink' | 'helper'
 const LEGEND_TEXT: Record<LegendKind, { label: string; note?: string }> = {
   blue: { label: 'Blue' },
   yellow: { label: 'Yellow' },
@@ -16,6 +16,7 @@ const LEGEND_TEXT: Record<LegendKind, { label: string; note?: string }> = {
   eliminated: { label: 'Eliminated' },
   solved: { label: 'Answer' },
   link: { label: 'Link' },
+  weakLink: { label: 'Weak link', note: "can't both be true" },
   helper: { label: 'Helper technique' },
 }
 
@@ -37,9 +38,10 @@ function legendFor(frames: readonly KeyFrame[]): LegendKind[] {
     if (frame.eliminated?.length) used.add('eliminated')
     if (frame.solved?.length) used.add('solved')
     if (frame.links?.some((l) => l.kind === 'strong')) used.add('link')
+    if (frame.links?.some((l) => l.kind === 'weak')) used.add('weakLink')
     if (frame.greenCells?.length) used.add('helper')
   }
-  const order: LegendKind[] = [...COLOUR_KINDS, 'link', 'eliminated', 'solved', 'helper']
+  const order: LegendKind[] = [...COLOUR_KINDS, 'link', 'weakLink', 'eliminated', 'solved', 'helper']
   return order.filter((kind) => used.has(kind))
 }
 
@@ -74,12 +76,19 @@ export default function ColourKey({ frames, coloursOnly = false }: ColourKeyProp
   // With two Dragons on the board, say which one light blue and yellow are.
   const hasSecondDragon = all.some((kind) => SECOND_DRAGON_KINDS.includes(kind))
   const split = firstSplitPair(frames)
+  const hasWeakLinks = all.includes('weakLink')
   return (
     <ul className="tutorial-legend" aria-label="Colour key">
       {items.map((kind) => {
         const { label } = LEGEND_TEXT[kind]
-        const text = kind === 'blue' && hasDragonColours ? 'Light blue' : label
-        const note = hasSecondDragon && (kind === 'blue' || kind === 'yellow') ? 'first Dragon' : LEGEND_TEXT[kind].note
+        // Beside a weak link, the plain "Link" is named for what it is.
+        const text = kind === 'blue' && hasDragonColours ? 'Light blue' : kind === 'link' && hasWeakLinks ? 'Strong link' : label
+        const note =
+          hasSecondDragon && (kind === 'blue' || kind === 'yellow')
+            ? 'first Dragon'
+            : kind === 'link' && hasWeakLinks
+              ? "can't both be false"
+              : LEGEND_TEXT[kind].note
         return (
           <li key={kind}>
             <span

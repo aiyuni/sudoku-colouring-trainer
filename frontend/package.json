@@ -12,6 +12,7 @@
     "test:ocr": "rolldown ocr-fixtures/run.ts --format esm --platform node --external tesseract.js -o ocr-fixtures/.out/run.mjs && node ocr-fixtures/.out/run.mjs",
     "test:saved-puzzles": "rolldown saved-puzzle-tests/run.ts --format esm --platform node -o saved-puzzle-tests/.out/run.mjs && node saved-puzzle-tests/.out/run.mjs",
     "test:share-link": "rolldown share-link-tests/run.ts --format esm --platform node -o share-link-tests/.out/run.mjs && node share-link-tests/.out/run.mjs",
+    "test:technique-share": "rolldown technique-share-tests/run.ts --format esm --platform node -o technique-share-tests/.out/run.mjs && node technique-share-tests/.out/run.mjs",
     "test:variant-rating": "node variant-rating-fixtures/run.mjs",
     "test:variants": "rolldown variant-tests/run.ts --format esm --platform node -o variant-tests/.out/run.mjs && node variant-tests/.out/run.mjs",
     "test:practice": "rolldown practice-tests/run.ts --format esm --platform node -o practice-tests/.out/run.mjs && node practice-tests/.out/run.mjs"

@@ -1,5 +1,6 @@
 import { decodePuzzleState } from './puzzleState'
 import {
+  buildAicQuestions,
   buildBilocalQuestions,
   buildBivalueQuestions,
   buildLockedCandidatesQuestions,
@@ -7,6 +8,8 @@ import {
   buildNakedPairQuestions,
   buildSimpleColouringQuestions,
   buildSinglesQuestions,
+  buildWWingQuestions,
+  buildYWingQuestions,
   conceptQuestion,
   doubleDragonRelationQuestions,
   dragonColourQuestion,
@@ -27,9 +30,10 @@ import type { TutorialLesson } from './tutorialTypes'
  * questions each, for someone who has just read the lesson and met the
  * technique for the first time (earlier tabs are assumed known).
  *
- * Basics, Simple Colouring and 3D Medusa are asked on fresh positions - the
- * boards below, mined by dragon-research/quiz/mine.ts in the same
- * board + removed-marks form tutorialExamples.ts uses. Every other quiz is
+ * Basics, Simple Colouring, 3D Medusa and Miscellaneous Techniques are
+ * asked on fresh positions - the boards below, mined by
+ * dragon-research/quiz/mine.ts (Y-Wing's by dragon-research/y-wing/mine.ts)
+ * in the same board + removed-marks form tutorialExamples.ts uses. Every other quiz is
  * asked on its lesson's own position: a hand-written concept question (the
  * tables below), then questions read off the lesson's frames. Dragon,
  * Dynamic and Double Dragon are deliberately kept to quick picks, by request;
@@ -84,6 +88,51 @@ const MEDUSA_CLASH = () => ({
   seed: { row: 8, col: 3, digit: 4 },
 })
 
+/** Y-Wing's two practice positions: plain autofills (no marks removed),
+ * mined by dragon-research/y-wing/mine.ts (RELAXED=1). The first pivot
+ * commands exactly one pair of pincers (buildYWingQuestions checks). */
+const Y_WING_FIRST = () => ({
+  state: decodePuzzleState('425837961381569724697214853234185679160072040750046000516408007842703006973601480'),
+  pivot: [4, 6] as const,
+})
+const Y_WING_SECOND = () => ({
+  state: decodePuzzleState('908064132301902084204138907897015003012300809430829710089000301043081090120093478'),
+  pivot: [8, 3] as const,
+})
+
+/** W-Wing's two practice positions, plain autofills too (mined by
+ * dragon-research/w-wing/mine.ts): the remote pair r1c7 / r4c1 (4 in
+ * column 9), then r5c6 / r8c4 (2 in column 9). */
+const W_WING_FIRST = () => ({
+  state: decodePuzzleState('063951087715000963908637000006000070807005006301700098182573649639482751574100832'),
+  pair: [
+    [3, 0],
+    [0, 6],
+  ] as const,
+})
+const W_WING_SECOND = () => ({
+  state: decodePuzzleState('412375900963418275578926300057049603634580790029637000340750809780093000295864137'),
+  pair: [
+    [4, 5],
+    [7, 3],
+  ] as const,
+})
+
+/** AIC's two practice positions, plain autofills (mined by
+ * dragon-research/aic/mine.ts): a Two-String Kite on 9, then a Skyscraper on
+ * 2. Neither chain's ends see each other (buildAicQuestions checks the
+ * first): "at least one end is true" would otherwise be "exactly one". */
+const AIC_FIRST = () => ({
+  state: decodePuzzleState('000820905200060801780301426470210583801030742352000169527600314938142657004003298'),
+  pattern: 'Two-String Kite' as const,
+  start: { row: 3, col: 2, digit: 9 },
+})
+const AIC_SECOND = () => ({
+  state: decodePuzzleState('008167300630289000701543086002695873973824651800731492000916038300408000089302064'),
+  pattern: 'Skyscraper' as const,
+  start: { row: 6, col: 0, digit: 2 },
+})
+
 // ---- assembling ----
 
 /** Runs one question builder; a position that no longer matches costs that
@@ -126,6 +175,14 @@ const BASICS: Record<string, () => QuizQuestion[]> = {
   Bivalues: () => buildBivalueQuestions(BILOCAL_BIVALUE()),
 }
 
+// ---- Miscellaneous Techniques: fresh positions, like the Basics ----
+
+const MISC: Record<string, () => QuizQuestion[]> = {
+  'Y-Wing': () => buildYWingQuestions(Y_WING_FIRST(), Y_WING_SECOND()),
+  'W-Wing': () => buildWWingQuestions(W_WING_FIRST(), W_WING_SECOND()),
+  AIC: () => buildAicQuestions(AIC_FIRST(), AIC_SECOND()),
+}
+
 // ---- Abusing Uniqueness: one concept question and one "where to look" hint
 // per sub-tab, then questions read off the lesson. ----
 
@@ -137,9 +194,9 @@ interface UniquenessSpec {
   /** Which lesson frame the concept question is shown over (0 = the first). */
   conceptFrame?: number
   spot: SpotKind
-  /** Said after a wrong tap on "what goes?". */
+  /** Said after a wrong tap on "what can be eliminated?". */
   hint: string
-  /** The reason behind "what goes?", where the lesson's own conclusion frame
+  /** The reason behind "what can be eliminated?", where the lesson's own conclusion frame
    * is only the bare result (see whatGoesQuestion). */
   why?: string
 }
@@ -340,7 +397,7 @@ const UNIQUENESS: Record<string, UniquenessSpec> = {
       { label: 'Nothing yet', why: 'It is the only cell that can break the pattern, so it has to.' },
     ],
     spot: 'pattern-extras',
-    hint: 'Look at the one cell with other candidates: its pattern digits are what go.',
+    hint: 'Look at the one cell with other candidates: its pattern digits are what can be eliminated.',
   },
 }
 
@@ -419,7 +476,7 @@ function uniquenessQuestions(group: LessonGroup): QuizQuestion[] {
     ...safely(() => spotQuestion(first, spec.spot)),
     ...safely(() => conceptQuestion(first, 'concept', spec.prompt, spec.options, frame)),
     ...safely(() => whatGoesQuestion(first, `what-goes-${first.id}`, spec.hint, { why: spec.why })),
-    // A second example of the same technique gets a "what goes?" of its own.
+    // A second example of the same technique gets a "what can be eliminated?" of its own.
     ...rest.slice(0, 1).flatMap((lesson) => safely(() => whatGoesQuestion(lesson, `what-goes-${lesson.id}`, spec.hint, { why: spec.why }))),
   ]
 }
@@ -486,10 +543,16 @@ function doubleQuestions(group: LessonGroup): QuizQuestion[] {
 // ---- the page's entry points ----
 
 /** The practice quiz of a sub-tab (Basics, Abusing Uniqueness, Double
- * Dragons), or null if it has none. */
-export function buildGroupQuiz(tab: 'basics' | 'uniqueness' | 'double', group: LessonGroup): Quiz | null {
+ * Dragons, Miscellaneous Techniques), or null if it has none. */
+export function buildGroupQuiz(tab: 'basics' | 'uniqueness' | 'double' | 'misc', group: LessonGroup): Quiz | null {
   const questions =
-    tab === 'basics' ? safely(BASICS[group.title] ?? (() => [])) : tab === 'uniqueness' ? uniquenessQuestions(group) : doubleQuestions(group)
+    tab === 'basics'
+      ? safely(BASICS[group.title] ?? (() => []))
+      : tab === 'misc'
+        ? safely(MISC[group.title] ?? (() => []))
+        : tab === 'uniqueness'
+          ? uniquenessQuestions(group)
+          : doubleQuestions(group)
   return quiz(quizIdFor(tab, group.title), group.title, questions)
 }
 

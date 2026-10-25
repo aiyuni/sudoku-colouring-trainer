@@ -1,4 +1,5 @@
 import { useId, type KeyboardEvent } from 'react'
+import { layoutAicLinks } from '../aicLinkLayout'
 import { markedCandidateDigits } from '../sudoku/boardUtils'
 import { candKey, stateForFrame } from './puzzleState'
 import {
@@ -106,9 +107,21 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel, int
     return true
   }
 
+  // A chain (any weak link) is laid out like the main grid's AIC links:
+  // curved where a straight line would cover one of its own candidates or an
+  // elimination, always curved inside one cell. Every other lesson keeps its
+  // straight lines below.
+  const chainLinks = frame.links?.some((link) => link.kind === 'weak') ? frame.links : null
+  const chainPaths = chainLinks
+    ? layoutAicLinks(
+        chainLinks.map((link) => ({ from: pipCenter(link.from), to: pipCenter(link.to), excluded: [] })),
+        [...chainLinks.flatMap((link) => [pipCenter(link.from), pipCenter(link.to)]), ...(frame.eliminated ?? []).map(pipCenter)],
+      ).map((laid, index) => ({ d: laid.d, kind: chainLinks[index].kind }))
+    : []
+
   // Each link is drawn a little short of both ends so the digit under it
   // stays readable, and so an arrowhead lands beside the target, not on it.
-  const links = (frame.links ?? []).map((link) => {
+  const links = (chainLinks ? [] : (frame.links ?? [])).map((link) => {
     const a = pipCenter(link.from)
     const b = pipCenter(link.to)
     const dx = b.x - a.x
@@ -246,6 +259,13 @@ export default function TutorialGrid({ state, frame, size = 'md', ariaLabel, int
         )
       })}
 
+      {chainPaths.length > 0 && (
+        <svg className="tutorial-links" viewBox="0 0 900 900" aria-hidden="true">
+          {chainPaths.map(({ d, kind }, index) => (
+            <path key={index} className={kind === 'weak' ? 'tutorial-link-weak' : 'tutorial-link-strong'} d={d} fill="none" />
+          ))}
+        </svg>
+      )}
       {links.length > 0 && (
         <svg className="tutorial-links" viewBox="0 0 900 900" aria-hidden="true">
           <defs>

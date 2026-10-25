@@ -3,6 +3,7 @@ import { SudokuColorFinder } from '../sudoku/SudokuColorFinder'
 import { SudokuLockedCandidateFinder } from '../sudoku/SudokuLockedCandidateFinder'
 import { SudokuMedusaFinder } from '../sudoku/SudokuMedusaFinder'
 import { SudokuPairFinder } from '../sudoku/SudokuPairFinder'
+import { findAicChain, findWWing, findYWing } from './lessonBuilders'
 import { candKey } from './puzzleState'
 import type {
   CandidatesQuestion,
@@ -35,7 +36,7 @@ import type {
  * - Basics, Simple Colouring and 3D Medusa are asked on fresh positions
  *   (quizExamples.ts), found by dragon-research/quiz/mine.ts.
  * - Everything else is asked on the lesson's own position, from its frames:
- *   the frame that first marks an elimination is the answer to "what goes?".
+ *   the frame that first marks an elimination is the answer to "what can be eliminated?".
  *
  * Like a lesson builder, each of these throws when its position stops
  * matching what it expects; quizExamples.ts drops that one question.
@@ -301,7 +302,7 @@ export function buildLockedCandidatesQuestions(state: PuzzleState): QuizQuestion
   const remove: CandidatesQuestion = {
     kind: 'candidates',
     id: 'pointing-remove',
-    badge: 'What goes?',
+    badge: 'What can be eliminated?',
     prompt: `The box's ${digit} must be one of the yellow ones, so ${unitPhrase(line)} gets its ${digit} inside this box. Tap a ${digit} that can be removed.`,
     state,
     frame,
@@ -314,7 +315,7 @@ export function buildLockedCandidatesQuestions(state: PuzzleState): QuizQuestion
       if (basisCells.some((b) => sameCell(b, cell))) return `That one stays: it is one of the box's own ${digit}s.`
       return `That ${digit} isn't in ${unitPhrase(line)}, so this box says nothing about it.`
     },
-    explain: `Box ${box.index + 1} puts its ${digit} in ${unitPhrase(line)}, so every other ${digit} in ${unitPhrase(line)} goes.`,
+    explain: `Box ${box.index + 1} puts its ${digit} in ${unitPhrase(line)}, so every other ${digit} in ${unitPhrase(line)} can be eliminated.`,
     doneFrame: { ...frame, eliminated },
   }
 
@@ -406,7 +407,7 @@ export function buildNakedPairQuestions(state: PuzzleState): QuizQuestion[] {
   const remove: CandidatesQuestion = {
     kind: 'candidates',
     id: 'naked-pair-remove',
-    badge: 'What goes?',
+    badge: 'What can be eliminated?',
     prompt: `Tap ${need === 1 ? 'a candidate' : 'two candidates'} the pair removes.`,
     state,
     frame: found,
@@ -419,7 +420,7 @@ export function buildNakedPairQuestions(state: PuzzleState): QuizQuestion[] {
       if (pick.digit !== d1 && pick.digit !== d2) return `Only ${d1}s and ${d2}s are affected.`
       return `That cell doesn't share a row, column or box with both cells of the pair.`
     },
-    explain: `${d1} and ${d2} belong to the pair, so every other ${d1} and ${d2} that sees both cells goes.`,
+    explain: `${d1} and ${d2} belong to the pair, so every other ${d1} and ${d2} that sees both cells can be eliminated.`,
     doneFrame: { ...found, eliminated },
   }
   return [spot, meaning, remove]
@@ -695,7 +696,7 @@ export function buildSimpleColouringQuestions(
   const seesBoth: CandidatesQuestion = {
     kind: 'candidates',
     id: 'simple-sees-both',
-    badge: 'What goes?',
+    badge: 'What can be eliminated?',
     prompt: `Exactly one colour is true. Tap a ${digit} that sees both a light blue ${digit} and a yellow ${digit}.`,
     state,
     frame: { coloured: order, spotlight },
@@ -830,7 +831,7 @@ export function buildMedusaQuestions(
   const seesBothQuestion: CandidatesQuestion = {
     kind: 'candidates',
     id: 'medusa-sees-both',
-    badge: 'What goes?',
+    badge: 'What can be eliminated?',
     prompt: 'Exactly one colour is true. Tap an uncoloured candidate that sees both a light blue and a yellow candidate of its own digit.',
     state,
     frame: { coloured: order },
@@ -895,8 +896,8 @@ function medusaClashQuestion(state: PuzzleState, seed: CandRef): ChoiceQuestion 
       },
       { label: `${capital(falseName)} is true`, swatch: mass.falseColor, why: `Then ${impossible}.` },
       {
-        label: 'Only those two candidates go',
-        why: `All candidates of one colour are true together or false together, so the whole colour goes - not just the two that clash.`,
+        label: 'Only those two candidates are eliminated',
+        why: `All candidates of one colour are true together or false together, so the whole colour is eliminated - not just the two that clash.`,
       },
     ],
     {
@@ -925,7 +926,7 @@ function conclusionFrame(lesson: TutorialLesson): TutorialFrame {
 }
 
 /**
- * "What goes?" on a lesson's own position: the board as the lesson's
+ * "What can be eliminated?" on a lesson's own position: the board as the lesson's
  * conclusion frame draws it, minus the conclusion (red/green marks, the
  * dashed lines pointing at it); the lesson's own captions are the
  * explanation. `hint` is what a wrong tap says - where to look.
@@ -964,7 +965,7 @@ export function whatGoesQuestion(
   return {
     kind: 'candidates',
     id,
-    badge: 'What goes?',
+    badge: 'What can be eliminated?',
     prompt: removes ? `Tap a candidate ${options.subject ?? 'this pattern'} removes.` : 'Tap the candidate that must be true.',
     state: lesson.state,
     frame,
@@ -1074,7 +1075,7 @@ export function dragonColourQuestion(lesson: TutorialLesson, id: string, colours
 /**
  * How a Dragon lesson ends, on its own position. When a whole side turns out
  * false the question is what that means for the four colours; when it ends
- * on single eliminations it is "what goes?".
+ * on single eliminations it is "what can be eliminated?".
  */
 export function dragonResultQuestion(lesson: TutorialLesson, id: string): QuizQuestion {
   const conclusion = conclusionFrame(lesson)
@@ -1115,11 +1116,11 @@ export function dragonResultQuestion(lesson: TutorialLesson, id: string): QuizQu
         why: `Exactly one side is true. ${capital(f)} is false, so ${t} is true - and so is everything that follows from it (${tDragon}). ${conclusion.caption}`,
       },
       {
-        label: `Only the ${f} candidates go`,
+        label: `Only the ${f} candidates are eliminated`,
         swatch: falseSide[0],
         why: `${capital(fDragon)} only ever followed from ${f}, so it proves nothing now - and with ${f} false, ${t} must be true.`,
       },
-      { label: 'Every coloured candidate goes', why: `One of ${f} and ${t} is always true. With ${f} false, the ${t} side is the solution.` },
+      { label: 'Every coloured candidate is eliminated', why: `One of ${f} and ${t} is always true. With ${f} false, the ${t} side is the solution.` },
     ],
     shown,
   )
@@ -1280,3 +1281,374 @@ export function doubleDragonRelationQuestions(lesson: TutorialLesson, frame: Qui
 }
 
 export { cellName as quizCellName, digitsAt as quizDigitsAt, list as quizList }
+
+// ------------------------------------------------- miscellaneous: Y-Wing
+
+/** Every pair of pincers the pivot could command: cells it sees holding only
+ * {X,Z} and {Y,Z} for one Z - the answer key of "tap its two pincers", worked
+ * out from the grid so a second Y-Wing on the same pivot can't be missed. */
+function pincerPairs(state: PuzzleState, pivot: TutorialCell): Array<[TutorialCell, TutorialCell]> {
+  // Every pair has one cell holding x and one holding y, so taking `a` as
+  // the x side finds each pair once.
+  const [x, y] = digitsAt(state, pivot)
+  const seen = NINE.flatMap((r) => NINE.map((c) => [r, c] as const)).filter((cell) => sees(pivot, cell) && digitsAt(state, cell).length === 2)
+  const pairs: Array<[TutorialCell, TutorialCell]> = []
+  for (const a of seen) {
+    const da = digitsAt(state, a)
+    if (!da.includes(x) || da.includes(y)) continue
+    const z = da.find((d) => d !== x)!
+    for (const b of seen) {
+      const db = digitsAt(state, b)
+      if (db.includes(y) && db.includes(z)) pairs.push([a, b])
+    }
+  }
+  return pairs
+}
+
+/**
+ * Y-Wing's practice, on two fresh positions (quizExamples.ts), told as the
+ * lesson tells it - a pivot, two pincers, a bent triple - never as a chain.
+ * `first` is asked about step by step; `second` only "what can be eliminated?", with the
+ * three cells outlined and the rest left to the reader.
+ */
+export function buildYWingQuestions(
+  first: { state: PuzzleState; pivot: TutorialCell },
+  second: { state: PuzzleState; pivot: TutorialCell },
+): QuizQuestion[] {
+  const { state } = first
+  const wing = required(findYWing(state, first.pivot), 'Y-Wing on that pivot')
+  const { pivot, pincers, x, y, z, targets } = wing
+  const pairs = pincerPairs(state, pivot)
+  if (pairs.length !== 1) throw new Error(`Practice question: the pivot commands ${pairs.length} pairs of pincers, not one.`)
+  const [p, w1, w2] = [pivot, ...pincers].map(([r, c]) => cellName(r, c))
+  const three = [pivot, pincers[0], pincers[1]]
+  const pips = (cell: TutorialCell) => digitsAt(state, cell).map((d) => ref(cell[0], cell[1], d))
+  const found: QuizFrame = { outlineCells: three, basis: three.flatMap(pips) }
+  const orderedOr = (a: number, b: number) => `${Math.min(a, b)} or ${Math.max(a, b)}`
+
+  const spot: CellsQuestion = {
+    kind: 'cells',
+    id: 'y-wing-pincers',
+    badge: 'Spot it',
+    prompt: `The outlined ${p} can only be ${orderedOr(x, y)}: it is the pivot. Tap its two pincers - cells it sees holding only ${x} and one other digit, and only ${y} and that same digit.`,
+    state,
+    frame: { outlineCells: [pivot], basis: pips(pivot) },
+    answers: [...pincers],
+    need: 2,
+    wrong: (cell) => {
+      const name = cellName(cell[0], cell[1])
+      if (sameCell(cell, pivot)) return `${name} is the pivot itself.`
+      if (state.board[cell[0]][cell[1]] !== 0) return `${name} is already filled in.`
+      if (!sees(pivot, cell)) return `${name} doesn't share a row, column or box with the pivot, so the pivot can't command it.`
+      const digits = digitsAt(state, cell)
+      if (digits.length !== 2) return `${name} has ${digits.length} candidates (${digits.join(', ')}). A pincer has exactly two.`
+      if (digits.includes(x) && digits.includes(y)) return `${name} holds the pivot's own two digits. A pincer shares only one of them.`
+      if (!digits.includes(x) && !digits.includes(y)) return `${name} (${digits.join(', ')}) shares no digit with the pivot.`
+      return `${name} (${digits.join(', ')}) shares a digit with the pivot, but no cell on the other side shares its second digit.`
+    },
+    explain: `${w1} (${orderedOr(x, z)}) and ${w2} (${orderedOr(y, z)}): each shares one of the pivot's digits, and both share ${z}. Three cells, three digits - a bent triple.`,
+    doneFrame: found,
+  }
+
+  const suppose = choice(
+    'y-wing-if',
+    'Quick pick',
+    `Suppose the pivot ${p} is ${x}. What does the pincer ${w1} have to be?`,
+    state,
+    { ...found, solved: [ref(pivot[0], pivot[1], x)], eliminated: [ref(pivot[0], pivot[1], y)] },
+    [
+      { label: String(z), correct: true, why: `${w1} sees the pivot, so it can't be ${x} as well - only ${z} is left.` },
+      { label: String(x), why: `${w1} sees the pivot, so the two of them can't both be ${x}.` },
+      { label: "Can't tell yet", why: `${w1} holds only ${x} and ${z}, and the pivot has taken ${x}.` },
+    ],
+    {
+      ...found,
+      solved: [ref(pivot[0], pivot[1], x), ref(pincers[0][0], pincers[0][1], z)],
+      eliminated: [ref(pivot[0], pivot[1], y), ref(pincers[0][0], pincers[0][1], x)],
+    },
+  )
+
+  const attack: QuizFrame = { outlineCells: three, basis: pincers.map(([r, c]) => ref(r, c, z)), unitCells: targets, spotlight: { digits: [z] } }
+  const why = choice(
+    'y-wing-why',
+    'Quick pick',
+    `The tinted cells see both pincers. Why can none of them be ${z}?`,
+    state,
+    attack,
+    [
+      {
+        label: `Whichever digit the pivot is, one of the pincers is ${z}`,
+        correct: true,
+        why: `If the pivot is ${x}, ${w1} is ${z}; if it is ${y}, ${w2} is ${z}. Either way a cell that sees both pincers sees a ${z}.`,
+      },
+      { label: `Both pincers are ${z}`, why: `Only one of them has to be - and one is enough, because these cells see both.` },
+      { label: `The pivot is ${z}`, why: `The pivot can only be ${x} or ${y}. It is the pincers that carry ${z}.` },
+    ],
+    { ...attack, eliminated: wing.eliminated },
+  )
+
+  const other = required(findYWing(second.state, second.pivot), 'Y-Wing on that pivot')
+  const otherThree = [other.pivot, other.pincers[0], other.pincers[1]]
+  const [p2, v1, v2] = otherThree.map(([r, c]) => cellName(r, c))
+  const need = Math.min(2, other.eliminated.length)
+  const struck = list(other.eliminated.map((e) => cellName(e.row, e.col)))
+  const remove: CandidatesQuestion = {
+    kind: 'candidates',
+    id: 'y-wing-remove',
+    badge: 'What can be eliminated?',
+    prompt: `The three outlined cells are a Y-Wing. Tap ${need === 1 ? 'a candidate' : 'two candidates'} it removes.`,
+    state: second.state,
+    frame: { outlineCells: otherThree },
+    answers: other.eliminated,
+    need,
+    pickLook: 'eliminated',
+    wrong: (pick) => {
+      const cell: TutorialCell = [pick.row, pick.col]
+      if (otherThree.some((c) => sameCell(c, cell))) return "The Y-Wing's own cells keep their candidates."
+      if (pick.digit !== other.z) return 'Only the digit both pincers share is attacked. Find the pivot first: the cell that sees the other two.'
+      return "That cell doesn't see both pincers."
+    },
+    explain: `${p2} is the pivot (${other.x} or ${other.y}); ${v1} and ${v2} are its pincers, sharing ${other.z}. So ${other.z} can be eliminated from every cell that sees both pincers: ${struck}.`,
+    doneFrame: { outlineCells: otherThree, unitCells: other.targets, eliminated: other.eliminated },
+  }
+  return [spot, suppose, why, remove]
+}
+
+// ------------------------------------------------- miscellaneous: W-Wing
+
+/**
+ * W-Wing's practice, on two fresh positions (quizExamples.ts), told as the
+ * lesson tells it - a remote pair that a unit won't let be the same digit -
+ * never as a chain. `first` is asked about step by step; `second` only "what can
+ * be eliminated?", with the pair outlined and the unit tinted.
+ */
+export function buildWWingQuestions(
+  first: { state: PuzzleState; pair: readonly [TutorialCell, TutorialCell] },
+  second: { state: PuzzleState; pair: readonly [TutorialCell, TutorialCell] },
+): QuizQuestion[] {
+  const { state } = first
+  const wing = required(findWWing(state, first.pair), 'W-Wing on that pair')
+  const { pair, link, other, unit: u, linkPlaces, eliminated } = wing
+  const [anchor, partner] = pair
+  const [a, b] = pair.map(([r, c]) => cellName(r, c))
+  const where = unitPhrase(u)
+  const pairDigits = [link, other].sort((p, q) => p - q)
+  const pairText = `${pairDigits[0]} or ${pairDigits[1]}`
+  const pips = pair.flatMap(([r, c]) => [ref(r, c, link), ref(r, c, other)])
+  const linkPips = linkPlaces.map(([r, c]) => ref(r, c, link))
+  const found: QuizFrame = { outlineCells: [...pair], basis: pips }
+
+  // Every cell the anchor can't see holding exactly its two digits is a
+  // remote partner, W-Wing or not - which is all the prompt asks for.
+  const sameTwo = (cell: TutorialCell) => {
+    const digits = digitsAt(state, cell)
+    return digits.length === 2 && digits[0] === pairDigits[0] && digits[1] === pairDigits[1]
+  }
+  const partners = NINE.flatMap((r) => NINE.map((c) => [r, c] as const)).filter(
+    (cell) => !sameCell(cell, anchor) && !sees(anchor, cell) && sameTwo(cell),
+  )
+  const anchorName = cellName(anchor[0], anchor[1])
+  const spot: CellsQuestion = {
+    kind: 'cells',
+    id: 'w-wing-partner',
+    badge: 'Spot it',
+    prompt: `The outlined ${anchorName} can only be ${pairText}. Tap a cell with exactly the same two candidates that ${anchorName} can't see - a remote partner.`,
+    state,
+    frame: { outlineCells: [anchor], basis: pips.filter((p) => sameCell([p.row, p.col], anchor)) },
+    answers: partners,
+    need: 1,
+    wrong: (cell) => {
+      const name = cellName(cell[0], cell[1])
+      if (sameCell(cell, anchor)) return `${name} is the outlined cell itself.`
+      if (state.board[cell[0]][cell[1]] !== 0) return `${name} is already filled in.`
+      if (!sameTwo(cell)) return `${name} holds ${digitsAt(state, cell).join(', ')} - not exactly ${pairText}.`
+      return `${name} sees ${anchorName}: together they are an ordinary naked pair, not a remote one.`
+    },
+    explain:
+      partners.length === 1
+        ? `${cellName(...partners[0])} can only be ${pairText} too, and can't see ${anchorName}: a remote pair. Nothing stops the two from being the same digit.`
+        : `${list(partners.map((c) => cellName(c[0], c[1])))} can each only be ${pairText} too, and can't see ${anchorName}: each makes a remote pair with it. The next questions follow ${cellName(partner[0], partner[1])}.`,
+    doneFrame: { outlineCells: [anchor, ...partners], basis: [anchor, ...partners].flatMap(([r, c]) => [ref(r, c, link), ref(r, c, other)]) },
+  }
+
+  const unitFrame: QuizFrame = { ...found, unitCells: u.cells, basis: [...pips, ...linkPips], spotlight: { digits: [link] } }
+  const section = choice(
+    'w-wing-unit',
+    'Quick pick',
+    `Every ${link} left in the tinted ${where} sees ${a} or ${b}. Could ${a} and ${b} both be ${link}?`,
+    state,
+    unitFrame,
+    [
+      {
+        label: `No - ${where} would have nowhere left for ${link}`,
+        correct: true,
+        why: `Both being ${link} would rule out every ${link} in ${where}, and a ${u.kind} must hold every digit once.`,
+      },
+      {
+        label: "Yes - they can't see each other",
+        why: `No rule stops them directly, but ${where} would lose every place for ${link}. That is what makes this pair special.`,
+      },
+      { label: `They must both be ${link}`, why: `Nothing forces that - and it would leave ${where} with no ${link} at all.` },
+    ],
+    { ...unitFrame, eliminated: linkPips },
+  )
+
+  const t = eliminated[0]
+  const tName = cellName(t.row, t.col)
+  const supposeFrame: QuizFrame = { ...found, unitCells: u.cells, fresh: [t], spotlight: { digits: [link, other] } }
+  const suppose = choice(
+    'w-wing-suppose',
+    'Quick pick',
+    `${tName} sees both ${a} and ${b}. Suppose the circled ${other} in ${tName} were true. What would happen?`,
+    state,
+    supposeFrame,
+    [
+      {
+        label: `${a} and ${b} would both be ${link}, so ${where} would have no ${link}`,
+        correct: true,
+        why: `Both cells lose ${other} and are left with ${link} - which breaks ${where}. So ${tName} can't be ${other}.`,
+      },
+      { label: `Only ${a} would change`, why: `${tName} sees both cells of the pair, so both lose ${other}.` },
+      {
+        label: "Nothing - the pair can't see each other",
+        why: `They don't need to see each other: each of them sees ${tName}, and that is enough to force both to be ${link}.`,
+      },
+    ],
+    {
+      ...supposeFrame,
+      fresh: undefined,
+      solved: [t, ...pair.map(([r, c]) => ref(r, c, link))],
+      eliminated: [...pair.map(([r, c]) => ref(r, c, other)), ...linkPips],
+    },
+  )
+
+  const next = required(findWWing(second.state, second.pair), 'W-Wing on that pair')
+  const [c1, c2] = next.pair.map(([r, c]) => cellName(r, c))
+  const nextWhere = unitPhrase(next.unit)
+  const need = Math.min(2, next.eliminated.length)
+  const struck = list(next.eliminated.map((e) => cellName(e.row, e.col)))
+  const remove: CandidatesQuestion = {
+    kind: 'candidates',
+    id: 'w-wing-remove',
+    badge: 'What can be eliminated?',
+    prompt: `The outlined cells are a remote pair, and every ${next.link} in the tinted ${nextWhere} sees one of them. Tap ${need === 1 ? 'a candidate' : 'two candidates'} this W-Wing removes.`,
+    state: second.state,
+    frame: { outlineCells: [...next.pair], unitCells: next.unit.cells },
+    answers: next.eliminated,
+    need,
+    pickLook: 'eliminated',
+    wrong: (pick) => {
+      const cell: TutorialCell = [pick.row, pick.col]
+      if (next.pair.some((c) => sameCell(c, cell))) return "The pair's own candidates stay."
+      if (pick.digit !== next.other) return `Look for the pair's other digit, ${next.other}: being ${next.other} would force both cells to be ${next.link}.`
+      return "That cell doesn't see both cells of the pair."
+    },
+    explain: `A cell that sees ${c1} and ${c2} can't be ${next.other}: it would force both to be ${next.link}, leaving ${nextWhere} without one. So ${next.other} can be eliminated from ${struck}.`,
+    doneFrame: { outlineCells: [...next.pair], unitCells: next.targets, eliminated: next.eliminated },
+  }
+  return [spot, section, suppose, remove]
+}
+
+// ------------------------------------------------- miscellaneous: AIC
+
+/**
+ * AIC's practice, on two fresh positions (quizExamples.ts): what a strong
+ * link and a weak link each say, what the whole chain proves, then "what can
+ * be eliminated?" on a second chain. Chains are drawn, as in the lesson.
+ */
+export function buildAicQuestions(
+  first: { state: PuzzleState; pattern: 'Skyscraper' | 'Two-String Kite'; start: CandRef },
+  second: { state: PuzzleState; pattern: 'Skyscraper' | 'Two-String Kite'; start: CandRef },
+): QuizQuestion[] {
+  const { state } = first
+  const chain = required(findAicChain(state, first.pattern, first.start), `${first.pattern} from that candidate`)
+  const [n0, n1, n2, n3] = chain.nodes
+  if (!n3 || chain.nodes.length !== 4) throw new Error('Practice question: expected a four-candidate chain.')
+  const name = (c: CandRef) => `${c.digit} in ${cellName(c.row, c.col)}`
+  const links: TutorialLink[] = [
+    { from: n0, to: n1, kind: 'strong' },
+    { from: n1, to: n2, kind: 'weak' },
+    { from: n2, to: n3, kind: 'strong' },
+  ]
+  const spotlight = { digits: [n0.digit] }
+  if (sees([n0.row, n0.col], [n3.row, n3.col])) throw new Error("Practice question: the chain's ends see each other, so exactly one is true.")
+  const strong = required(strongUnit(state, n0.digit, [n0.row, n0.col], [n1.row, n1.col]), 'strong link unit')
+  const weakUnits = sharedUnits([n1.row, n1.col], [n2.row, n2.col])
+  const weak = required(weakUnits[weakUnits.length - 1], 'weak link unit')
+
+  const strongFrame: QuizFrame = { links: links.slice(0, 1), basis: [n0, n1], spotlight }
+  const strongQuestion = choice(
+    'aic-strong',
+    'Quick pick',
+    `The red line is a strong link: ${name(n0)} and ${name(n1)} are the only places for ${n0.digit} in ${unitPhrase(strong)}. If ${name(n0)} is false, what is ${name(n1)}?`,
+    state,
+    strongFrame,
+    [
+      { label: 'True', correct: true, why: `${capital(unitPhrase(strong))} needs a ${n0.digit} somewhere, and ${cellName(n1.row, n1.col)} is the only other place left.` },
+      { label: 'False', why: `Then ${unitPhrase(strong)} would have no ${n0.digit} at all. A strong link means the two can't both be false.` },
+      { label: "Can't tell", why: `With only two places for ${n0.digit} in ${unitPhrase(strong)}, ruling one out decides the other.` },
+    ],
+    { ...strongFrame, basis: undefined, eliminated: [n0], solved: [n1] },
+  )
+
+  const weakFrame: QuizFrame = { links: links.slice(0, 2), basis: [n0, n1, n2], spotlight }
+  const weakQuestion = choice(
+    'aic-weak',
+    'Quick pick',
+    `The dashed blue line is a weak link: ${name(n1)} and ${name(n2)} share ${unitPhrase(weak)}. If ${name(n1)} is true, what is ${name(n2)}?`,
+    state,
+    weakFrame,
+    [
+      { label: 'False', correct: true, why: `${capital(unitPhrase(weak))} can't hold two ${n1.digit}s. A weak link means the two can't both be true.` },
+      { label: 'True', why: `That would put ${n1.digit} twice in ${unitPhrase(weak)}.` },
+      {
+        label: "Can't tell",
+        why: `A weak link does decide this case: if one end is true, the other is false. (If one were false, that is when it couldn't tell.)`,
+      },
+    ],
+    { ...weakFrame, basis: [n0], solved: [n1], eliminated: [n2] },
+  )
+
+  const chainFrame: QuizFrame = { links, basis: chain.nodes, spotlight }
+  const endsQuestion = choice(
+    'aic-ends',
+    'Quick pick',
+    `The whole chain runs strong, weak, strong, from ${name(n0)} to ${name(n3)}. What does it prove about those two ends?`,
+    state,
+    chainFrame,
+    [
+      {
+        label: 'At least one of them is true',
+        correct: true,
+        why: `If ${name(n0)} is false, the strong link makes ${name(n1)} true, the weak link makes ${name(n2)} false, and the last strong link makes ${name(n3)} true.`,
+      },
+      { label: 'Exactly one of them is true', why: 'Nothing stops both ends from being true - the chain only rules out both being false.' },
+      { label: 'Both of them are true', why: 'Only one end has to be. The chain proves they are never both false.' },
+    ],
+    { ...chainFrame, basis: [n0, n3], eliminated: chain.eliminated },
+  )
+
+  const next = required(findAicChain(second.state, second.pattern, second.start), `${second.pattern} from that candidate`)
+  const ends = [next.nodes[0], next.nodes[next.nodes.length - 1]]
+  const nextLinks: TutorialLink[] = next.nodes.slice(1).map((to, i) => ({ from: next.nodes[i], to, kind: i % 2 === 0 ? 'strong' : 'weak' }))
+  const need = Math.min(2, next.eliminated.length)
+  const remove: CandidatesQuestion = {
+    kind: 'candidates',
+    id: 'aic-remove',
+    badge: 'What can be eliminated?',
+    prompt: `This chain runs strong, weak, strong from ${name(ends[0])} to ${name(ends[1])}. Tap ${need === 1 ? 'a candidate' : 'two candidates'} it eliminates.`,
+    state: second.state,
+    frame: { links: nextLinks, basis: next.nodes, spotlight: { digits: [ends[0].digit] } },
+    answers: next.eliminated,
+    need,
+    pickLook: 'eliminated',
+    wrong: (pick) => {
+      if (next.nodes.some((n) => n.row === pick.row && n.col === pick.col && n.digit === pick.digit)) return "The chain's own candidates stay."
+      if (pick.digit !== ends[0].digit) return `Both ends are ${ends[0].digit}s, so look for ${ends[0].digit === 8 ? 'an' : 'a'} ${ends[0].digit}.`
+      return "That one doesn't see both ends of the chain."
+    },
+    explain: `One end of the chain is always true, so ${ends[0].digit === 8 ? 'an' : 'a'} ${ends[0].digit} that sees both ends can be eliminated: ${list(next.eliminated.map((e) => cellName(e.row, e.col)))}.`,
+    doneFrame: { links: nextLinks, basis: ends, eliminated: next.eliminated, spotlight: { digits: [ends[0].digit] } },
+  }
+  return [strongQuestion, weakQuestion, endsQuestion, remove]
+}

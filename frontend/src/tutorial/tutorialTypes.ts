@@ -34,9 +34,15 @@ export interface TutorialLink {
   to: CandRef
   /** 'strong': the two candidates can't both be false (a strong link) - drawn
    * as the app's usual red line, with an arrowhead when it shows which one
-   * the colouring came from. 'sees': a dashed line joining a candidate to
-   * something it can see, used to show why an elimination follows. */
-  kind: 'strong' | 'sees'
+   * the colouring came from. 'weak': the two can't both be true (a weak
+   * link) - drawn as the app's dashed blue AIC line. 'sees': a dashed line
+   * joining a candidate to something it can see, used to show why an
+   * elimination follows.
+   *
+   * A frame with any weak link is a chain (the AIC lesson): all its links are
+   * then laid out the way the main grid lays out an AIC's (aicLinkLayout.ts),
+   * curving round candidates and inside a cell. */
+  kind: 'strong' | 'weak' | 'sees'
   arrow?: boolean
 }
 

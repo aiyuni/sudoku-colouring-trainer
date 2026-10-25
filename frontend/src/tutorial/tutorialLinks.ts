@@ -1,9 +1,10 @@
 import type { ColourTabId } from './tutorialExamples'
 
-export type TutorialTabId = 'basics' | ColourTabId | 'double' | 'uniqueness'
+export type TutorialTabId = 'basics' | ColourTabId | 'double' | 'uniqueness' | 'misc'
 
 /** Where on the How It Works page a technique is taught: a tab, and on a
- * tab with sub-tabs (Basics, Double Dragons, Abusing Uniqueness) the
+ * tab with sub-tabs (Basics, Double Dragons, Abusing Uniqueness,
+ * Miscellaneous Techniques) the
  * sub-tab's `LessonGroup.title` in tutorialExamples.ts. */
 export interface TutorialTarget {
   tab: TutorialTabId
@@ -19,9 +20,19 @@ const UR_TYPES_TAUGHT = new Set(['1', '2', '3', '4', '5', '7a', '7b', '7c', '7d'
  * it yet - the Hint popup's "Learn this technique" link only appears when
  * this returns something. A new lesson for a technique must be added here
  * too, and a renamed sub-tab title changed here to match.
+ *
+ * `aicPattern` is the row's `TechniqueInstance.aicPattern`: a named pattern
+ * of an AIC (Y-Wing, W-Wing) has a lesson of its own although its id is a plain
+ * Short AIC's.
  */
-export function tutorialTargetFor(instanceId: string): TutorialTarget | null {
+export function tutorialTargetFor(instanceId: string, aicPattern?: string): TutorialTarget | null {
   const id = instanceId
+  if (aicPattern === 'Y-Wing') return { tab: 'misc', group: 'Y-Wing' }
+  if (aicPattern === 'W-Wing') return { tab: 'misc', group: 'W-Wing' }
+  // Every other plain chain - a Skyscraper, a Two-String Kite, any Short or
+  // Generic AIC - is taught by the AIC lesson. Not an Empty Rectangle: its
+  // chain runs through a group, which the lesson leaves out.
+  if (/^(short-single-digit-aic|short-aic|generic-aic)-/.test(id) && aicPattern !== 'Empty Rectangle') return { tab: 'misc', group: 'AIC' }
   if (id.startsWith('naked-single') || id.startsWith('hidden-single')) return { tab: 'basics', group: 'Singles' }
   if (id.startsWith('locked-candidate-')) return { tab: 'basics', group: 'Locked Candidates' }
   if (/^naked-(pair|triple|quad)/.test(id) || id.startsWith('hidden-pair')) return { tab: 'basics', group: 'Locked Sets' }
@@ -42,6 +53,6 @@ export function tutorialTargetFor(instanceId: string): TutorialTarget | null {
   if (id.startsWith('double-dragon-')) return { tab: 'double', group: 'Double Plain Dragon Colouring' }
   if (id.startsWith('dynamic-dragon-')) return { tab: 'dynamic' }
   if (id.startsWith('dragon-')) return { tab: 'dragon' }
-  // Fish, AICs and ALS-xz aren't taught on the page yet.
+  // Fish, grouped/UR/ALS AICs and ALS-xz aren't taught on the page yet.
   return null
 }

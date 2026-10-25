@@ -10,6 +10,7 @@ import {
   buildBasicsGroups,
   buildColourLessons,
   buildDoubleDragonGroups,
+  buildMiscGroups,
   buildUniquenessGroups,
   type ColourTabId,
   type LessonGroup,
@@ -54,6 +55,11 @@ const TABS: Array<{ id: TabId; label: string; tagline: string }> = [
     label: 'Abusing Uniqueness',
     tagline:
       "Shortcuts (primarily Unique Rectangles) that rely on a proper puzzle having exactly one solution: a pattern that would allow two solutions can never happen, so whatever prevents it must be true. Uniqueness is never needed to solve a puzzle - you can always solve it without these - so this whole section consists of optional yet rewarding techniques.",
+  },
+  {
+    id: 'misc',
+    label: 'Miscellaneous Techniques',
+    tagline: 'All of these techniques can be replaced by Plain Dragon Colouring, but these techniques are still useful techniques to know as they can be utilized with Dynamic Dragon Colouring.',
   },
 ]
 
@@ -288,9 +294,9 @@ function BasicsGroup({ group }: { group: LessonGroup }) {
   )
 }
 
-/** A sub-tab played step by step (Abusing Uniqueness, Double Dragons), with
- * its practice quiz. */
-function GroupLessons({ tab, group }: { tab: 'uniqueness' | 'double'; group: LessonGroup }) {
+/** A sub-tab played step by step (Abusing Uniqueness, Double Dragons,
+ * Miscellaneous Techniques), with its practice quiz. */
+function GroupLessons({ tab, group }: { tab: 'uniqueness' | 'double' | 'misc'; group: LessonGroup }) {
   const quiz = useMemo(() => buildGroupQuiz(tab, group), [tab, group])
   return <LessonSwitcher lessons={group.lessons} quiz={quiz} areaName={practiceAreaName(tab, group.title)} />
 }
@@ -319,6 +325,20 @@ function UniquenessView({ initialGroup, extendedUrEnabled }: { initialGroup?: st
       tab="uniqueness"
       initialGroup={initialGroup}
       render={(group) => <GroupLessons key={group.title} tab="uniqueness" group={group} />}
+    />
+  )
+}
+
+/** Miscellaneous Techniques: a sub-tab per technique, each played step by step. */
+function MiscView({ initialGroup }: { initialGroup?: string }) {
+  const groups = useMemo(() => buildMiscGroups(), [])
+  return (
+    <GroupTabs
+      groups={groups}
+      label="Miscellaneous techniques"
+      tab="misc"
+      initialGroup={initialGroup}
+      render={(group) => <GroupLessons key={group.title} tab="misc" group={group} />}
     />
   )
 }
@@ -456,6 +476,8 @@ export default function TutorialPage({ onClose, initialTab = 'basics', initialGr
           <UniquenessView initialGroup={groupFor('uniqueness')} extendedUrEnabled={extendedUrEnabled} />
         ) : tab === 'double' ? (
           <DoubleDragonView initialGroup={groupFor('double')} />
+        ) : tab === 'misc' ? (
+          <MiscView initialGroup={groupFor('misc')} />
         ) : (
           <ColourView key={tab} tab={tab} />
         )}

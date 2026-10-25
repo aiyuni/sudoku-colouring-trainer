@@ -18,6 +18,7 @@ import { SudokuExtendedUniqueRectangleFinder } from '../sudoku/SudokuExtendedUni
 import { SudokuLockedCandidateFinder } from '../sudoku/SudokuLockedCandidateFinder'
 import { SudokuMedusaFinder, type ColoredCandidate, type MedusaChain } from '../sudoku/SudokuMedusaFinder'
 import { SudokuPairFinder } from '../sudoku/SudokuPairFinder'
+import { SudokuShortAicFinder, type ShortAicInstance, type ShortAicPattern } from '../sudoku/SudokuShortAicFinder'
 import { BOARD_SIZE, BOX_SIZE } from '../sudoku/SudokuRules'
 import { SudokuUniqueRectangleFinder, type UniqueRectangleTypeName } from '../sudoku/SudokuUniqueRectangleFinder'
 import type {
@@ -51,6 +52,7 @@ const bugFinder = new SudokuBugPlusNFinder()
 const oddagonFinder = new SudokuBivalueOddagonFinder()
 const avoidableRectangleFinder = new SudokuAvoidableRectangleFinder()
 const extendedUrFinder = new SudokuExtendedUniqueRectangleFinder()
+const shortAicFinder = new SudokuShortAicFinder()
 
 // ---------------------------------------------------------------- helpers
 
@@ -800,8 +802,8 @@ function medusaConclusionFrames(
       {
         badge: 'Result',
         caption: wholeChain
-          ? `So ${falseColor} is false and ${trueColor} is true. Colouring the rest of the Medusa the same way, every ${trueColor} candidate is a solution and every ${falseColor} candidate goes.`
-          : `So ${trueColor} is true: it solves its cells, and every ${falseColor} candidate goes.`,
+          ? `So ${falseColor} is false and ${trueColor} is true. Colouring the rest of the Medusa the same way, every ${trueColor} candidate is a solution and every ${falseColor} candidate is eliminated.`
+          : `So ${trueColor} is true: it solves its cells, and every ${falseColor} candidate is eliminated.`,
         coloured: wholeChain ?? coloured,
         links: wholeChain ? [] : arrows,
         solved: mass.solvedCells.map((n) => ref(n.row, n.col, n.digit)),
@@ -1045,7 +1047,7 @@ function dragonFrame(moves: DragonMove[], index: number, lastIndex: number): Tut
   const total = new Set(fold.eliminatedCandidates.map((c) => `${c.row},${c.col},${c.digit}`)).size
   const caption =
     lastIndex > index && total > move.eliminated.length
-      ? `${firstCaption} ${total} candidates go in all.`
+      ? `${firstCaption} ${total} candidates are eliminated in all.`
       : firstCaption
   return {
     badge,
@@ -1769,7 +1771,7 @@ export function buildBugPlusNLesson(id: string, title: string, hint: string, sta
               (sharedOther
                 ? ` Only the extra digit counts: ${sharedOther} is in ${allOf} cells too, but it isn't an extra digit, so a cell seeing them can still be ${sharedOther}.`
                 : '')
-            : `Anything that can't be true alongside each of them goes.`,
+            : `Anything that can't be true alongside each of them can be eliminated.`,
         outlineCells: triCells,
         basis: bugPips,
         eliminated,
@@ -1859,7 +1861,7 @@ export function buildAvoidableRectangleLesson(options: AvoidableRectangleOptions
         eliminated,
         spotlight,
       },
-      { badge: 'Result', caption: `So ${x} goes from ${cellList(eliminated.map((e) => [e.row, e.col] as const))}.`, outlineCells: corners, eliminated, spotlight, applied: true },
+      { badge: 'Result', caption: `So ${x} can be eliminated from ${cellList(eliminated.map((e) => [e.row, e.col] as const))}.`, outlineCells: corners, eliminated, spotlight, applied: true },
     ]
   }
   return { id, title, hint, state, frames }
@@ -2073,4 +2075,476 @@ export function buildExtendedUrLesson(options: ExtendedUrOptions): TutorialLesso
     },
   ]
   return { id, title, hint, state, frames }
+}
+
+// ------------------------------------------------- miscellaneous: Y-Wing
+
+/** A Y-Wing told as a bent triple: the pivot {X,Y}, the pincer that shares
+ * X with it ({X,Z}) and the one that shares Y ({Y,Z}). */
+export interface YWingParts {
+  pivot: TutorialCell
+  /** [the {X,Z} pincer, the {Y,Z} pincer] */
+  pincers: [TutorialCell, TutorialCell]
+  x: number
+  y: number
+  z: number
+  /** The Z candidates it removes. */
+  eliminated: CandRef[]
+  /** Every unsolved cell, outside the three, that sees both pincers. */
+  targets: TutorialCell[]
+  /** The row/column/box each pincer shares with the pivot. */
+  units: [Unit, Unit]
+}
+
+/**
+ * The Y-Wing on `pivot` - the Techniques list's own (the Short AIC finder
+ * names it, `aic.yWing`), so the lesson and its practice can't disagree with
+ * the solver. Taught as a bent triple, never as a chain, by request: nothing
+ * here reads the chain's links.
+ */
+export function findYWing(state: PuzzleState, pivot: TutorialCell): YWingParts | null {
+  const found = shortAicFinder
+    .findShortAics(state.board, state.candidates)
+    .filter((aic): aic is ShortAicInstance & { yWing: NonNullable<ShortAicInstance['yWing']> } => aic.pattern === 'Y-Wing' && !!aic.yWing)
+    .find((aic) => sameCell(aic.yWing.pivot, pivot))
+  if (!found) return null
+  const { yWing } = found
+  const z = yWing.eliminatedDigit
+  const pivotDigits = markedCandidateDigits(state.candidates[pivot[0]][pivot[1]])
+  const wings = yWing.wings.map(([r, c]) => [r, c] as const)
+  // Which pincer shares which pivot digit: the {X,Z} one first.
+  const first = markedCandidateDigits(state.candidates[wings[0][0]][wings[0][1]])
+  const x = pivotDigits.find((d) => first.includes(d))!
+  const y = pivotDigits.find((d) => d !== x)!
+  const units = wings.map((w) => {
+    const shared = sharedUnits(pivot, w)
+    return shared[shared.length - 1]
+  })
+  const targets: TutorialCell[] = []
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const cell = [r, c] as const
+      if (state.board[r][c] !== 0 || sameCell(cell, pivot) || wings.some((w) => sameCell(w, cell))) continue
+      if (wings.every((w) => sees(w, cell))) targets.push(cell)
+    }
+  }
+  return {
+    pivot,
+    pincers: [wings[0], wings[1]],
+    x,
+    y,
+    z,
+    eliminated: found.eliminations.map((e) => ref(e.row, e.col, e.digit)),
+    targets,
+    units: [units[0], units[1]],
+  }
+}
+
+interface YWingOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  /** The pivot, in case the position has more than one Y-Wing. */
+  pivot: TutorialCell
+}
+
+/**
+ * Y-Wing as a bent triple (by request - not as an AIC, so no lines): the
+ * pivot, the commander, holds {X,Y}; it sees two pincers, {X,Z} and {Y,Z},
+ * through two different units. Three cells, three digits - a triple, but bent
+ * round the pivot rather than lying in one unit. Whichever digit the pivot
+ * takes, one pincer is forced to Z, so the two-pronged attack lands on every
+ * cell both pincers can see.
+ */
+export function buildYWingLesson(options: YWingOptions): TutorialLesson {
+  const { id, title, hint, state, pivot } = options
+  const wing = findYWing(state, pivot)
+  if (!wing) {
+    throw new Error(`No Y-Wing with its pivot at ${cellName(pivot[0], pivot[1])} in this example.`)
+  }
+  const { x, y, z, pincers, units, eliminated, targets } = wing
+  const orderedOr = (a: number, b: number) => `${Math.min(a, b)} or ${Math.max(a, b)}`
+  const [p, w1, w2] = [pivot, ...pincers].map(([r, c]) => cellName(r, c))
+  const three = [pivot, pincers[0], pincers[1]]
+  const pips = (cell: TutorialCell) => markedCandidateDigits(state.candidates[cell[0]][cell[1]]).map((d) => ref(cell[0], cell[1], d))
+  const spotlight = { digits: [x, y, z] }
+  const struck = cellList(eliminated.map((e) => [e.row, e.col] as const))
+  const shared = { outlineCells: three, spotlight }
+  // "If the pivot is X": the pivot and the pincer it forces, drawn as the
+  // Bilocals lesson draws an "if" - red for what goes, green for what stays.
+  const suppose = (digit: number, other: number, pincer: TutorialCell, untouched: TutorialCell): TutorialFrame => ({
+    ...shared,
+    solved: [ref(pivot[0], pivot[1], digit), ref(pincer[0], pincer[1], z)],
+    eliminated: [ref(pivot[0], pivot[1], other), ref(pincer[0], pincer[1], digit)],
+    basis: pips(untouched),
+    caption: '',
+  })
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Pivot',
+      caption: `${p} can only be ${orderedOr(x, y)}. It is the pivot: the commander of this Y-Wing.`,
+      outlineCells: [pivot],
+      basis: pips(pivot),
+      spotlight,
+    },
+    {
+      badge: 'Pincers',
+      caption: `The pivot sees ${w1} in ${unitPhrase(units[0])}, which can only be ${orderedOr(x, z)}, and ${w2} in ${unitPhrase(units[1])}, which can only be ${orderedOr(y, z)}. These two are its pincers.`,
+      ...shared,
+      unitCells: [...units[0].cells, ...units[1].cells],
+      basis: three.flatMap(pips),
+    },
+    {
+      badge: 'Bent triple',
+      caption: `Three cells holding only ${joinPhrases([x, y, z].sort((a, b) => a - b).map(String))}: a triple. But it isn't a naked triple - the cells don't share one row, column or box. It is bent at the pivot, across ${unitPhrase(units[0])} and ${unitPhrase(units[1])}.`,
+      ...shared,
+      basis: three.flatMap(pips),
+    },
+    {
+      ...suppose(x, y, pincers[0], pincers[1]),
+      badge: `If ${x}`,
+      caption: `If the pivot is ${x}, ${w1} can't be ${x} as well - so that pincer is ${z}.`,
+    },
+    {
+      ...suppose(y, x, pincers[1], pincers[0]),
+      badge: `If ${y}`,
+      caption: `If the pivot is ${y} instead, ${w2} can't be ${y} - so that pincer is ${z}.`,
+    },
+    {
+      badge: 'Pincer attack',
+      caption: `The pivot must be ${orderedOr(x, y)}, so one of the two pincers is always ${z} - we just don't know which. A cell that sees both pincers would clash with either one, so it can't be ${z}: ${struck}.`,
+      ...shared,
+      unitCells: targets,
+      basis: pincers.map(([r, c]) => ref(r, c, z)),
+      eliminated,
+      spotlight: { digits: [z] },
+    },
+    {
+      badge: 'Result',
+      caption: `So ${z} can be eliminated from ${struck}.`,
+      ...shared,
+      unitCells: targets,
+      eliminated,
+      spotlight: { digits: [z] },
+      applied: true,
+    },
+  ]
+  return { id, title, hint, state, frames }
+}
+
+// ------------------------------------------------- miscellaneous: W-Wing
+
+/** A W-Wing told as a remote pair: two cells holding only the same two
+ * digits that can't see each other, and a unit where every place for one of
+ * the digits (`link`) sees one of them - so they can't both be `link`. */
+export interface WWingParts {
+  pair: [TutorialCell, TutorialCell]
+  /** The digit the unit can't spare. */
+  link: number
+  /** The pair's other digit - the one that goes. */
+  other: number
+  unit: Unit
+  /** The unit's places for `link`, each seeing a cell of the pair. */
+  linkPlaces: TutorialCell[]
+  eliminated: CandRef[]
+  /** Every unsolved cell, outside the pair, that sees both of its cells. */
+  targets: TutorialCell[]
+}
+
+/** "row 4" / "column 3" / "box 7" (WWingDetails.unitName) as a Unit. */
+function unitNamed(name: string): Unit | null {
+  const match = /^(row|column|box) (\d)$/.exec(name)
+  if (!match) return null
+  const kind = match[1] as UnitKind
+  const index = Number(match[2]) - 1
+  return { kind, index, cells: unitCells(kind, index) }
+}
+
+/**
+ * The W-Wing on this pair of cells (either order) - the Techniques list's
+ * own (the Short AIC finder names it, `aic.wWing`). Taught as a remote pair,
+ * never as a chain, by request: nothing here reads the chain's links.
+ */
+export function findWWing(state: PuzzleState, cells: readonly [TutorialCell, TutorialCell]): WWingParts | null {
+  const found = shortAicFinder
+    .findShortAics(state.board, state.candidates)
+    .filter((aic): aic is ShortAicInstance & { wWing: NonNullable<ShortAicInstance['wWing']> } => aic.pattern === 'W-Wing' && !!aic.wWing)
+    .find((aic) => cells.every((cell) => aic.wWing.cells.some((c) => sameCell(c, cell))))
+  const unit = found && unitNamed(found.wWing.unitName)
+  if (!found || !unit) return null
+  const { wWing } = found
+  const pair = wWing.cells.map(([r, c]) => [r, c] as const) as [TutorialCell, TutorialCell]
+  const link = wWing.linkDigit
+  const targets: TutorialCell[] = []
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const cell = [r, c] as const
+      if (state.board[r][c] !== 0 || pair.some((p) => sameCell(p, cell))) continue
+      if (pair.every((p) => sees(p, cell))) targets.push(cell)
+    }
+  }
+  return {
+    pair,
+    link,
+    other: wWing.eliminatedDigit,
+    unit,
+    linkPlaces: unit.cells.filter(([r, c]) => state.board[r][c] === 0 && state.candidates[r][c][link - 1]),
+    eliminated: found.eliminations.map((e) => ref(e.row, e.col, e.digit)),
+    targets,
+  }
+}
+
+interface WWingOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  /** The two cells of the remote pair, in case the position has more W-Wings. */
+  pair: readonly [TutorialCell, TutorialCell]
+}
+
+/**
+ * W-Wing as an advanced naked pair (by request - not as an AIC, so no
+ * lines): two cells with the same two candidates that can't see each other,
+ * a remote pair. Nothing stops them being the same digit - except a unit
+ * where every place for one of the digits sees one of them: both being that
+ * digit would leave the unit without it. So a candidate that would force
+ * both onto that digit (the other digit, in a cell seeing both) can't be true.
+ */
+export function buildWWingLesson(options: WWingOptions): TutorialLesson {
+  const { id, title, hint, state } = options
+  const wing = findWWing(state, options.pair)
+  if (!wing) {
+    throw new Error(`No W-Wing on ${cellList(options.pair)} in this example.`)
+  }
+  const { pair, link, other, unit, linkPlaces, eliminated, targets } = wing
+  const [a, b] = pair.map(([r, c]) => cellName(r, c))
+  const where = unitPhrase(unit)
+  const pairText = `${Math.min(link, other)} or ${Math.max(link, other)}`
+  const pips = pair.flatMap(([r, c]) => [ref(r, c, link), ref(r, c, other)])
+  const linkPips = linkPlaces.map(([r, c]) => ref(r, c, link))
+  const spotlight = { digits: [link, other] }
+  const first = eliminated[0]
+  const t = cellName(first.row, first.col)
+  const struck = cellList(eliminated.map((e) => [e.row, e.col] as const))
+  // "Suppose t were the other digit": both cells of the pair lose it and
+  // turn to the link digit - drawn as the Bilocals lesson draws an "if".
+  const supposed = {
+    solved: [ref(first.row, first.col, other), ...pair.map(([r, c]) => ref(r, c, link))],
+    eliminated: pair.map(([r, c]) => ref(r, c, other)),
+  }
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Look for a Remote Pair',
+      caption: `${a} and ${b} can each only be ${pairText}. Side by side that would be a naked pair - but these two can't see each other. They are a remote pair.`,
+      outlineCells: pair,
+      basis: pips,
+      spotlight,
+    },
+    {
+      badge: 'Remote Pair is not a Naked Pair',
+      caption: `As they can't see each other, nothing stops the two cells from being the same digit: both ${Math.min(link, other)}, or both ${Math.max(link, other)}.`,
+      outlineCells: pair,
+      basis: pips,
+      spotlight,
+    },
+    {
+      badge: 'Look at a section that sees both',
+      caption: `But look at ${where}: every place left for ${link} (${cellList(linkPlaces)}) sees ${a} or ${b}. If both were ${link}, ${where} would have nowhere left for ${link}. So they can never both be ${link}.`,
+      outlineCells: pair,
+      unitCells: unit.cells,
+      basis: [...pips, ...linkPips],
+      spotlight: { digits: [link] },
+    },
+    {
+      badge: 'Proof by contradiction',
+      caption: `Suppose ${t} were ${other}. It sees both ${a} and ${b}, so neither could be ${other} - both would be forced to be ${link}.`,
+      outlineCells: pair,
+      ...supposed,
+      basis: linkPips,
+      spotlight,
+    },
+    {
+      badge: 'Contradiction found',
+      caption: `With both cells ${link}, every ${link} in ${where} is ruled out and ${where} has no place for ${link}: impossible. So ${t} can't be ${other}.`,
+      outlineCells: pair,
+      unitCells: unit.cells,
+      solved: supposed.solved,
+      eliminated: [...supposed.eliminated, ...linkPips],
+      spotlight,
+    },
+    {
+      badge: 'Eliminate',
+      caption: `The same goes for any cell that sees both cells of the pair: being ${other}, it would force both to be ${link}. So ${other} can be eliminated from ${struck}.`,
+      outlineCells: pair,
+      unitCells: targets,
+      basis: pair.map(([r, c]) => ref(r, c, other)),
+      eliminated,
+      spotlight: { digits: [other] },
+    },
+    {
+      badge: 'Result',
+      caption: `So ${other} can be eliminated from ${struck}.`,
+      outlineCells: pair,
+      unitCells: targets,
+      eliminated,
+      spotlight: { digits: [other] },
+      applied: true,
+    },
+  ]
+  return { id, title, hint, state, frames }
+}
+
+// ------------------------------------------------- miscellaneous: AIC
+
+/** One plain AIC as the lesson tells it: its candidates in order, from the
+ * chosen start, and what it eliminates. Strong links are the even ones
+ * (start = 1st, strong; 2nd, weak; ...) - an AIC starts and ends strong. */
+export interface AicChain {
+  nodes: CandRef[]
+  eliminated: CandRef[]
+  pattern: ShortAicPattern
+}
+
+/**
+ * The named chain (`pattern`) that has `start` at one end - the Techniques
+ * list's own (the Short AIC finder), turned round if need be so it begins
+ * there. Grouped chains are left out, by request (the lesson doesn't teach
+ * grouped links yet): every node must be one candidate.
+ */
+export function findAicChain(state: PuzzleState, pattern: ShortAicPattern, start: CandRef): AicChain | null {
+  const isStart = (n: { row: number; col: number; digit: number }) => n.row === start.row && n.col === start.col && n.digit === start.digit
+  for (const aic of shortAicFinder.findShortAics(state.board, state.candidates)) {
+    if (aic.pattern !== pattern || aic.nodes.some((n) => n.cells && n.cells.length > 1)) continue
+    const nodes = aic.nodes.map((n) => ref(n.row, n.col, n.digit))
+    const ordered = isStart(nodes[0]) ? nodes : isStart(nodes[nodes.length - 1]) ? [...nodes].reverse() : null
+    if (ordered) return { nodes: ordered, eliminated: aic.eliminations.map((e) => ref(e.row, e.col, e.digit)), pattern }
+  }
+  return null
+}
+
+/** "7 in r1c7" */
+function candName(c: CandRef): string {
+  return `${c.digit} in ${cellName(c.row, c.col)}`
+}
+
+/** Why one link of the chain holds, in the lesson's words. */
+function aicLinkCaption(state: PuzzleState, a: CandRef, b: CandRef, strong: boolean): string {
+  const cell: TutorialCell = [a.row, a.col]
+  if (sameCell(cell, [b.row, b.col])) {
+    return strong
+      ? `${cellName(a.row, a.col)} can only be ${a.digit} or ${b.digit}: a strong link inside one cell. If one is false, the other is true.`
+      : `${a.digit} and ${b.digit} are both candidates of ${cellName(a.row, a.col)}: a weak link - one cell can't be both. If one is true, the other is false.`
+  }
+  if (strong) {
+    const unit = strongUnit(state, a.digit, cell, [b.row, b.col])
+    return `${candName(a)} and ${candName(b)} are the only places for ${a.digit} in ${unit ? unitPhrase(unit) : 'their unit'}: a strong link (red). If one is false, the other is true.`
+  }
+  const shared = sharedUnits(cell, [b.row, b.col])
+  const where = shared.length > 0 ? unitPhrase(shared[shared.length - 1]) : 'one unit'
+  return `${candName(a)} and ${candName(b)} share ${where}: a weak link (dashed blue) - they can't both be true. If one is true, the other is false.`
+}
+
+interface AicOptions {
+  id: string
+  title: string
+  hint?: string
+  state: PuzzleState
+  pattern: ShortAicPattern
+  /** The candidate the chain is told from. */
+  start: CandRef
+  /** A sentence after the chain is built, naming the shape. */
+  shape: string
+}
+
+/**
+ * An Alternating Inference Chain, link by link (by request: short chains
+ * only, the focus on strong and weak links alternating, drawn with lines):
+ * each link and why it holds, then the chain followed from "the start is
+ * false" to "the end is true" - so one end is always true - then whatever
+ * sees both ends. Skyscraper, Two-String Kite, Y-Wing and W-Wing are all
+ * taught this way, each one a lesson.
+ */
+export function buildAicLesson(options: AicOptions): TutorialLesson {
+  const { id, title, hint, state, pattern, start, shape } = options
+  const chain = findAicChain(state, pattern, start)
+  if (!chain) {
+    throw new Error(`No plain ${pattern} starting from ${candName(start)} in this example.`)
+  }
+  const { nodes, eliminated } = chain
+  const first = nodes[0]
+  const last = nodes[nodes.length - 1]
+  const links: TutorialLink[] = nodes.slice(1).map((to, i) => ({ from: nodes[i], to, kind: i % 2 === 0 ? 'strong' : 'weak' }))
+  const spotlight = { digits: [...new Set(nodes.map((n) => n.digit))] }
+  const kinds = links.map((l) => l.kind).join(', ')
+  const struck = cellList(eliminated.map((e) => [e.row, e.col] as const))
+  const sameDigitEnds = first.digit === last.digit
+  // Ends that see each other can't both be true, so then exactly one is.
+  const endsClash = sameDigitEnds && sees([first.row, first.col], [last.row, last.col])
+  const aDigit = (d: number) => `${d === 8 ? 'An' : 'A'} ${d}`
+
+  const frames: TutorialFrame[] = [
+    {
+      badge: 'Start',
+      caption: `An AIC (Alternating Inference Chain) links candidates one after another, strong and weak links in turn. This one starts at ${candName(first)}.`,
+      basis: [first],
+      fresh: [first],
+      spotlight,
+    },
+    ...links.map((link, i): TutorialFrame => ({
+      badge: link.kind === 'strong' ? 'Strong link' : 'Weak link',
+      caption: aicLinkCaption(state, link.from, link.to, link.kind === 'strong'),
+      basis: nodes.slice(0, i + 2),
+      fresh: [link.to],
+      links: links.slice(0, i + 1),
+      spotlight,
+    })),
+    {
+      badge: 'The chain',
+      caption: `${capitalize(kinds)}: the links alternate, and the chain starts and ends with a strong link. ${shape}`,
+      basis: nodes,
+      links,
+      spotlight,
+    },
+    {
+      badge: 'Follow it',
+      caption: `Suppose ${candName(first)} is false. Each strong link then makes the next candidate true, each weak link the next one false - all the way to ${candName(last)}, which comes out true.`,
+      links,
+      eliminated: nodes.filter((_, i) => i % 2 === 0),
+      solved: nodes.filter((_, i) => i % 2 === 1),
+      spotlight,
+    },
+    {
+      badge: 'Either end',
+      caption: `So if ${candName(first)} is false, ${candName(last)} is true: at least one end of the chain is true${endsClash ? ' (here exactly one, as the ends see each other)' : ' - perhaps both'}.`,
+      basis: [first, last],
+      links,
+      spotlight,
+    },
+    {
+      badge: 'Eliminate',
+      caption: sameDigitEnds
+        ? `Both ends are ${first.digit}. ${aDigit(first.digit)} that sees both ends would clash with whichever one is true, so it can be eliminated: ${struck}.`
+        : `Anything that can't be true alongside either end would clash with whichever one is true, so it can be eliminated: ${eliminated.map(candName).join(', ')}.`,
+      basis: [first, last],
+      links,
+      eliminated,
+      spotlight,
+    },
+    {
+      badge: 'Result',
+      caption: sameDigitEnds ? `So ${first.digit} can be eliminated from ${struck}.` : `So ${eliminated.map(candName).join(', ')} can be eliminated.`,
+      eliminated,
+      spotlight,
+      applied: true,
+    },
+  ]
+  return { id, title, hint, state, frames }
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }

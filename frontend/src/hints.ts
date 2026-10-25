@@ -506,7 +506,7 @@ export function buildTechniqueHint(
   const article = /Colouring$/.test(label) ? '' : /^([AEIO]|X-)/.test(label) ? 'an ' : 'a '
   const intro: HintStep = {
     text: `The easiest technique available is ${article}${label}.${blurb ? ` ${blurb}` : ''}`,
-    learn: tutorialTargetFor(instance.id) ?? undefined,
+    learn: tutorialTargetFor(instance.id, instance.aicPattern) ?? undefined,
   }
   const answer: HintStep = {
     // Some notations already start with the name ("Locked Candidate (Pointing) - ...").

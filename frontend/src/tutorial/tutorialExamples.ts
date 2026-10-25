@@ -1,6 +1,7 @@
 import type { Rule3Technique } from '../sudoku/SudokuDragonFinder'
 import { SAMPLE_PUZZLE } from '../sudoku/types'
 import {
+  buildAicLesson,
   buildBivalueOddagonLesson,
   buildAvoidableRectangleLesson,
   buildBilocalLesson,
@@ -16,6 +17,8 @@ import {
   buildNakedSingleLesson,
   buildSimpleColouringLesson,
   buildUniqueRectangleLesson,
+  buildWWingLesson,
+  buildYWingLesson,
 } from './lessonBuilders'
 import { decodePuzzleState } from './puzzleState'
 import type { TutorialLesson } from './tutorialTypes'
@@ -444,6 +447,136 @@ function extendedUrGroup(): LessonGroup {
       ),
     ],
   }
+}
+
+/** The first Y-Wing and W-Wing lessons' positions - the AIC lessons tell
+ * the same two wings again, as chains. The AIC lessons' own Skyscraper and
+ * Two-String Kite are both on AIC_BOARD. */
+const Y_WING_BOARD = '879536412432981765615427893000045079027860541504710038003650187756198324000070956'
+const W_WING_BOARD = '573010694218946753946735182604050379150390468039060521395620807000573906060089235'
+const AIC_BOARD = '063800041009740863804316900305100006691273584087600310008560100006900400052431608'
+
+/** Miscellaneous Techniques: the techniques that are neither colouring nor
+ * uniqueness, one sub-tab each. Y-Wing is taught as a bent triple, never as
+ * a chain, by request, and W-Wing as a remote pair (an advanced naked pair).
+ * Their positions are plain autofills (no marks removed) mined by
+ * dragon-research/y-wing/mine.ts (RELAXED=1) and dragon-research/w-wing/mine.ts:
+ * the Basics are done there and each wing is the Techniques list's own.
+ * AIC, last, is taught by chains (lines drawn), short ones only: a
+ * Skyscraper and a Two-String Kite (one position, mined by
+ * dragon-research/aic/mine.ts), then the Y-Wing and W-Wing lessons' own
+ * first positions told again as chains. No grouped links yet, by request. */
+export function buildMiscGroups(): LessonGroup[] {
+  return [
+    {
+      title: 'Y-Wing',
+      blurb:
+        'Y-Wing is also known as a bent triple, because it is just a naked triple that is spread across 2 sections. The "pivot" cell acts like the commander by telling its two "wing" cells to perform a pincer attack on cells that can see both wings.',
+      lessons: [
+        ...safely(() =>
+          buildYWingLesson({
+            id: 'y-wing-corner',
+            title: 'A row and a column',
+            hint: 'One pincer shares a column with the pivot, the other a row: the attack lands on the opposite corner.',
+            state: decodePuzzleState(Y_WING_BOARD),
+            pivot: [8, 0],
+          }),
+        ),
+        ...safely(() =>
+          buildYWingLesson({
+            id: 'y-wing-box',
+            title: 'A box and a column',
+            hint: 'One pincer shares a box with the pivot: the attack lands on several cells at once.',
+            state: decodePuzzleState('675800000439700860182396754368479215514628397297500648956207000701900006803160070'),
+            pivot: [1, 8],
+          }),
+        ),
+      ],
+    },
+    {
+      title: 'W-Wing',
+      blurb:
+        "Similar to how Y-Wing is like an 'advanced naked triple', a W-Wing is an 'advanced naked pair', which is sometimes known as a 'Remote Pair'.  A Remote Pair is two cells with the same two candidates, but that can't see each other. W-Wing is an useful technique that is extremely common and easy to spot, and best explained with a visual example.",
+      lessons: [
+        ...safely(() =>
+          buildWWingLesson({
+            id: 'w-wing-two-places',
+            title: 'Two places in a row',
+            hint: 'Row 5 has only two places left for 2, one seeing each cell of the pair.',
+            state: decodePuzzleState(W_WING_BOARD),
+            pair: [
+              [0, 5],
+              [3, 1],
+            ],
+          }),
+        ),
+        ...safely(() =>
+          buildWWingLesson({
+            id: 'w-wing-three-places',
+            title: 'Three places in a column',
+            hint: 'Column 1 has three places left for 9 - that is fine, as long as every one of them sees a cell of the pair.',
+            state: decodePuzzleState('040789512781325694295614837802406350400153028050208046004530080528961473030840065'),
+            pair: [
+              [5, 4],
+              [8, 2],
+            ],
+          }),
+        ),
+      ],
+    },
+    {
+      title: 'AIC',
+      blurb:
+        'Alternating Inference Chain (AIC) is a chain that alternates strong links and weak links, while starting and ending with a strong link. Whatever sees both ends of the chain can be eliminated.   AIC is a generic technique.  Y-Wing and W-Wing patterns can both be proved by AICs.',
+      lessons: [
+        ...safely(() =>
+          buildAicLesson({
+            id: 'aic-skyscraper',
+            title: 'Skyscraper',
+            hint: 'A Skyscraper is an AIC on one digit: strong, weak, strong.',
+            state: decodePuzzleState(AIC_BOARD),
+            pattern: 'Skyscraper',
+            start: { row: 0, col: 6, digit: 7 },
+            shape:
+              'This shape is a Skyscraper: two strong links in parallel rows (rows 1 and 9), their bases joined by a weak link in column 1.',
+          }),
+        ),
+        ...safely(() =>
+          buildAicLesson({
+            id: 'aic-two-string-kite',
+            title: 'Two-String Kite',
+            hint: 'A Two-String Kite is an AIC on one digit too.',
+            state: decodePuzzleState(AIC_BOARD),
+            pattern: 'Two-String Kite',
+            start: { row: 5, col: 0, digit: 2 },
+            shape: 'This shape is a Two-String Kite: one strong link in a row, one in a column, joined by a weak link inside a box.',
+          }),
+        ),
+        ...safely(() =>
+          buildAicLesson({
+            id: 'aic-y-wing',
+            title: 'Y-Wing',
+            hint: 'Y-Wing can be seen as an AIC.  Here is the same example from the Y-Wing lesson, but as an AIC.',
+            state: decodePuzzleState(Y_WING_BOARD),
+            pattern: 'Y-Wing',
+            start: { row: 3, col: 0, digit: 3 },
+            shape: "It is the Y-Wing from its own lesson: each of the three cells' two candidates make a strong link, and the weak links join them through the pivot r9c1.",
+          }),
+        ),
+        ...safely(() =>
+          buildAicLesson({
+            id: 'aic-w-wing',
+            title: 'W-Wing',
+            hint: 'Here is the W-Wing from the W-Wing lesson, shown as an AIC.',
+            state: decodePuzzleState(W_WING_BOARD),
+            pattern: 'W-Wing',
+            start: { row: 0, col: 5, digit: 8 },
+            shape: "It is the W-Wing from its own lesson: the remote pair's two cells at the ends, joined by the strong link of 2 in row 5.",
+          }),
+        ),
+      ],
+    },
+  ]
 }
 
 /** Double Dragons: one sub-tab each for the plain and the Dynamic version.

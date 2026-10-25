@@ -5949,3 +5949,72 @@ button.primary {
 :where([data-scheme="dark"]) .practice-from-start-note {
   color: var(--n-400);
 }
+
+/* Technique replay (a Dragon's Share link, techniqueShareLink.ts): the
+   header says what was shared and offers the ways out; the panel is the one
+   recorded row, always open. */
+.replay-header h1 {
+  font-size: 1.6rem;
+}
+
+.replay-changed-note {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #fcd34d;
+  border-radius: 0.45rem;
+  background: #fffbeb;
+  color: #92400e !important;
+  font-size: 0.85rem;
+}
+
+.replay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.technique-replay-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.technique-replay-item {
+  cursor: default;
+}
+
+.dragon-player-jump select {
+  font: inherit;
+  padding: 0.1rem 0.2rem;
+}
+
+.dragon-share-button {
+  margin-left: auto;
+}
+
+.dragon-player-controls:has(.dragon-share-button) {
+  justify-content: flex-start;
+}
+
+/* A phone has no room above the grid for the explanation: the title and the
+   buttons stay, the Techniques tab's step player says the rest. */
+.compact-phone .replay-intro {
+  display: none;
+}
+
+.compact-layout .replay-header h1 {
+  font-size: 1.05rem;
+}
+
+.compact-layout .replay-actions {
+  margin-bottom: 0.4rem;
+}
+
+:where([data-scheme="dark"]) .replay-changed-note {
+  border-color: #a16207;
+  background: #3f3405;
+  color: #fde68a !important;
+}
+
+:where([data-scheme="dark"]) .technique-replay-item {
+  color: var(--n-200);
+}
