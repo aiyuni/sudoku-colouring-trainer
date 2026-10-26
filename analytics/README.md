@@ -71,6 +71,19 @@ npm run deploy
 The frontend can go out before or after these two steps: the old Worker ignores
 the extra `device` field, and the new Worker doesn't require it.
 
+## Short share links
+
+A Dragon's Share button (frontend `src/shortShareLink.ts`) sends the long link's
+fragment (`d=1...`) to `POST /share` and copies `https://<site>/#s=<id>` instead.
+The Worker stores the fragment in the `share_links` table (migration `0007`)
+under an 8-character id derived from its SHA-256, so the same share always gets
+the same id. Opening the short link fetches `GET /share/<id>` before the page
+renders and then reads the fragment exactly as if the long link had been opened.
+Rows are never changed, so the GET is cached as immutable. Only allowed origins
+can POST, but any origin can GET. If the Worker can't be reached or
+`VITE_ANALYTICS_URL` is unset, Share falls back to the long link, which still works.
+Apply the migration (`npm run migrate:remote`) before deploying this Worker.
+
 ## Querying
 
 In the Cloudflare dashboard, go to **Storage & Databases → D1 → sudoku-analytics → Console**,

@@ -1,6 +1,7 @@
 // Records every puzzle import from the frontend into D1 (POST /import), usage
-// analytics batches (POST /sync, see usage.ts) and serves the private usage
-// dashboard (/admin, see admin.ts).
+// analytics batches (POST /sync, see usage.ts), stores and serves short share
+// links (POST /share, GET /share/<id>, see share.ts) and serves the private
+// usage dashboard (/admin, see admin.ts).
 //
 // The frontend only ever sends { puzzle, importType, sourceFormat, device }
 // (`device` = a few browser hints, see src/device.ts) - the timestamp,
@@ -12,6 +13,7 @@
 import { SudokuSolver } from '../../frontend/src/sudoku/SudokuSolver'
 import { handleAdmin } from './admin'
 import { describeDevice, parseHints, type DeviceHints } from './device'
+import { handleCreateShare, handleReadShare } from './share'
 import { handleSync } from './usage'
 
 interface Env {
@@ -45,7 +47,14 @@ export default {
       ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
       : {}
 
-    if (url.pathname !== '/import' && url.pathname !== '/sync') {
+    // A short link is opened wherever the page is served from, so its read
+    // answers any origin: it hands back only what a long link would carry.
+    if (url.pathname.startsWith('/share/') && request.method === 'GET') {
+      const response = await handleReadShare(url.pathname.slice('/share/'.length), env.DB)
+      response.headers.set('Access-Control-Allow-Origin', '*')
+      return response
+    }
+    if (url.pathname !== '/import' && url.pathname !== '/sync' && url.pathname !== '/share') {
       return new Response(null, { status: 404 })
     }
     if (request.method === 'OPTIONS') {
@@ -69,6 +78,13 @@ export default {
 
     if (url.pathname === '/sync') {
       return new Response(null, { status: await handleSync(request, env.DB, ctx, site), headers: cors })
+    }
+    if (url.pathname === '/share') {
+      const response = await handleCreateShare(request, env.DB, site)
+      for (const [name, value] of Object.entries(cors)) {
+        response.headers.set(name, value)
+      }
+      return response
     }
 
     const text = await request.text()

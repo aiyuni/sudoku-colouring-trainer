@@ -114,6 +114,7 @@ import {
   type SavedPuzzle,
 } from './savedPuzzles'
 import { decodeShareState, encodeShareState, shareLinkUrl, sharePayloadOf } from './shareLink'
+import { shortenShareLink, shortLinkIdOf } from './shortShareLink'
 import {
   encodeTechniqueReplay,
   gridMatchesReplay,
@@ -6384,6 +6385,16 @@ export default function App({
     }
     // A technique link (a Dragon's Share) pasted instead of opened: it is
     // read before the page renders (main.tsx), so go to it.
+    // A short link likewise: it is resolved there too.
+    const shortId = shortLinkIdOf(text)
+    if (shortId !== null) {
+      if (window.location.hash === `#s=${shortId}`) {
+        window.location.reload()
+      } else {
+        window.location.assign(`#s=${shortId}`)
+      }
+      return true
+    }
     const replayPayload = replayPayloadOf(text)
     if (replayPayload !== null) {
       if (window.location.hash === `#d=${replayPayload}`) {
@@ -6636,7 +6647,9 @@ export default function App({
   /** A Dragon row's Share: a link that replays exactly this Dragon, on the
    * position it was found on (techniqueShareLink.ts). The rows come from
    * `analysis` (a frame behind the live grid), so that is the position
-   * recorded; the candidate colours are the live ones. The clipboard write
+   * recorded; the candidate colours are the live ones. The link is a short
+   * one (`#s=<id>`, shortShareLink.ts) when the link service answers, else
+   * the long one, which holds the same content. The clipboard write
    * is handed the link as a promise, so the click still counts as the
    * gesture that allows it (Safari) while the log is being compressed. */
   async function onShareTechnique(instance: TechniqueInstance) {
@@ -6648,7 +6661,7 @@ export default function App({
       constraints: analysis.constraints,
     }
     const urlPromise = encodeTechniqueReplay(position, instance).then((payload) =>
-      replayLinkUrl(payload, variant, shareSiteUrl(shareLinkProductionDev)),
+      shortenShareLink(replayLinkUrl(payload, variant, shareSiteUrl(shareLinkProductionDev))),
     )
     const trackingName = techniqueTrackingName(instance.name)
     try {
@@ -6753,7 +6766,7 @@ export default function App({
       return () => window.removeEventListener('hashchange', reload)
     }
     const openFromAddress = (event?: HashChangeEvent) => {
-      if (replayPayloadOf(window.location.hash) !== null) {
+      if (replayPayloadOf(window.location.hash) !== null || shortLinkIdOf(window.location.hash) !== null) {
         // Not on the first call: a link main.tsx couldn't read is what
         // opened this ordinary page (its error is in the status line).
         if (event) {
